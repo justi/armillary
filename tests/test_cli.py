@@ -2205,6 +2205,37 @@ def test_install_khoj_bootstraps_pip_via_ensurepip_when_missing(
     assert calls[2][1:] == ["-m", "pip", "install", "khoj"]
 
 
+def test_install_khoj_warns_about_postgres_requirement_after_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Real-world bug: after a successful `pip install khoj`, running
+    `khoj --anonymous-mode` crashes with `database "khoj" does not
+    exist` because Khoj requires Postgres 15 + pgvector — it does NOT
+    support SQLite. The install-khoj command must surface this up
+    front so users aren't blindsided after the pip install finishes."""
+    _force_uv_at(monkeypatch, "/fake/bin/uv")
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(app, ["install-khoj", "-y"])
+    assert result.exit_code == 0, result.stdout
+
+    out = _strip_ansi(result.stdout)
+    # The big "PostgreSQL + pgvector required" warning
+    assert "PostgreSQL" in out and "pgvector" in out
+    # The create-db recipe so users can actually finish the setup
+    assert "createdb khoj" in out
+    assert "CREATE EXTENSION IF NOT EXISTS vector" in out
+    # The specific error users will hit if they skip step 2
+    assert 'database "khoj" does not exist' in out
+
+
 def test_install_khoj_surfaces_install_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

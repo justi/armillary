@@ -691,10 +691,41 @@ def install_khoj(
 
     typer.secho("\n✓ Khoj installed.", fg=typer.colors.GREEN, bold=True)
     typer.echo("")
-    typer.echo("Next steps:")
-    typer.echo("  1. Start the Khoj server in a separate terminal:")
+    typer.secho(
+        "⚠ Khoj requires PostgreSQL 15+ with the pgvector extension.",
+        fg=typer.colors.YELLOW,
+        bold=True,
+    )
+    typer.echo(
+        "  Khoj does NOT support SQLite — it stores embeddings in a Postgres\n"
+        "  database called `khoj`. armillary cannot install Postgres for you,\n"
+        "  but here is the shortest path on macOS:"
+    )
+    typer.echo("")
+    typer.echo("  1. Install Postgres + pgvector via Homebrew:")
+    typer.secho(
+        "       brew install postgresql@15 pgvector",
+        fg=typer.colors.CYAN,
+    )
+    typer.secho("       brew services start postgresql@15", fg=typer.colors.CYAN)
+    typer.echo("     (or use the Khoj docker-compose setup:")
+    typer.secho(
+        "       https://docs.khoj.dev/get-started/setup",
+        fg=typer.colors.CYAN,
+    )
+    typer.echo("     — both paths documented in Khoj docs.)")
+    typer.echo("")
+    typer.echo("  2. Create the `khoj` database and enable pgvector:")
+    typer.secho("       createdb khoj", fg=typer.colors.CYAN)
+    typer.secho(
+        '       psql khoj -c "CREATE EXTENSION IF NOT EXISTS vector;"',
+        fg=typer.colors.CYAN,
+    )
+    typer.echo("")
+    typer.echo("  3. Start the Khoj server in a separate terminal:")
     typer.secho("       khoj --anonymous-mode", fg=typer.colors.CYAN)
-    typer.echo("  2. Wire it into armillary:")
+    typer.echo("")
+    typer.echo("  4. Wire it into armillary:")
     typer.secho(
         "       armillary config --init --force",
         fg=typer.colors.CYAN,
@@ -702,6 +733,11 @@ def install_khoj(
     typer.echo(
         "     (or enable via dashboard Settings → Khoj tab if you "
         "already have a config)"
+    )
+    typer.echo("")
+    typer.echo(
+        'If `khoj --anonymous-mode` crashes with `database "khoj" does not '
+        "exist`,\nyou skipped step 2 — create the database and rerun."
     )
 
 
@@ -1191,11 +1227,16 @@ def _detect_khoj_and_maybe_enable(
             "🧠 Khoj not detected at localhost:42110.",
             fg=typer.colors.CYAN,
         )
-        typer.echo("   Semantic search is optional. To install it in one go:")
-        typer.secho("     armillary install-khoj", fg=typer.colors.CYAN)
-        typer.echo("   Then start the server in another terminal:")
-        typer.secho("     khoj --anonymous-mode", fg=typer.colors.CYAN)
-        typer.echo("   …and rerun `armillary config --init --force` to pick it up.")
+        typer.echo(
+            "   Semantic search is optional. To set it up:\n"
+            "     1. `armillary install-khoj`      (pip-installs the Khoj package)\n"
+            "     2. Install Postgres 15 + pgvector "
+            "(Khoj needs a real DB — not SQLite)\n"
+            "     3. `createdb khoj && psql khoj -c "
+            "'CREATE EXTENSION vector;'`\n"
+            "     4. `khoj --anonymous-mode` in another terminal\n"
+            "     5. Rerun `armillary config --init --force` to pick it up"
+        )
         return
 
     typer.echo("")

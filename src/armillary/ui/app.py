@@ -1374,15 +1374,35 @@ def _render_settings_khoj(cfg: Config) -> None:
     ):
         st.markdown(
             "Khoj is a separate project with heavy ML dependencies "
-            "(torch, transformers, ~1 GB). armillary does **not** bundle "
-            "it — but you can install it in one command:"
+            "(torch, transformers, ~1 GB) **and it requires PostgreSQL "
+            "15+ with the pgvector extension** — it does not support "
+            "SQLite. armillary cannot install Postgres for you. The "
+            "shortest path on macOS is:"
         )
+        st.markdown("**1. Install the Khoj Python package:**")
         st.code("armillary install-khoj", language="bash")
-        st.markdown("Then start the local Khoj server in a separate terminal:")
+        st.markdown("**2. Install Postgres 15 + pgvector:**")
+        st.code(
+            "brew install postgresql@15 pgvector\nbrew services start postgresql@15",
+            language="bash",
+        )
+        st.markdown("**3. Create the `khoj` database and enable pgvector:**")
+        st.code(
+            'createdb khoj\npsql khoj -c "CREATE EXTENSION IF NOT EXISTS vector;"',
+            language="bash",
+        )
+        st.markdown("**4. Start the Khoj server in a separate terminal:**")
         st.code("khoj --anonymous-mode", language="bash")
         st.markdown(
-            "Once the server responds at `http://localhost:42110`, "
-            "flip **Enable Khoj** below and hit **💾 Save changes**."
+            "**5.** Once the server responds at `http://localhost:42110`, "
+            "flip **Enable Khoj** below and hit **💾 Save changes**. "
+            "Use the 🧪 Test connection button to verify."
+        )
+        st.caption(
+            "Alternative: the Khoj docs at "
+            "https://docs.khoj.dev/get-started/setup describe a "
+            "docker-compose setup that bundles Postgres + pgvector in "
+            "one command."
         )
 
     enabled = st.checkbox(
