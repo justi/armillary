@@ -88,9 +88,7 @@ def test_scan_accepts_multiple_umbrellas(tmp_path: Path) -> None:
     _mkrepo(a / "one")
     _mkidea(b / "two")
 
-    result = runner.invoke(
-        app, ["scan", "-u", str(a), "-u", str(b)]
-    )
+    result = runner.invoke(app, ["scan", "-u", str(a), "-u", str(b)])
 
     assert result.exit_code == 0, result.stdout
     data = json.loads(result.stdout)
@@ -105,12 +103,8 @@ def test_scan_respects_max_depth_flag(tmp_path: Path) -> None:
     deep.mkdir(parents=True)
     _mkrepo(deep / "repo")
 
-    shallow = runner.invoke(
-        app, ["scan", "-u", str(tmp_path), "--max-depth", "2"]
-    )
-    deeper = runner.invoke(
-        app, ["scan", "-u", str(tmp_path), "--max-depth", "3"]
-    )
+    shallow = runner.invoke(app, ["scan", "-u", str(tmp_path), "--max-depth", "2"])
+    deeper = runner.invoke(app, ["scan", "-u", str(tmp_path), "--max-depth", "3"])
 
     assert shallow.exit_code == 0 and deeper.exit_code == 0
     assert json.loads(shallow.stdout) == []
@@ -128,9 +122,7 @@ def test_scan_requires_umbrella_flag() -> None:
 def test_scan_short_flags_match_long(tmp_path: Path) -> None:
     _mkrepo(tmp_path / "r")
 
-    long = runner.invoke(
-        app, ["scan", "--umbrella", str(tmp_path), "--max-depth", "3"]
-    )
+    long = runner.invoke(app, ["scan", "--umbrella", str(tmp_path), "--max-depth", "3"])
     short = runner.invoke(app, ["scan", "-u", str(tmp_path), "-d", "3"])
 
     assert long.exit_code == 0 and short.exit_code == 0
@@ -141,15 +133,11 @@ def test_scan_short_flags_match_long(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("bad_value", ["0", "11", "-1", "999"])
-def test_scan_rejects_max_depth_out_of_range(
-    tmp_path: Path, bad_value: str
-) -> None:
+def test_scan_rejects_max_depth_out_of_range(tmp_path: Path, bad_value: str) -> None:
     """Out-of-range --max-depth must produce a clean Click usage error,
     not a Pydantic ValidationError traceback from inside the command body.
     """
-    result = runner.invoke(
-        app, ["scan", "-u", str(tmp_path), "--max-depth", bad_value]
-    )
+    result = runner.invoke(app, ["scan", "-u", str(tmp_path), "--max-depth", bad_value])
 
     assert result.exit_code != 0
     combined = result.stdout + (result.stderr or "")
@@ -172,7 +160,9 @@ def test_scan_accepts_max_depth_at_bounds(tmp_path: Path) -> None:
 # --- `armillary start` -----------------------------------------------------
 
 
-def test_start_invokes_streamlit_with_default_port(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_start_invokes_streamlit_with_default_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     captured: dict[str, Any] = {}
 
     def fake_run(cmd: list[str], **kwargs: Any) -> Any:
