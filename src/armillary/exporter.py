@@ -101,6 +101,83 @@ def write_repos_index(
     return len(projects)
 
 
+# --- Claude Code bridge ---------------------------------------------------
+
+# Path (relative to ~/.claude/) of the repos-index written by the bridge.
+# Claude Code's `@<path>` import syntax in CLAUDE.md resolves relative to
+# the directory that contains CLAUDE.md, so we write the index inside
+# `~/.claude/armillary/` and the import line reads `@armillary/repos-index.md`.
+_BRIDGE_SUBDIR = "armillary"
+_BRIDGE_FILENAME = "repos-index.md"
+_CLAUDE_MD_IMPORT_LINE = "@armillary/repos-index.md"
+_CLAUDE_MD_MARKER = (
+    "# armillary projects index (managed by `armillary install-claude-bridge`)"
+)
+
+
+def claude_bridge_path(home: Path | None = None) -> Path:
+    """Canonical location of the Claude Code bridge repos-index."""
+    home = (home or Path.home()).expanduser()
+    return home / ".claude" / _BRIDGE_SUBDIR / _BRIDGE_FILENAME
+
+
+def install_claude_bridge(
+    *,
+    home: Path | None = None,
+    db_path: Path | None = None,
+    with_claude_md: bool = False,
+) -> tuple[Path, int, bool]:
+    """Write the repos-index to the Claude Code bridge location.
+
+    Writes `~/.claude/armillary/repos-index.md` (honors `home` override
+    for tests). When `with_claude_md=True`, also appends an `@armillary/
+    repos-index.md` import line to `~/.claude/CLAUDE.md` so every Claude
+    Code session in the user's home loads the project table automatically.
+
+    The append is idempotent — if either the `@armillary/repos-index.md`
+    line or the managed-by marker is already present, CLAUDE.md is left
+    untouched. Existing user content is preserved.
+
+    Returns `(bridge_path, written_count, appended_to_claude_md)`.
+    """
+    bridge_path = claude_bridge_path(home)
+    written = write_repos_index(bridge_path, db_path=db_path)
+
+    appended = False
+    if with_claude_md:
+        claude_md = bridge_path.parent.parent / "CLAUDE.md"
+        appended = _ensure_claude_md_import(claude_md)
+
+    return bridge_path, written, appended
+
+
+def _ensure_claude_md_import(claude_md: Path) -> bool:
+    """Idempotently append the armillary import block to CLAUDE.md.
+
+    Returns True if we actually wrote to the file, False if it was
+    already wired up. The marker line is what gives us idempotency —
+    we look for it (not just the raw @-import) so that a user who
+    deletes the @-line by accident still gets a clean re-append.
+    """
+    claude_md = claude_md.expanduser()
+    existing = claude_md.read_text(encoding="utf-8") if claude_md.exists() else ""
+    if _CLAUDE_MD_MARKER in existing or _CLAUDE_MD_IMPORT_LINE in existing:
+        return False
+
+    # Ensure single blank-line separation from the existing tail.
+    prefix = ""
+    if existing and not existing.endswith("\n"):
+        prefix = "\n"
+    if existing and not existing.endswith("\n\n"):
+        prefix += "\n"
+
+    block = f"{prefix}{_CLAUDE_MD_MARKER}\n{_CLAUDE_MD_IMPORT_LINE}\n"
+    claude_md.parent.mkdir(parents=True, exist_ok=True)
+    with open(claude_md, "a", encoding="utf-8") as fh:
+        fh.write(block)
+    return True
+
+
 # --- internals ------------------------------------------------------------
 
 

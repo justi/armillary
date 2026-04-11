@@ -1175,8 +1175,10 @@ def test_config_init_skip_khoj_flag_skips_detection_entirely(
 def test_config_init_claude_code_detection_when_dot_claude_exists(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Setup ceremony step 5: presence of `~/.claude/` triggers a
-    prompt mentioning the bridge install path."""
+    """Setup ceremony step 5: `~/.claude/` triggers the bridge install
+    (PR #19). Picker accepts all, bridge prompt says y, CLAUDE.md
+    wiring prompt says n — we get a repos-index file but no
+    CLAUDE.md touch."""
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     (fake_home / ".claude").mkdir()
@@ -1187,7 +1189,7 @@ def test_config_init_claude_code_detection_when_dot_claude_exists(
     config_file = tmp_path / "armillary" / "config.yaml"
     monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
 
-    # Picker accepts all, Claude prompt says y.
+    # Picker accepts all, install-bridge says y, with-claude-md says n.
     result = runner.invoke(
         app,
         [
@@ -1195,14 +1197,18 @@ def test_config_init_claude_code_detection_when_dot_claude_exists(
             "--init",
             "--skip-khoj-detect",
         ],
-        input="all\ny\n",
+        input="all\ny\nn\n",
     )
     assert result.exit_code == 0, result.stdout
 
     out = _strip_ansi(result.stdout)
     assert "Found Claude Code" in out
-    # PR #16 only points at the equivalent command — actual install is PR #19
-    assert "repos-index.md" in out
+    # PR #19: the bridge actually gets written.
+    bridge = fake_home / ".claude" / "armillary" / "repos-index.md"
+    assert bridge.exists()
+    assert "thing" in bridge.read_text()
+    # CLAUDE.md was NOT touched (user said no).
+    assert not (fake_home / ".claude" / "CLAUDE.md").exists()
 
 
 def test_config_init_claude_code_detection_skipped_when_no_dot_claude(
@@ -1605,6 +1611,177 @@ def test_export_index_custom_title(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0
     assert "# My Custom Title" in output.read_text()
+
+
+# --- M7b / PR #19: armillary install-claude-bridge -------------------------
+
+
+def test_install_claude_bridge_writes_to_fake_home(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`armillary install-claude-bridge` writes the repos-index to
+    `~/.claude/armillary/repos-index.md`. Using a fake home so the test
+    does not touch the developer's real `~/.claude`."""
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    # Populate the cache so the bridge has something to write.
+    _mkrepo(tmp_path / "alpha")
+    runner.invoke(app, ["scan", "-u", str(tmp_path)])
+
+    result = runner.invoke(app, ["install-claude-bridge"])
+    assert result.exit_code == 0, result.stdout
+
+    bridge = fake_home / ".claude" / "armillary" / "repos-index.md"
+    assert bridge.exists()
+    assert "alpha" in bridge.read_text()
+    # Without --with-claude-md, CLAUDE.md stays absent.
+    assert not (fake_home / ".claude" / "CLAUDE.md").exists()
+
+
+def test_install_claude_bridge_with_claude_md_appends_import_line(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--with-claude-md` wires the @armillary/repos-index.md line into
+    CLAUDE.md. Re-running the command is a no-op (idempotent)."""
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude").mkdir(parents=True)
+    (fake_home / ".claude" / "CLAUDE.md").write_text("# existing rules\n")
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    _mkrepo(tmp_path / "thing")
+    runner.invoke(app, ["scan", "-u", str(tmp_path)])
+
+    result = runner.invoke(app, ["install-claude-bridge", "--with-claude-md"])
+    assert result.exit_code == 0, result.stdout
+
+    claude_md = fake_home / ".claude" / "CLAUDE.md"
+    first_content = claude_md.read_text()
+    assert "existing rules" in first_content
+    assert "@armillary/repos-index.md" in first_content
+
+    # Idempotent rerun
+    result2 = runner.invoke(app, ["install-claude-bridge", "--with-claude-md"])
+    assert result2.exit_code == 0
+    second_content = claude_md.read_text()
+    assert first_content == second_content
+    out2 = _strip_ansi(result2.stdout)
+    assert "already imports armillary" in out2
+
+
+def test_install_claude_bridge_with_empty_cache_still_succeeds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """No projects in cache: the command still writes an (empty) bridge
+    file and warns the user to run a scan first."""
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    result = runner.invoke(app, ["install-claude-bridge"])
+    assert result.exit_code == 0
+
+    bridge = fake_home / ".claude" / "armillary" / "repos-index.md"
+    assert bridge.exists()
+    out = _strip_ansi(result.stdout)
+    assert "cache is empty" in out.lower()
+
+
+def test_scan_refresh_bridge_writes_after_scan(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`armillary scan --refresh-bridge` refreshes the bridge repos-index
+    after the scan completes."""
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    _mkrepo(tmp_path / "fresh")
+
+    result = runner.invoke(app, ["scan", "-u", str(tmp_path), "--refresh-bridge"])
+    assert result.exit_code == 0, result.stdout
+
+    bridge = fake_home / ".claude" / "armillary" / "repos-index.md"
+    assert bridge.exists()
+    assert "fresh" in bridge.read_text()
+
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
+    assert "refresh-bridge" in combined
+
+
+def test_scan_refresh_bridge_noop_without_claude_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Without `~/.claude/`, `--refresh-bridge` is a warning, not an error."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()  # ~/.claude does NOT exist
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    _mkrepo(tmp_path / "solo")
+
+    result = runner.invoke(app, ["scan", "-u", str(tmp_path), "--refresh-bridge"])
+    assert result.exit_code == 0
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
+    assert "not found" in combined.lower()
+    assert not (fake_home / ".claude").exists()
+
+
+def test_config_init_claude_bridge_with_claude_md_prompt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Setup ceremony happy path: user says y to bridge install AND
+    y to CLAUDE.md wiring. Both files get written."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    (fake_home / ".claude").mkdir()
+    _mkrepo(fake_home / "Projects" / "alpha")
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    config_file = tmp_path / "armillary" / "config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+
+    # Picker: all. Install bridge: y. Wire CLAUDE.md: y.
+    result = runner.invoke(
+        app,
+        ["config", "--init", "--skip-khoj-detect"],
+        input="all\ny\ny\n",
+    )
+    assert result.exit_code == 0, result.stdout
+
+    bridge = fake_home / ".claude" / "armillary" / "repos-index.md"
+    claude_md = fake_home / ".claude" / "CLAUDE.md"
+    assert bridge.exists()
+    assert claude_md.exists()
+    assert "@armillary/repos-index.md" in claude_md.read_text()
+
+
+def test_config_init_non_interactive_skips_bridge_prompt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--non-interactive --init` with `~/.claude/` present must not
+    install anything — respects the "no surprises in scripts" contract."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    (fake_home / ".claude").mkdir()
+    _mkrepo(fake_home / "Projects" / "thing")
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    config_file = tmp_path / "armillary" / "config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+
+    result = runner.invoke(
+        app,
+        ["config", "--init", "--non-interactive", "--skip-khoj-detect"],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    # Bridge must NOT have been installed — --non-interactive is opt-out.
+    assert not (fake_home / ".claude" / "armillary" / "repos-index.md").exists()
+    assert not (fake_home / ".claude" / "CLAUDE.md").exists()
+    out = _strip_ansi(result.stdout)
+    assert "install-claude-bridge" in out
 
 
 def test_search_khoj_disabled_errors_clearly(

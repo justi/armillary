@@ -211,3 +211,151 @@ def test_write_to_empty_cache_still_writes_a_file(tmp_path: Path) -> None:
     assert output.exists()
     text = output.read_text()
     assert "Cache is empty" in text
+
+
+# --- install_claude_bridge (PR #19) ---------------------------------------
+
+
+def test_install_claude_bridge_writes_repos_index(tmp_path: Path) -> None:
+    """Happy path: bridge writes `~/.claude/armillary/repos-index.md`."""
+    from armillary.exporter import install_claude_bridge
+
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude").mkdir(parents=True)
+
+    db_path = tmp_path / "cache.db"
+    with Cache(db_path=db_path) as cache:
+        cache.upsert([_project("alpha"), _project("beta")])
+
+    bridge_path, written, appended = install_claude_bridge(
+        home=fake_home,
+        db_path=db_path,
+        with_claude_md=False,
+    )
+
+    assert bridge_path == fake_home / ".claude" / "armillary" / "repos-index.md"
+    assert bridge_path.exists()
+    assert written == 2
+    assert appended is False
+    text = bridge_path.read_text()
+    assert "alpha" in text
+    assert "beta" in text
+    # CLAUDE.md was NOT touched
+    assert not (fake_home / ".claude" / "CLAUDE.md").exists()
+
+
+def test_install_claude_bridge_with_claude_md_creates_file(tmp_path: Path) -> None:
+    """`with_claude_md=True` on a home with no CLAUDE.md should create it
+    with the marker + import line."""
+    from armillary.exporter import install_claude_bridge
+
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude").mkdir(parents=True)
+
+    db_path = tmp_path / "cache.db"
+    with Cache(db_path=db_path) as cache:
+        cache.upsert([_project("solo")])
+
+    _, _, appended = install_claude_bridge(
+        home=fake_home,
+        db_path=db_path,
+        with_claude_md=True,
+    )
+    assert appended is True
+
+    claude_md = fake_home / ".claude" / "CLAUDE.md"
+    assert claude_md.exists()
+    content = claude_md.read_text()
+    assert "@armillary/repos-index.md" in content
+    assert "armillary projects index" in content
+
+
+def test_install_claude_bridge_with_claude_md_appends_to_existing(
+    tmp_path: Path,
+) -> None:
+    """User already has a CLAUDE.md — the existing content must be kept
+    and our block appended after."""
+    from armillary.exporter import install_claude_bridge
+
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude").mkdir(parents=True)
+    claude_md = fake_home / ".claude" / "CLAUDE.md"
+    original_content = "# My rules\n\n- Always use pytest\n- Never mock the DB\n"
+    claude_md.write_text(original_content)
+
+    db_path = tmp_path / "cache.db"
+    with Cache(db_path=db_path) as cache:
+        cache.upsert([_project("solo")])
+
+    _, _, appended = install_claude_bridge(
+        home=fake_home,
+        db_path=db_path,
+        with_claude_md=True,
+    )
+    assert appended is True
+
+    new_content = claude_md.read_text()
+    # Original rules preserved
+    assert original_content.rstrip() in new_content
+    # Our block appended with separator
+    assert "@armillary/repos-index.md" in new_content
+    # New block is AFTER the original
+    assert new_content.index("Always use pytest") < new_content.index("@armillary/")
+
+
+def test_install_claude_bridge_with_claude_md_is_idempotent(tmp_path: Path) -> None:
+    """Two calls must produce the same CLAUDE.md — second call is a no-op."""
+    from armillary.exporter import install_claude_bridge
+
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude").mkdir(parents=True)
+
+    db_path = tmp_path / "cache.db"
+    with Cache(db_path=db_path) as cache:
+        cache.upsert([_project("solo")])
+
+    _, _, first_appended = install_claude_bridge(
+        home=fake_home,
+        db_path=db_path,
+        with_claude_md=True,
+    )
+    first_content = (fake_home / ".claude" / "CLAUDE.md").read_text()
+
+    _, _, second_appended = install_claude_bridge(
+        home=fake_home,
+        db_path=db_path,
+        with_claude_md=True,
+    )
+    second_content = (fake_home / ".claude" / "CLAUDE.md").read_text()
+
+    assert first_appended is True
+    assert second_appended is False
+    assert first_content == second_content
+
+
+def test_install_claude_bridge_skips_when_import_line_present(
+    tmp_path: Path,
+) -> None:
+    """If the user already has the @-line (even without our marker),
+    do nothing. Respect existing user setup."""
+    from armillary.exporter import install_claude_bridge
+
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude").mkdir(parents=True)
+    claude_md = fake_home / ".claude" / "CLAUDE.md"
+    claude_md.write_text(
+        "# My rules\n\n@armillary/repos-index.md\n\n- don't touch this\n"
+    )
+
+    db_path = tmp_path / "cache.db"
+    with Cache(db_path=db_path) as cache:
+        cache.upsert([_project("solo")])
+
+    original = claude_md.read_text()
+    _, _, appended = install_claude_bridge(
+        home=fake_home,
+        db_path=db_path,
+        with_claude_md=True,
+    )
+    assert appended is False
+    assert claude_md.read_text() == original
