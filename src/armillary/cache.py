@@ -7,18 +7,23 @@ for a configurable cutoff.
 
 Schema is versioned with `PRAGMA user_version`. On any version mismatch
 (including a brand-new DB) we drop and recreate the table — no
-migrations, just rebuild from the next scan. M3.2 will bump the version
-when it adds metadata columns.
+migrations, just rebuild from the next scan.
+
+Schema history:
+
+- v1 — basic scanner output (M3.1)
+- v2 — adds metadata columns: status, branch, last_commit_ts,
+  last_commit_author, dirty_count (M3.2). README excerpt and ADR list
+  live in `metadata_json` since they are not used in WHERE clauses.
 
 The cache is intentionally **not** the search engine. Filtering and
 sorting happen here in SQL so the dashboard (M4) can read directly,
 but anything richer (semantic search, full text) lives elsewhere.
-
-No GitPython, README parsing, or status heuristics here — that is M3.2.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import sys
@@ -27,24 +32,32 @@ from collections.abc import Iterable
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import TracebackType
-from typing import Self
+from typing import Any, Self
 
-from .models import Project, ProjectType
+from .models import Project, ProjectMetadata, ProjectType, Status
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA_SQL = """
 CREATE TABLE projects (
-    path             TEXT PRIMARY KEY,
-    name             TEXT NOT NULL,
-    type             TEXT NOT NULL,
-    umbrella         TEXT NOT NULL,
-    last_modified_ts REAL NOT NULL,
-    last_scanned_at  REAL NOT NULL,
-    metadata_json    TEXT
+    path               TEXT PRIMARY KEY,
+    name               TEXT NOT NULL,
+    type               TEXT NOT NULL,
+    umbrella           TEXT NOT NULL,
+    last_modified_ts   REAL NOT NULL,
+    last_scanned_at    REAL NOT NULL,
+    -- M3.2 metadata fields, NULL until enriched.
+    status             TEXT,
+    branch             TEXT,
+    last_commit_ts     REAL,
+    last_commit_author TEXT,
+    dirty_count        INTEGER,
+    -- README excerpt + ADR paths + anything else not worth a column.
+    metadata_json      TEXT
 );
 CREATE INDEX idx_projects_type     ON projects(type);
 CREATE INDEX idx_projects_umbrella ON projects(umbrella);
+CREATE INDEX idx_projects_status   ON projects(status);
 """
 
 _DEFAULT_PRUNE_CUTOFF = timedelta(days=7)
@@ -148,39 +161,40 @@ class Cache:
     # ----- mutations --------------------------------------------------------
 
     def upsert(self, projects: Iterable[Project]) -> int:
-        """Insert or update a batch of projects.
+        """Insert or update a batch of projects, including metadata.
 
         `last_scanned_at` is stamped with `time.time()` so a later
         `prune_stale()` call can remove rows that no scan has touched in
-        a while. Existing `metadata_json` is preserved on update — M3.2
-        writes that column through a different code path.
+        a while. If a project's `metadata` is `None`, the metadata columns
+        on the row are reset to `NULL` — the scanner is the source of
+        truth and a `None` metadata means "we tried and got nothing", not
+        "preserve whatever was there before".
 
         Returns the number of rows written.
         """
         now = time.time()
-        rows = [
-            (
-                str(p.path),
-                p.name,
-                p.type.value,
-                str(p.umbrella),
-                p.last_modified.timestamp(),
-                now,
-            )
-            for p in projects
-        ]
+        rows = [_project_to_row(p, now=now) for p in projects]
         self.conn.executemany(
             """
             INSERT INTO projects (
-                path, name, type, umbrella, last_modified_ts, last_scanned_at
+                path, name, type, umbrella,
+                last_modified_ts, last_scanned_at,
+                status, branch, last_commit_ts, last_commit_author,
+                dirty_count, metadata_json
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(path) DO UPDATE SET
-                name             = excluded.name,
-                type             = excluded.type,
-                umbrella         = excluded.umbrella,
-                last_modified_ts = excluded.last_modified_ts,
-                last_scanned_at  = excluded.last_scanned_at
+                name               = excluded.name,
+                type               = excluded.type,
+                umbrella           = excluded.umbrella,
+                last_modified_ts   = excluded.last_modified_ts,
+                last_scanned_at    = excluded.last_scanned_at,
+                status             = excluded.status,
+                branch             = excluded.branch,
+                last_commit_ts     = excluded.last_commit_ts,
+                last_commit_author = excluded.last_commit_author,
+                dirty_count        = excluded.dirty_count,
+                metadata_json      = excluded.metadata_json
             """,
             rows,
         )
@@ -212,19 +226,29 @@ class Cache:
         *,
         type: ProjectType | None = None,
         umbrella_substring: str | None = None,
+        status: Status | None = None,
     ) -> list[Project]:
         """Return projects from cache, sorted by `last_modified` desc.
 
-        `type` is an exact match. `umbrella_substring` is a case-sensitive
-        SQL `LIKE %x%` filter on the stored umbrella path — good enough
-        for the M3.1 list view; the dashboard (M4) will use richer search.
+        Filter parameters are AND-combined. `umbrella_substring` is a
+        case-sensitive SQL `LIKE %x%` filter on the stored umbrella path
+        — good enough for `armillary list`; the dashboard (M4) will use
+        richer search.
         """
-        sql = "SELECT path, name, type, umbrella, last_modified_ts FROM projects"
+        sql = (
+            "SELECT path, name, type, umbrella, last_modified_ts, "
+            "status, branch, last_commit_ts, last_commit_author, "
+            "dirty_count, metadata_json "
+            "FROM projects"
+        )
         where: list[str] = []
         params: list[object] = []
         if type is not None:
             where.append("type = ?")
             params.append(type.value)
+        if status is not None:
+            where.append("status = ?")
+            params.append(status.value)
         if umbrella_substring:
             where.append("umbrella LIKE ?")
             params.append(f"%{umbrella_substring}%")
@@ -239,12 +263,89 @@ class Cache:
         return self.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
 
 
+# --- row <-> Project mapping -----------------------------------------------
+
+
+def _project_to_row(p: Project, *, now: float) -> tuple[Any, ...]:
+    md = p.metadata
+    status = md.status.value if md and md.status else None
+    branch = md.branch if md else None
+    last_commit_ts = md.last_commit_ts.timestamp() if md and md.last_commit_ts else None
+    last_commit_author = md.last_commit_author if md else None
+    dirty_count = md.dirty_count if md else None
+    metadata_json = _serialize_metadata_extra(md) if md else None
+    return (
+        str(p.path),
+        p.name,
+        p.type.value,
+        str(p.umbrella),
+        p.last_modified.timestamp(),
+        now,
+        status,
+        branch,
+        last_commit_ts,
+        last_commit_author,
+        dirty_count,
+        metadata_json,
+    )
+
+
 def _row_to_project(row: sqlite3.Row) -> Project:
+    md = _row_to_metadata(row)
     return Project(
         path=Path(row["path"]),
         name=row["name"],
         type=ProjectType(row["type"]),
         umbrella=Path(row["umbrella"]),
         last_modified=datetime.fromtimestamp(row["last_modified_ts"]),
-        metadata=None,
+        metadata=md,
     )
+
+
+def _row_to_metadata(row: sqlite3.Row) -> ProjectMetadata | None:
+    """Reconstruct a `ProjectMetadata` from row columns + metadata_json.
+
+    Returns `None` only when *every* metadata column is empty, so callers
+    can distinguish "never extracted" from "extracted but empty".
+    """
+    has_any = any(
+        row[col] is not None
+        for col in (
+            "status",
+            "branch",
+            "last_commit_ts",
+            "last_commit_author",
+            "dirty_count",
+            "metadata_json",
+        )
+    )
+    if not has_any:
+        return None
+
+    extra = json.loads(row["metadata_json"]) if row["metadata_json"] else {}
+    return ProjectMetadata(
+        branch=row["branch"],
+        last_commit_sha=extra.get("last_commit_sha"),
+        last_commit_ts=(
+            datetime.fromtimestamp(row["last_commit_ts"])
+            if row["last_commit_ts"] is not None
+            else None
+        ),
+        last_commit_author=row["last_commit_author"],
+        dirty_count=row["dirty_count"],
+        readme_excerpt=extra.get("readme_excerpt"),
+        adr_paths=[Path(p) for p in extra.get("adr_paths", [])],
+        status=Status(row["status"]) if row["status"] else None,
+    )
+
+
+def _serialize_metadata_extra(md: ProjectMetadata) -> str | None:
+    """Serialize the `ProjectMetadata` fields that don't get their own column."""
+    payload = {
+        "last_commit_sha": md.last_commit_sha,
+        "readme_excerpt": md.readme_excerpt,
+        "adr_paths": [str(p) for p in md.adr_paths],
+    }
+    # Drop empty keys to keep the JSON small and the diff readable.
+    cleaned = {k: v for k, v in payload.items() if v not in (None, [], "")}
+    return json.dumps(cleaned, ensure_ascii=False) if cleaned else None

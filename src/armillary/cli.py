@@ -13,8 +13,9 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from armillary import metadata, status
 from armillary.cache import Cache
-from armillary.models import ProjectType, UmbrellaFolder
+from armillary.models import ProjectType, Status, UmbrellaFolder
 from armillary.scanner import scan as scan_umbrellas
 
 app = typer.Typer(
@@ -86,12 +87,22 @@ def scan(
         "--no-cache",
         help="Skip writing the result to the SQLite cache (just print JSON).",
     ),
+    no_metadata: bool = typer.Option(
+        False,
+        "--no-metadata",
+        help=(
+            "Skip GitPython / README / ADR extraction. Faster on huge "
+            "umbrellas; status will be missing for git projects."
+        ),
+    ),
 ) -> None:
     """Scan umbrella folders and print the project list as JSON.
 
-    By default the result is also persisted to the SQLite cache so
+    By default the result is enriched with git metadata, README excerpt,
+    and computed status, then persisted to the SQLite cache so
     `armillary list` can read it back. Use `--no-cache` for ad-hoc
-    introspection that should not touch on-disk state.
+    introspection that should not touch on-disk state, and `--no-metadata`
+    for the fast path that just walks the filesystem.
 
     Config-file driven umbrella folders come in M5. Until then, pass
     them explicitly, e.g.:
@@ -100,6 +111,14 @@ def scan(
     """
     umbrellas = [UmbrellaFolder(path=p, max_depth=max_depth) for p in umbrella]
     projects = scan_umbrellas(umbrellas)
+
+    if not no_metadata:
+        metadata.extract_all(projects)
+        for project in projects:
+            if project.metadata is None:
+                continue
+            project.metadata.status = status.compute_status(project)
+
     payload = [p.model_dump(mode="json") for p in projects]
     typer.echo(json.dumps(payload, indent=2, ensure_ascii=False))
 
@@ -123,12 +142,19 @@ def list_projects(
         "-u",
         help="Substring filter on the umbrella path.",
     ),
+    status_filter: Status | None = typer.Option(
+        None,
+        "--status",
+        "-s",
+        help="Filter by computed status (ACTIVE, PAUSED, DORMANT, IDEA, IN_PROGRESS).",
+    ),
 ) -> None:
     """Print the project table from cache, sorted by last modified."""
     with Cache() as cache:
         projects = cache.list_projects(
             type=type_filter,
             umbrella_substring=umbrella_filter,
+            status=status_filter,
         )
 
     if not projects:
@@ -139,15 +165,25 @@ def list_projects(
         return
 
     table = Table(title=f"{len(projects)} project(s)", show_lines=False)
+    table.add_column("Status", style="green", no_wrap=True)
     table.add_column("Type", style="cyan", no_wrap=True)
     table.add_column("Name", style="bold")
+    table.add_column("Branch", style="magenta")
+    table.add_column("Dirty", justify="right")
     table.add_column("Umbrella", style="dim")
     table.add_column("Last modified", justify="right")
 
     for p in projects:
+        md = p.metadata
+        status_label = (md.status.value if md and md.status else "—") or "—"
+        branch = (md.branch if md else None) or "—"
+        dirty = str(md.dirty_count) if md and md.dirty_count is not None else "—"
         table.add_row(
+            status_label,
             p.type.value,
             p.name,
+            branch,
+            dirty,
             _shorten_home(p.umbrella),
             _humanize_relative_time(p.last_modified),
         )

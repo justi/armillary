@@ -105,11 +105,24 @@ def test_scan_json_shape_has_expected_fields(tmp_path: Path) -> None:
         "metadata",
     }
     assert item["type"] == "git"
-    assert item["metadata"] is None
     # last_modified must be ISO-8601 parseable
     from datetime import datetime
 
     datetime.fromisoformat(item["last_modified"])
+
+    # M3.2: metadata is a dict (possibly with all-None fields when the
+    # underlying repo is a fake `.git/` directory that GitPython cannot read).
+    assert isinstance(item["metadata"], dict)
+    assert set(item["metadata"]) >= {
+        "branch",
+        "last_commit_sha",
+        "last_commit_ts",
+        "last_commit_author",
+        "dirty_count",
+        "readme_excerpt",
+        "adr_paths",
+        "status",
+    }
 
 
 def test_scan_accepts_multiple_umbrellas(tmp_path: Path) -> None:
