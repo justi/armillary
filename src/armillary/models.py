@@ -8,13 +8,13 @@ extractor, cache, and UI layers. Keep them minimal — richer fields
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class ProjectType(str, Enum):
+class ProjectType(StrEnum):
     """What kind of thing a project directory is."""
 
     GIT = "git"

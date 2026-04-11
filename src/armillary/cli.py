@@ -85,9 +85,7 @@ def scan(
 
         armillary scan -u ~/Projects -u ~/ideas
     """
-    umbrellas = [
-        UmbrellaFolder(path=p, max_depth=max_depth) for p in umbrella
-    ]
+    umbrellas = [UmbrellaFolder(path=p, max_depth=max_depth) for p in umbrella]
     projects = scan_umbrellas(umbrellas)
     payload = [p.model_dump(mode="json") for p in projects]
     typer.echo(json.dumps(payload, indent=2, ensure_ascii=False))

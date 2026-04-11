@@ -8,6 +8,7 @@ by `test_scanner.py`; here we only verify the CLI wiring.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,18 @@ from armillary import cli
 from armillary.cli import app
 
 runner = CliRunner()
+
+# Strips SGR / cursor control sequences from captured CLI output. Click and
+# rich-based typer error rendering wrap option names in colour codes whenever
+# they think the output is going to a terminal — which happens on GitHub
+# Actions runners but not on a typical local pytest invocation. Substring
+# assertions like `"max-depth" in stdout` would otherwise see
+# `--\x1b[1;36mmax\x1b[0m\x1b[1;36m-depth\x1b[0m` and silently miss.
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_ESCAPE_RE.sub("", text)
 
 
 # --- helpers ----------------------------------------------------------------
@@ -88,9 +101,7 @@ def test_scan_accepts_multiple_umbrellas(tmp_path: Path) -> None:
     _mkrepo(a / "one")
     _mkidea(b / "two")
 
-    result = runner.invoke(
-        app, ["scan", "-u", str(a), "-u", str(b)]
-    )
+    result = runner.invoke(app, ["scan", "-u", str(a), "-u", str(b)])
 
     assert result.exit_code == 0, result.stdout
     data = json.loads(result.stdout)
@@ -105,12 +116,8 @@ def test_scan_respects_max_depth_flag(tmp_path: Path) -> None:
     deep.mkdir(parents=True)
     _mkrepo(deep / "repo")
 
-    shallow = runner.invoke(
-        app, ["scan", "-u", str(tmp_path), "--max-depth", "2"]
-    )
-    deeper = runner.invoke(
-        app, ["scan", "-u", str(tmp_path), "--max-depth", "3"]
-    )
+    shallow = runner.invoke(app, ["scan", "-u", str(tmp_path), "--max-depth", "2"])
+    deeper = runner.invoke(app, ["scan", "-u", str(tmp_path), "--max-depth", "3"])
 
     assert shallow.exit_code == 0 and deeper.exit_code == 0
     assert json.loads(shallow.stdout) == []
@@ -122,15 +129,14 @@ def test_scan_requires_umbrella_flag() -> None:
 
     assert result.exit_code != 0
     # Typer/Click reports missing required option
-    assert "umbrella" in (result.stdout + result.stderr).lower()
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
+    assert "umbrella" in combined.lower()
 
 
 def test_scan_short_flags_match_long(tmp_path: Path) -> None:
     _mkrepo(tmp_path / "r")
 
-    long = runner.invoke(
-        app, ["scan", "--umbrella", str(tmp_path), "--max-depth", "3"]
-    )
+    long = runner.invoke(app, ["scan", "--umbrella", str(tmp_path), "--max-depth", "3"])
     short = runner.invoke(app, ["scan", "-u", str(tmp_path), "-d", "3"])
 
     assert long.exit_code == 0 and short.exit_code == 0
@@ -141,18 +147,14 @@ def test_scan_short_flags_match_long(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("bad_value", ["0", "11", "-1", "999"])
-def test_scan_rejects_max_depth_out_of_range(
-    tmp_path: Path, bad_value: str
-) -> None:
+def test_scan_rejects_max_depth_out_of_range(tmp_path: Path, bad_value: str) -> None:
     """Out-of-range --max-depth must produce a clean Click usage error,
     not a Pydantic ValidationError traceback from inside the command body.
     """
-    result = runner.invoke(
-        app, ["scan", "-u", str(tmp_path), "--max-depth", bad_value]
-    )
+    result = runner.invoke(app, ["scan", "-u", str(tmp_path), "--max-depth", bad_value])
 
     assert result.exit_code != 0
-    combined = result.stdout + (result.stderr or "")
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
     assert "Traceback" not in combined
     assert "ValidationError" not in combined
     # Click's IntRange error mentions the option name and the bound
@@ -172,7 +174,9 @@ def test_scan_accepts_max_depth_at_bounds(tmp_path: Path) -> None:
 # --- `armillary start` -----------------------------------------------------
 
 
-def test_start_invokes_streamlit_with_default_port(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_start_invokes_streamlit_with_default_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     captured: dict[str, Any] = {}
 
     def fake_run(cmd: list[str], **kwargs: Any) -> Any:
@@ -319,7 +323,7 @@ def test_start_errors_clearly_when_streamlit_missing(
     result = runner.invoke(app, ["start"])
 
     assert result.exit_code == 2
-    combined = result.stdout + (result.stderr or "")
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
     assert "streamlit" in combined.lower()
     assert "not installed" in combined.lower()
 

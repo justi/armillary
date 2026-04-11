@@ -29,6 +29,7 @@ in `metadata.py` / `status.py` (M3).
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
@@ -156,14 +157,10 @@ def _is_git_project(path: Path) -> bool:
 
 def _has_direct_idea_files(entries: list[Path]) -> bool:
     """True if any direct child is a `.md` / `.ipynb` file (case-insensitive)."""
-    return any(
-        e.is_file() and e.suffix.lower() in IDEA_FILE_SUFFIXES for e in entries
-    )
+    return any(e.is_file() and e.suffix.lower() in IDEA_FILE_SUFFIXES for e in entries)
 
 
-def _is_single_doc_folder_parent(
-    entries: list[Path], ignores: frozenset[str]
-) -> bool:
+def _is_single_doc_folder_parent(entries: list[Path], ignores: frozenset[str]) -> bool:
     """True if the current folder looks like a project whose notes/docs live
     one level deep — exactly one direct subfolder contains `.md` / `.ipynb`
     files directly, and no direct subfolder is a git repo.
@@ -198,8 +195,7 @@ def _is_single_doc_folder_parent(
         except (PermissionError, OSError):
             continue
         if any(
-            c.is_file() and c.suffix.lower() in IDEA_FILE_SUFFIXES
-            for c in children
+            c.is_file() and c.suffix.lower() in IDEA_FILE_SUFFIXES for c in children
         ):
             doc_bearing += 1
             if doc_bearing > 1:
@@ -209,13 +205,7 @@ def _is_single_doc_folder_parent(
 
 def _should_skip(path: Path, ignores: frozenset[str]) -> bool:
     name = path.name
-    if name in ignores:
-        return True
-    if name.startswith("."):
-        return True
-    if name.endswith(".egg-info"):
-        return True
-    return False
+    return name in ignores or name.startswith(".") or name.endswith(".egg-info")
 
 
 def _make_project(path: Path, umbrella_root: Path, type_: ProjectType) -> Project:
@@ -250,19 +240,13 @@ def _compute_last_modified(path: Path) -> datetime:
     the bare directory mtime without paying for a full tree walk.
     """
     candidates: list[float] = []
-    try:
+    with contextlib.suppress(PermissionError, OSError):
         candidates.append(path.stat().st_mtime)
-    except (PermissionError, OSError):
-        pass
 
-    try:
+    with contextlib.suppress(PermissionError, OSError):
         for entry in path.iterdir():
-            try:
+            with contextlib.suppress(PermissionError, OSError):
                 candidates.append(entry.stat().st_mtime)
-            except (PermissionError, OSError):
-                continue
-    except (PermissionError, OSError):
-        pass
 
     if not candidates:
         # Path was unreadable; degrade gracefully to epoch.
