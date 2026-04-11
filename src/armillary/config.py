@@ -19,6 +19,7 @@ so future fields don't break older installs.
 
 from __future__ import annotations
 
+import contextlib
 import os
 from pathlib import Path
 
@@ -216,6 +217,62 @@ def _merge_launchers(user_launchers: object) -> dict[str, dict[str, object]]:
         else:
             base[key] = override
     return base
+
+
+_WRITER_HEADER = "# armillary config — managed via dashboard or CLI\n\n"
+
+
+def write_config(cfg: Config, path: Path | None = None) -> Path:
+    """Write `cfg` to `path` (or `default_config_path()`) atomically.
+
+    Public, so both the dashboard's settings page and any future CLI
+    code can use the same writer. Single source of truth for the
+    on-disk YAML format.
+
+    Atomicity: writes to `<path>.tmp` first, fsyncs, then `os.replace`s
+    onto the final path. If Streamlit (or anything else) crashes
+    mid-save, the original file is intact OR the new file is fully
+    written — never half-written.
+
+    Idempotency: two calls with the same `Config` produce
+    byte-identical files. We achieve this by:
+    - going through `cfg.model_dump(mode="json", exclude_none=False)`
+      so the field order is deterministic (Pydantic preserves model
+      declaration order)
+    - using `yaml.safe_dump(sort_keys=False, ...)` so YAML does not
+      re-sort keys
+    - the header is a fixed string, not a timestamp
+
+    Returns the resolved path that was written.
+    """
+    target = path or default_config_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    # `mode="json"` so Path values become strings (not PosixPath
+    # repr objects), and Status / ProjectType enums become their
+    # string values. Otherwise yaml.safe_dump refuses non-primitive
+    # objects with a RepresenterError.
+    payload = cfg.model_dump(mode="json", exclude_none=False)
+    body = yaml.safe_dump(
+        payload,
+        sort_keys=False,
+        default_flow_style=False,
+        allow_unicode=True,
+    )
+    document = _WRITER_HEADER + body
+
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    # Use 'w' rather than open(...).write to keep the file descriptor
+    # closed promptly on POSIX before os.replace.
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(document)
+        fh.flush()
+        # fsync is best-effort — some platforms (e.g. CI containers,
+        # tmpfs) reject it. The os.replace below is still atomic.
+        with contextlib.suppress(OSError):
+            os.fsync(fh.fileno())
+    os.replace(tmp, target)
+    return target
 
 
 class ConfigError(Exception):
