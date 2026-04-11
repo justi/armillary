@@ -677,20 +677,192 @@ def test_config_path_prints_default_location(
     assert str(tmp_path / "config.yaml") in result.stdout
 
 
-def test_config_init_creates_starter_file(
+def test_config_init_blank_creates_starter_file(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """`--init --blank` writes the placeholder YAML without scanning ~/."""
     config_file = tmp_path / "armillary" / "config.yaml"
     monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
 
-    # `--init` writes the starter file then immediately tries to open
-    # `$EDITOR`. Use `true` as a no-op editor for the test.
+    # After writing, `config` proceeds to open `$EDITOR`. Use `true`.
+    monkeypatch.setenv("EDITOR", "true")
+
+    result = runner.invoke(app, ["config", "--init", "--blank"])
+    assert result.exit_code == 0, result.stdout
+    assert config_file.exists()
+    assert "umbrellas" in config_file.read_text()
+
+
+def test_config_init_non_interactive_uses_discovered_umbrellas(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--init --non-interactive` runs bootstrap discovery against a
+    monkeypatched `Path.home()` and writes every detected candidate."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+
+    # Two umbrella candidates: one with multiple git repos, one with a
+    # conventional name (`projects_prod`).
+    work = fake_home / "work"
+    _mkrepo(work / "repo-a")
+    _mkrepo(work / "repo-b")
+
+    prod = fake_home / "projects_prod"
+    _mkrepo(prod / "deploy")
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    config_file = tmp_path / "armillary" / "config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+    monkeypatch.setenv("EDITOR", "true")
+
+    result = runner.invoke(app, ["config", "--init", "--non-interactive"])
+    assert result.exit_code == 0, result.stdout
+    assert config_file.exists()
+
+    text = config_file.read_text()
+    # Both candidates show up
+    assert "work" in text
+    assert "projects_prod" in text
+
+
+def test_config_init_interactive_picker_accepts_all(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The default `--init` mode prompts for a selection. Pressing Enter
+    on the default ('all') accepts every candidate."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    work = fake_home / "work"
+    _mkrepo(work / "alpha")
+    _mkrepo(work / "beta")
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    config_file = tmp_path / "armillary" / "config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+    monkeypatch.setenv("EDITOR", "true")
+
+    # CliRunner can pipe stdin via `input=`
+    result = runner.invoke(app, ["config", "--init"], input="all\n")
+    assert result.exit_code == 0, result.stdout
+    assert config_file.exists()
+    assert "work" in config_file.read_text()
+
+
+def test_config_init_interactive_picker_accepts_specific_numbers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """User picks `1` from a multi-candidate list — only that one ends up
+    in the file."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+
+    # Two candidates so the order matters.
+    a = fake_home / "Projects"  # conventional name → always passes
+    _mkrepo(a / "alpha")
+    b = fake_home / "code"  # also conventional
+    _mkrepo(b / "bravo")
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    config_file = tmp_path / "armillary" / "config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+    monkeypatch.setenv("EDITOR", "true")
+
+    # Pick just the first candidate (whatever sort order put it there)
+    result = runner.invoke(app, ["config", "--init"], input="1\n")
+    assert result.exit_code == 0, result.stdout
+    text = config_file.read_text()
+    # Only one umbrella entry written
+    assert text.count("- path:") == 1
+
+
+def test_config_init_picker_blank_input_actually_cancels(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Regression for Codex review on PR #12: pressing Enter on the
+    picker prompt must NOT silently accept all candidates."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    work = fake_home / "Projects"
+    _mkrepo(work / "alpha")
+    _mkrepo(work / "beta")
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    config_file = tmp_path / "armillary" / "config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+    monkeypatch.setenv("EDITOR", "true")
+
+    # Press Enter (empty input) at the picker → cancel.
+    result = runner.invoke(app, ["config", "--init"], input="\n")
+
+    # Cancellation: exit non-zero and the file is NOT written.
+    assert result.exit_code != 0
+    assert not config_file.exists()
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
+    assert "no umbrellas selected" in combined.lower()
+
+
+def test_config_init_yaml_handles_special_characters_in_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Regression for Codex review on PR #12: folder names with YAML
+    metacharacters (`#`, `:`) must round-trip through `_render_config_yaml`
+    and `load_config` without truncation or parse errors."""
+    import yaml as _yaml
+
+    from armillary.config import load_config
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    # A folder name with a `#` would otherwise be parsed as a comment by
+    # plain-scalar YAML.
+    weird = fake_home / "Work #archive"
+    _mkrepo(weird / "alpha")
+    _mkrepo(weird / "beta")
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    config_file = tmp_path / "armillary" / "config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+    monkeypatch.setenv("EDITOR", "true")
+
+    result = runner.invoke(app, ["config", "--init", "--non-interactive"])
+    assert result.exit_code == 0, result.stdout
+
+    raw = config_file.read_text()
+    parsed = _yaml.safe_load(raw)
+    assert parsed["umbrellas"][0]["label"] == "Work #archive"
+    # Path should also survive — `_shorten_home_str` may have replaced
+    # the home prefix with `~`, but the suffix must be intact.
+    assert "Work #archive" in parsed["umbrellas"][0]["path"]
+
+    # And `load_config` parses it without error.
+    cfg = load_config(config_file)
+    assert len(cfg.umbrellas) == 1
+    assert "Work #archive" in str(cfg.umbrellas[0].path)
+
+
+def test_config_init_no_candidates_falls_back_to_blank(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Empty `~/` → bootstrap finds nothing → write blank placeholder."""
+    fake_home = tmp_path / "empty-home"
+    fake_home.mkdir()
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    config_file = tmp_path / "armillary" / "config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
     monkeypatch.setenv("EDITOR", "true")
 
     result = runner.invoke(app, ["config", "--init"])
     assert result.exit_code == 0, result.stdout
     assert config_file.exists()
-    assert "umbrellas" in config_file.read_text()
+    # Falls back to the blank placeholder which uses ~/Projects.
+    assert "~/Projects" in config_file.read_text()
 
 
 def test_config_missing_file_without_init_errors(
