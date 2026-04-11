@@ -25,6 +25,7 @@ from armillary.config import (
 )
 from armillary.models import ProjectType, Status, UmbrellaFolder
 from armillary.scanner import scan as scan_umbrellas
+from armillary.search import KhojConfig, KhojSearch, LiteralSearch
 
 app = typer.Typer(
     name="armillary",
@@ -244,11 +245,136 @@ def _humanize_relative_time(when: datetime) -> str:
 @app.command()
 def search(
     query: str = typer.Argument(..., help="Search query."),
+    project_filter: str | None = typer.Option(
+        None,
+        "--project",
+        "-p",
+        help="Restrict the search to projects matching this substring.",
+    ),
+    max_results: int = typer.Option(
+        50,
+        "--max",
+        "-n",
+        min=1,
+        max=500,
+        help="Maximum number of hits to print.",
+    ),
+    use_khoj: bool = typer.Option(
+        False,
+        "--khoj",
+        help=(
+            "Use the Khoj semantic search backend instead of ripgrep. "
+            "Falls back to ripgrep if Khoj is unreachable. Only enabled "
+            "if `khoj.enabled` is true in your config."
+        ),
+    ),
 ) -> None:
-    """Search across all indexed projects. (M4)"""
-    typer.secho(
-        f"search '{query}': not implemented yet (milestone M4)",
-        fg=typer.colors.YELLOW,
+    """Search across indexed project files (literal `ripgrep` by default).
+
+    Without flags, runs `rg <query>` over every cached project (or a
+    subset filtered by `--project`). With `--khoj`, posts to the Khoj
+    REST API configured in `~/.config/armillary/config.yaml` and falls
+    back to ripgrep on any error so the dashboard never breaks.
+    """
+    cfg = _safe_load_config()
+    if cfg is None:
+        raise typer.Exit(2)
+
+    with Cache() as cache:
+        all_projects = cache.list_projects()
+
+    if project_filter:
+        needle = project_filter.lower()
+        projects = [p for p in all_projects if needle in p.name.lower()]
+    else:
+        projects = all_projects
+
+    if not projects:
+        typer.secho(
+            "No projects in cache. Run `armillary scan` first.",
+            fg=typer.colors.YELLOW,
+        )
+        return
+
+    backend = _build_search_backend(cfg, use_khoj=use_khoj)
+    if backend is None:
+        raise typer.Exit(2)
+
+    console = Console()
+    total_hits = 0
+    for project in projects:
+        try:
+            hits = backend.search(query, root=project.path, max_results=max_results)
+        except Exception as exc:  # noqa: BLE001 — KhojResponseError, URLError, etc.
+            typer.secho(
+                f"Search backend ({backend.name}) failed: {exc}. "
+                "Install ripgrep (`brew install ripgrep`) for an automatic "
+                "fallback, or check that the Khoj server is reachable.",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(2) from exc
+        if not hits:
+            continue
+        console.print(
+            f"[bold cyan]{project.name}[/bold cyan]  [dim]{project.path}[/dim]"
+        )
+        for hit in hits[:max_results]:
+            location = (
+                f"{hit.path}:{hit.line}" if hit.line is not None else str(hit.path)
+            )
+            console.print(f"  [magenta]{location}[/magenta]")
+            console.print(f"    {hit.preview}")
+            total_hits += 1
+            if total_hits >= max_results:
+                break
+        if total_hits >= max_results:
+            console.print(f"[dim](truncated at --max {max_results})[/dim]")
+            break
+
+    if total_hits == 0:
+        typer.secho(f"No matches for '{query}'.", fg=typer.colors.YELLOW)
+
+
+def _build_search_backend(
+    cfg: Config, *, use_khoj: bool
+) -> LiteralSearch | KhojSearch | None:
+    if not use_khoj:
+        if not LiteralSearch.is_available():
+            typer.secho(
+                "ripgrep (`rg`) is not on PATH. "
+                "Install it (`brew install ripgrep`) or run with `--khoj`.",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            return None
+        return LiteralSearch()
+
+    if not cfg.khoj.enabled:
+        typer.secho(
+            "Khoj is not enabled. Set `khoj.enabled: true` in "
+            f"{default_config_path()} first.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        return None
+
+    # When ripgrep is also available we wire it in as the fallback so any
+    # transient Khoj failure degrades to literal search instead of "no
+    # matches". With no ripgrep on PATH we deliberately leave fallback as
+    # None — KhojSearch will then raise on errors and the CLI surfaces a
+    # clear "Khoj is broken AND there is no fallback" message rather than
+    # silently returning empty.
+    fallback: LiteralSearch | None = (
+        LiteralSearch() if LiteralSearch.is_available() else None
+    )
+    return KhojSearch(
+        config=KhojConfig(
+            api_url=cfg.khoj.api_url,
+            api_key=cfg.khoj.api_key,
+            timeout_seconds=cfg.khoj.timeout_seconds,
+        ),
+        fallback=fallback,
     )
 
 

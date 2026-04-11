@@ -115,6 +115,21 @@ _BUILTIN_LAUNCHERS: dict[str, LauncherConfig] = {
 }
 
 
+class KhojConfigBlock(BaseModel):
+    """Optional Khoj integration settings.
+
+    Khoj is opt-in. If `enabled=False` (the default) the search command
+    uses ripgrep, period — no network calls happen even at import time.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = False
+    api_url: str = "http://localhost:42110"
+    api_key: str | None = None
+    timeout_seconds: float = Field(default=5.0, ge=0.5, le=60.0)
+
+
 class Config(BaseModel):
     """Top-level armillary configuration."""
 
@@ -124,6 +139,7 @@ class Config(BaseModel):
     launchers: dict[str, LauncherConfig] = Field(
         default_factory=lambda: dict(_BUILTIN_LAUNCHERS)
     )
+    khoj: KhojConfigBlock = Field(default_factory=KhojConfigBlock)
 
     @classmethod
     def builtin_launchers(cls) -> dict[str, LauncherConfig]:

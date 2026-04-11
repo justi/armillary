@@ -361,19 +361,8 @@ def test_start_errors_clearly_when_streamlit_missing(
 # --- placeholder commands (M3-M5) -------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "command, milestone",
-    [
-        (["search", "needle"], "M4"),
-    ],
-)
-def test_placeholder_commands_exit_zero_with_notice(
-    command: list[str], milestone: str
-) -> None:
-    result = runner.invoke(app, command)
-    assert result.exit_code == 0
-    assert "not implemented" in result.stdout
-    assert milestone.lower() in result.stdout.lower()
+# Note: the placeholder-command parametrized test is gone — every command
+# (start, scan, list, search, open, config) is now real as of M6.
 
 
 # --- M3.1: scan persists to cache, list reads back -------------------------
@@ -685,6 +674,97 @@ def test_scan_with_no_umbrellas_anywhere_errors(
     assert result.exit_code != 0
     combined = _strip_ansi(result.stdout + (result.stderr or ""))
     assert "no umbrellas" in combined.lower()
+
+
+# --- M6: armillary search -------------------------------------------------
+
+
+def test_search_empty_cache_prints_warning(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["search", "needle"])
+    assert result.exit_code == 0
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
+    assert "no projects in cache" in combined.lower()
+
+
+def test_search_runs_ripgrep_against_cached_projects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end: scan a tmp tree, then `armillary search needle` finds a hit."""
+    import shutil as _shutil
+
+    if _shutil.which("rg") is None:
+        pytest.skip("ripgrep not installed")
+
+    repo = tmp_path / "demo"
+    _mkrepo(repo)
+    (repo / "code.py").write_text("def needle():\n    return 1\n")
+
+    runner.invoke(app, ["scan", "-u", str(tmp_path)])
+
+    result = runner.invoke(app, ["search", "needle"])
+    assert result.exit_code == 0, result.stdout
+    out = _strip_ansi(result.stdout)
+    assert "needle" in out
+    assert "demo" in out
+
+
+def test_search_with_project_filter_restricts_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import shutil as _shutil
+
+    if _shutil.which("rg") is None:
+        pytest.skip("ripgrep not installed")
+
+    target = tmp_path / "wanted"
+    other = tmp_path / "ignored"
+    _mkrepo(target)
+    _mkrepo(other)
+    (target / "x.py").write_text("uniqueneedle\n")
+    (other / "y.py").write_text("uniqueneedle\n")
+
+    runner.invoke(app, ["scan", "-u", str(tmp_path)])
+
+    result = runner.invoke(app, ["search", "uniqueneedle", "--project", "wanted"])
+    assert result.exit_code == 0, result.stdout
+    out = _strip_ansi(result.stdout)
+    assert "wanted" in out
+    assert "ignored" not in out
+
+
+def test_search_no_matches_prints_friendly_message(
+    tmp_path: Path,
+) -> None:
+    import shutil as _shutil
+
+    if _shutil.which("rg") is None:
+        pytest.skip("ripgrep not installed")
+
+    _mkrepo(tmp_path / "thing")
+    runner.invoke(app, ["scan", "-u", str(tmp_path)])
+
+    result = runner.invoke(app, ["search", "definitelynotinthisrepoxxxxx"])
+    assert result.exit_code == 0
+    out = _strip_ansi(result.stdout)
+    assert "no matches" in out.lower()
+
+
+def test_search_khoj_disabled_errors_clearly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--khoj` without `khoj.enabled: true` should not silently fall through."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("khoj:\n  enabled: false\n")
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+
+    _mkrepo(tmp_path / "thing")
+    runner.invoke(app, ["scan", "-u", str(tmp_path)])
+
+    result = runner.invoke(app, ["search", "anything", "--khoj"])
+    assert result.exit_code != 0
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
+    assert "khoj" in combined.lower()
+    assert "not enabled" in combined.lower()
 
 
 def test_scan_then_rescan_reflects_removed_projects_after_prune(
