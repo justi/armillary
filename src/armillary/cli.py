@@ -52,7 +52,12 @@ def scan(
         help="Umbrella folder to scan. Repeat for multiple.",
     ),
     max_depth: int = typer.Option(
-        3, "--max-depth", "-d", help="Max recursion depth per umbrella."
+        3,
+        "--max-depth",
+        "-d",
+        min=1,
+        max=10,
+        help="Max recursion depth per umbrella.",
     ),
 ) -> None:
     """Scan umbrella folders and print the project list as JSON.

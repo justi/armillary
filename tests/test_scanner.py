@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -173,3 +175,80 @@ def test_idea_detection_accepts_md_and_ipynb(tmp_path: Path, suffix: str) -> Non
 
     assert len(projects) == 1
     assert projects[0].type is ProjectType.IDEA
+
+
+# --- regression: P1 (last_modified must reflect child file edits) ----------
+
+
+def test_last_modified_picks_up_root_file_edits(tmp_path: Path) -> None:
+    """Editing README.md inside a project must move last_modified forward.
+
+    Regression for the bug where `path.stat().st_mtime` on the project
+    directory only changed on entry add/remove, missing in-place edits.
+    """
+    repo = _mkrepo(tmp_path / "repo")
+
+    # Force the README mtime ahead of the directory's creation mtime so the
+    # test does not depend on filesystem timestamp granularity.
+    readme = repo / "README.md"
+    future = time.time() + 10
+    os.utime(readme, (future, future))
+
+    project = scan_umbrella(_umbrella(tmp_path))[0]
+
+    assert project.last_modified.timestamp() >= future - 0.001
+
+
+def test_last_modified_picks_up_idea_file_edits(tmp_path: Path) -> None:
+    idea = _mkidea(tmp_path / "thoughts")
+
+    notes = idea / "notes.md"
+    future = time.time() + 10
+    os.utime(notes, (future, future))
+
+    project = scan_umbrella(_umbrella(tmp_path))[0]
+
+    assert project.last_modified.timestamp() >= future - 0.001
+
+
+# --- regression: P2 (scan must dedupe overlapping umbrellas) ---------------
+
+
+def test_scan_dedupes_when_one_umbrella_contains_another(tmp_path: Path) -> None:
+    """`-u outer -u outer/inner` must not double-count `inner/shared`."""
+    outer = tmp_path / "outer"
+    inner = outer / "inner"
+    inner.mkdir(parents=True)
+    _mkrepo(inner / "shared")
+
+    projects = scan([_umbrella(outer), _umbrella(inner)])
+
+    assert len(projects) == 1
+    assert projects[0].name == "shared"
+
+
+def test_scan_dedupes_repeated_umbrella_argument(tmp_path: Path) -> None:
+    """Passing the same umbrella twice must yield each project only once."""
+    _mkrepo(tmp_path / "alpha")
+    _mkrepo(tmp_path / "beta")
+
+    projects = scan([_umbrella(tmp_path), _umbrella(tmp_path)])
+
+    assert {p.name for p in projects} == {"alpha", "beta"}
+    assert len(projects) == 2
+
+
+def test_scan_dedupe_preserves_first_umbrella(tmp_path: Path) -> None:
+    """First umbrella to discover a project keeps ownership."""
+    outer = tmp_path / "outer"
+    inner = outer / "inner"
+    inner.mkdir(parents=True)
+    _mkrepo(inner / "shared")
+
+    # outer first → owns "shared"
+    [project] = scan([_umbrella(outer), _umbrella(inner)])
+    assert project.umbrella == outer.resolve()
+
+    # inner first → owns "shared"
+    [project] = scan([_umbrella(inner), _umbrella(outer)])
+    assert project.umbrella == inner.resolve()

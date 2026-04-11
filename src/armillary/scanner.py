@@ -50,11 +50,18 @@ def scan(
     *,
     ignores: frozenset[str] = DEFAULT_IGNORES,
 ) -> list[Project]:
-    """Scan multiple umbrella folders and return a merged project list."""
-    result: list[Project] = []
+    """Scan multiple umbrella folders and return a merged, deduped project list.
+
+    Projects are keyed by their resolved `Path`, so overlapping umbrellas
+    (e.g. ``-u ~/Projects -u ~/Projects/work``) or repeated `-u` flags do
+    not produce duplicate entries. The first umbrella to discover a given
+    project wins — its `umbrella` field is preserved.
+    """
+    seen: dict[Path, Project] = {}
     for umbrella in umbrellas:
-        result.extend(scan_umbrella(umbrella, ignores=ignores))
-    return result
+        for project in scan_umbrella(umbrella, ignores=ignores):
+            seen.setdefault(project.path, project)
+    return list(seen.values())
 
 
 def scan_umbrella(
@@ -142,11 +149,47 @@ def _should_skip(path: Path, ignores: frozenset[str]) -> bool:
 
 
 def _make_project(path: Path, umbrella_root: Path, type_: ProjectType) -> Project:
-    last_mod = datetime.fromtimestamp(path.stat().st_mtime)
     return Project(
         path=path,
         name=path.name,
         type=type_,
         umbrella=umbrella_root,
-        last_modified=last_mod,
+        last_modified=_compute_last_modified(path),
     )
+
+
+def _compute_last_modified(path: Path) -> datetime:
+    """Best-effort 'last touched' timestamp without recursing.
+
+    `path.stat().st_mtime` on a directory only changes when entries are
+    added or removed at that level — editing `README.md` in place leaves
+    the parent dir mtime untouched. We therefore take the max over the
+    directory itself **and** its immediate children, which catches:
+
+    - root-level edits (README, pyproject.toml, package.json, ...);
+    - git activity via `.git/` (commits/checkouts mutate index, HEAD, refs).
+
+    Edits deeper in the tree are still missed — that is M3's job, where
+    `metadata.py` will use GitPython for git repos and a proper recursive
+    walk for idea folders. For M2 this gives a clearly better signal than
+    the bare directory mtime without paying for a full tree walk.
+    """
+    candidates: list[float] = []
+    try:
+        candidates.append(path.stat().st_mtime)
+    except (PermissionError, OSError):
+        pass
+
+    try:
+        for entry in path.iterdir():
+            try:
+                candidates.append(entry.stat().st_mtime)
+            except (PermissionError, OSError):
+                continue
+    except (PermissionError, OSError):
+        pass
+
+    if not candidates:
+        # Path was unreadable; degrade gracefully to epoch.
+        return datetime.fromtimestamp(0)
+    return datetime.fromtimestamp(max(candidates))

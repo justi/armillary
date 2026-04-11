@@ -137,6 +137,38 @@ def test_scan_short_flags_match_long(tmp_path: Path) -> None:
     assert json.loads(long.stdout) == json.loads(short.stdout)
 
 
+# --- regression: P3 (--max-depth bounds enforced at CLI boundary) ----------
+
+
+@pytest.mark.parametrize("bad_value", ["0", "11", "-1", "999"])
+def test_scan_rejects_max_depth_out_of_range(
+    tmp_path: Path, bad_value: str
+) -> None:
+    """Out-of-range --max-depth must produce a clean Click usage error,
+    not a Pydantic ValidationError traceback from inside the command body.
+    """
+    result = runner.invoke(
+        app, ["scan", "-u", str(tmp_path), "--max-depth", bad_value]
+    )
+
+    assert result.exit_code != 0
+    combined = result.stdout + (result.stderr or "")
+    assert "Traceback" not in combined
+    assert "ValidationError" not in combined
+    # Click's IntRange error mentions the option name and the bound
+    assert "max-depth" in combined.lower() or "max_depth" in combined.lower()
+
+
+def test_scan_accepts_max_depth_at_bounds(tmp_path: Path) -> None:
+    _mkrepo(tmp_path / "r")
+
+    low = runner.invoke(app, ["scan", "-u", str(tmp_path), "--max-depth", "1"])
+    high = runner.invoke(app, ["scan", "-u", str(tmp_path), "--max-depth", "10"])
+
+    assert low.exit_code == 0, low.stdout
+    assert high.exit_code == 0, high.stdout
+
+
 # --- `armillary start` -----------------------------------------------------
 
 
