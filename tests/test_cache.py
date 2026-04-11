@@ -476,6 +476,35 @@ def test_upsert_basic_only_inserts_new_rows_with_null_metadata(
     assert row.metadata is None  # truly nothing extracted yet
 
 
+def test_clear_projects_wipes_every_row(cache: Cache, tmp_path: Path) -> None:
+    """`Cache.clear_projects()` deletes every row regardless of age.
+
+    Used by `armillary config --init` to start from a clean slate so
+    rows from a previous umbrella selection do not linger in the
+    dashboard until the (default 7-day) prune cutoff catches them.
+    """
+    cache.upsert(
+        [
+            _make_project(path=tmp_path / "alpha"),
+            _make_project(path=tmp_path / "beta"),
+            _make_project(path=tmp_path / "gamma"),
+        ]
+    )
+    assert cache.count() == 3
+
+    deleted = cache.clear_projects()
+
+    assert deleted == 3
+    assert cache.count() == 0
+
+
+def test_clear_projects_on_empty_table_returns_zero(cache: Cache) -> None:
+    """No-op when the table is already empty — must not raise."""
+    assert cache.count() == 0
+    assert cache.clear_projects() == 0
+    assert cache.count() == 0
+
+
 def test_prune_stale_does_not_touch_unrelated_umbrellas(
     cache: Cache, tmp_path: Path
 ) -> None:
