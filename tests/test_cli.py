@@ -746,31 +746,123 @@ def test_config_init_does_not_open_editor_after_writing(
     del real_run
 
 
-def test_config_init_when_file_exists_errors_out(
+def test_config_init_when_file_exists_aborts_without_confirm(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """`--init` against an existing file must NOT silently overwrite or
-    fall through to the editor — it must error out and tell the user
-    how to recover (`armillary config` to edit, or remove the file
-    first to rerun init)."""
+    """`--init` against an existing file shows a confirm prompt. If the
+    user says no (default on bare Enter), the original file is
+    untouched and no backup is created."""
     config_file = tmp_path / "armillary" / "config.yaml"
     config_file.parent.mkdir(parents=True)
     config_file.write_text("umbrellas: []\n")
     monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
     monkeypatch.setenv("EDITOR", "true")
 
-    # Guard rail again: editor must not be called.
+    # Guard rail: editor must not be called.
     def trapped_run(cmd: list[str], **kwargs: Any) -> Any:
         raise AssertionError(f"editor opened on init-with-existing: {cmd}")
 
     monkeypatch.setattr(cli.subprocess, "run", trapped_run)
 
-    result = runner.invoke(app, ["config", "--init", "--blank"])
+    # Bare Enter → default N.
+    result = runner.invoke(app, ["config", "--init", "--blank"], input="\n")
     assert result.exit_code != 0
     combined = _strip_ansi(result.stdout + (result.stderr or ""))
     assert "already exists" in combined.lower()
-    # File contents are unchanged
+    # File contents are unchanged, no backup yet.
     assert config_file.read_text() == "umbrellas: []\n"
+    assert not config_file.with_suffix(".yaml.bak").exists()
+
+
+def test_config_init_overwrites_on_confirm_yes_with_backup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Confirming the prompt with `y` backs up the original and then
+    runs the normal init flow (here: --blank to keep the test fast)."""
+    config_file = tmp_path / "armillary" / "config.yaml"
+    config_file.parent.mkdir(parents=True)
+    original = "# my hand-edited config\numbrellas:\n  - path: /old\n"
+    config_file.write_text(original)
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+
+    result = runner.invoke(
+        app,
+        ["config", "--init", "--blank"],
+        input="y\n",
+    )
+    assert result.exit_code == 0, result.stdout
+
+    # Backup has the original bytes exactly
+    backup = config_file.with_suffix(".yaml.bak")
+    assert backup.exists()
+    assert backup.read_text() == original
+
+    # Main file was rewritten (blank starter, not the hand-edited version)
+    new_content = config_file.read_text()
+    assert new_content != original
+    assert "umbrellas" in new_content
+
+
+def test_config_init_force_skips_prompt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--force` overwrites without asking. Backup still written."""
+    config_file = tmp_path / "armillary" / "config.yaml"
+    config_file.parent.mkdir(parents=True)
+    original = "umbrellas:\n  - path: /old\n"
+    config_file.write_text(original)
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+
+    # No input — if a prompt fired we would hang / EOF to non-zero.
+    result = runner.invoke(
+        app,
+        ["config", "--init", "--blank", "--force"],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert config_file.with_suffix(".yaml.bak").read_text() == original
+    assert config_file.read_text() != original
+
+
+def test_config_init_non_interactive_without_force_errors_out(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--non-interactive` without `--force` keeps the strict old
+    behaviour: never silently overwrite a config in a script context."""
+    config_file = tmp_path / "armillary" / "config.yaml"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("umbrellas: []\n")
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+
+    result = runner.invoke(
+        app,
+        ["config", "--init", "--blank", "--non-interactive"],
+    )
+    assert result.exit_code != 0
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
+    assert "already exists" in combined.lower()
+    assert "--force" in combined
+    # File contents unchanged, no backup
+    assert config_file.read_text() == "umbrellas: []\n"
+    assert not config_file.with_suffix(".yaml.bak").exists()
+
+
+def test_config_init_non_interactive_with_force_overwrites(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--non-interactive --force` is the explicit script opt-in:
+    backs up and overwrites with no prompt."""
+    config_file = tmp_path / "armillary" / "config.yaml"
+    config_file.parent.mkdir(parents=True)
+    original = "umbrellas:\n  - path: /old\n"
+    config_file.write_text(original)
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+
+    result = runner.invoke(
+        app,
+        ["config", "--init", "--blank", "--non-interactive", "--force"],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert config_file.with_suffix(".yaml.bak").read_text() == original
 
 
 def test_config_init_non_interactive_uses_discovered_umbrellas(

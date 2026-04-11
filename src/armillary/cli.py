@@ -654,6 +654,15 @@ def config(
         "--skip-claude-detect",
         help="With --init, skip checking for ~/.claude/.",
     ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help=(
+            "With --init, overwrite an existing config without asking. "
+            "The previous file is backed up to `config.yaml.bak` first."
+        ),
+    ),
 ) -> None:
     """Open the config file in $EDITOR (or print its path / create it).
 
@@ -682,20 +691,68 @@ def config(
         return
 
     if init:
-        # `--init` is a "create" operation: write the file (with whatever
-        # ceremony the flags allow) and exit. Falling through to the
-        # editor below would be surprising — the user just walked through
-        # the picker + setup ceremony, they do not expect nano to pop up
-        # afterwards. Use plain `armillary config` if they want to edit.
+        # `--init` is a "create or regenerate" operation: write the file
+        # (with whatever ceremony the flags allow) and exit. Falling
+        # through to the editor below would be surprising — the user just
+        # walked through the picker + setup ceremony, they do not expect
+        # nano to pop up afterwards. Use plain `armillary config` if
+        # they want to edit.
         if config_path.exists():
+            # Interactive default: confirm before clobbering. `--force`
+            # skips the prompt for scripted setups. `--non-interactive`
+            # without `--force` stays on the old strict behaviour so
+            # cron jobs and CI pipelines never silently nuke a config.
+            if not force:
+                if non_interactive:
+                    typer.secho(
+                        f"{config_path} already exists. Pass --force to "
+                        "overwrite (previous file is backed up to "
+                        "config.yaml.bak), or edit it with "
+                        "`armillary config`.",
+                        fg=typer.colors.YELLOW,
+                        err=True,
+                    )
+                    raise typer.Exit(1)
+                typer.secho(
+                    f"{config_path} already exists.",
+                    fg=typer.colors.YELLOW,
+                )
+                if not typer.confirm(
+                    "  Overwrite it? (a backup will be written to config.yaml.bak)",
+                    default=False,
+                ):
+                    typer.echo(
+                        "Aborted. Edit with `armillary config`, or rerun with --force."
+                    )
+                    raise typer.Exit(1)
+
+            # Backup before clobbering so the user never loses hand-edits.
+            backup_path = config_path.with_suffix(config_path.suffix + ".bak")
+            try:
+                backup_path.write_bytes(config_path.read_bytes())
+            except OSError as exc:
+                typer.secho(
+                    f"Could not write backup {backup_path}: {exc}",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                raise typer.Exit(2) from exc
             typer.secho(
-                f"{config_path} already exists. "
-                "Edit it with `armillary config`, or remove it first to "
-                "rerun init.",
-                fg=typer.colors.YELLOW,
-                err=True,
+                f"  ✓ Backed up previous config to {backup_path}",
+                fg=typer.colors.CYAN,
             )
-            raise typer.Exit(1)
+            # Drop the old cache too — init is a fresh start, and
+            # keeping rows from removed umbrellas would be surprising.
+            try:
+                config_path.unlink()
+            except OSError as exc:
+                typer.secho(
+                    f"Could not remove {config_path}: {exc}",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                raise typer.Exit(2) from exc
+
         _init_config_file(
             config_path,
             non_interactive=non_interactive,
