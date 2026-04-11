@@ -747,7 +747,16 @@ _KHOJ_DB_NAME = "khoj"
 _KHOJ_DB_USER = "postgres"
 _KHOJ_DB_PASSWORD = "postgres"  # noqa: S105 — local dev DB, not a secret
 _KHOJ_DB_HOST = "localhost"
-_KHOJ_DB_PORT = "5432"
+
+# Non-default host port so we do NOT fight with an existing
+# `brew services start postgresql@*` or a system Postgres that owns
+# 5432. Inside the container Postgres still listens on 5432 — the
+# mapping is host:54322 → container:5432. Anyone already running a
+# host Postgres on 5432 can keep it; armillary just picks a dedicated
+# port. `start-khoj` exports POSTGRES_PORT=54322 so the Khoj Django
+# backend connects to the right process.
+_KHOJ_DB_PORT = "54322"
+_KHOJ_CONTAINER_PORT = "5432"
 
 
 def _docker_container_state(name: str) -> str:
@@ -779,13 +788,38 @@ def _docker_container_state(name: str) -> str:
     return "stopped"
 
 
+def _docker_container_host_port(name: str) -> str | None:
+    """Return the host port currently mapped to the container's 5432.
+
+    Uses `docker port <name> 5432/tcp`, which prints lines like
+    `0.0.0.0:54322` — we keep just the port after the final colon.
+    Returns None if the container is missing or has no such mapping.
+    """
+    result = subprocess.run(
+        ["docker", "port", name, f"{_KHOJ_CONTAINER_PORT}/tcp"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    first_line = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
+    if ":" not in first_line:
+        return None
+    return first_line.rsplit(":", 1)[-1]
+
+
 def _provision_khoj_postgres_container() -> None:
     """Create (or reuse) the Khoj Postgres+pgvector docker container.
 
     Idempotent:
-    - Missing  → `docker run -d --name khoj-pg …`
-    - Stopped  → `docker start khoj-pg`
-    - Running  → skip
+    - Missing              → `docker run -d --name khoj-pg …`
+    - Stopped, right port  → `docker start khoj-pg`
+    - Running, right port  → skip
+    - Wrong host port      → `docker rm -f khoj-pg` + recreate
+      (persistent volume `khoj-pg-data` keeps the embeddings across
+      the recreate — no data loss)
+
     Always follows with a wait-for-ready loop and
     `CREATE EXTENSION IF NOT EXISTS vector` so subsequent reruns just
     confirm the DB is healthy.
@@ -797,7 +831,44 @@ def _provision_khoj_postgres_container() -> None:
     )
     typer.echo(f"  Image:     {_KHOJ_PG_IMAGE}")
     typer.echo(f"  Volume:    {_KHOJ_PG_VOLUME} (persists embeddings)")
-    typer.echo(f"  Port:      {_KHOJ_DB_HOST}:{_KHOJ_DB_PORT}")
+    typer.echo(
+        f"  Port:      {_KHOJ_DB_HOST}:{_KHOJ_DB_PORT} "
+        f"→ container:{_KHOJ_CONTAINER_PORT}"
+    )
+
+    # If the container exists, check whether its host-side port
+    # mapping matches what we want today. Historically armillary
+    # used 5432:5432, which collided with brew postgresql@14/@15 and
+    # led to "extension control file postgresql@14 not found" crashes
+    # (wrong process was answering psql). Recreate with the new port
+    # — the named volume survives so embeddings don't.
+    if state != "missing":
+        current_port = _docker_container_host_port(_KHOJ_PG_CONTAINER)
+        if current_port is not None and current_port != _KHOJ_DB_PORT:
+            typer.secho(
+                f"  · Existing container uses host port {current_port}, "
+                f"expected {_KHOJ_DB_PORT}.",
+                fg=typer.colors.YELLOW,
+            )
+            typer.secho(
+                f"  · Recreating `{_KHOJ_PG_CONTAINER}` with the new port "
+                f"(volume `{_KHOJ_PG_VOLUME}` persists — no data loss).",
+                fg=typer.colors.CYAN,
+            )
+            rm = subprocess.run(
+                ["docker", "rm", "-f", _KHOJ_PG_CONTAINER],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if rm.returncode != 0:
+                typer.secho(
+                    f"  ✗ docker rm -f failed: {rm.stderr.strip()}",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                raise typer.Exit(rm.returncode or 2)
+            state = "missing"  # fall through to the "Creating new" branch
 
     if state == "running":
         typer.secho("  ✓ Container already running.", fg=typer.colors.GREEN)
@@ -830,7 +901,7 @@ def _provision_khoj_postgres_container() -> None:
                 "--name",
                 _KHOJ_PG_CONTAINER,
                 "-p",
-                f"{_KHOJ_DB_PORT}:5432",
+                f"{_KHOJ_DB_PORT}:{_KHOJ_CONTAINER_PORT}",
                 "-e",
                 f"POSTGRES_DB={_KHOJ_DB_NAME}",
                 "-e",

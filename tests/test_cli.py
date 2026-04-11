@@ -2168,6 +2168,51 @@ def test_install_khoj_reuses_running_container(
     )
 
 
+def test_install_khoj_recreates_container_when_host_port_is_stale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Real bug: older `install-khoj` runs created `khoj-pg` with
+    host-port 5432, which collided with brew postgresql@14/@15 and
+    silently routed psql traffic to the wrong Postgres (→
+    "extension control file postgresql@14" crash). The new code
+    expects host-port 54322; when it finds a container with a
+    different host-side mapping it `docker rm -f`s and recreates.
+    The named volume persists so embeddings survive."""
+    _set_which(monkeypatch, uv="/fake/bin/uv", docker="/fake/bin/docker")
+    _no_sleep(monkeypatch)
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> _FakeProc:
+        calls.append(list(cmd))
+        # Container exists and is running on the OLD port
+        if cmd[:2] == ["docker", "ps"]:
+            return _FakeProc(returncode=0, stdout="running")
+        # `docker port khoj-pg 5432/tcp` returns the old host mapping
+        if cmd[:2] == ["docker", "port"]:
+            return _FakeProc(returncode=0, stdout="0.0.0.0:5432\n")
+        return _FakeProc(returncode=0)
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(app, ["install-khoj", "-y"])
+    assert result.exit_code == 0, result.stdout
+
+    # The stale container was force-removed …
+    rm_calls = [c for c in calls if c[:3] == ["docker", "rm", "-f"]]
+    assert len(rm_calls) == 1
+    assert rm_calls[0][-1] == "khoj-pg"
+
+    # … and a new one was docker-run with the NEW port mapping.
+    run_calls = [c for c in calls if c[:2] == ["docker", "run"]]
+    assert len(run_calls) == 1
+    assert "54322:5432" in run_calls[0]
+
+    out = _strip_ansi(result.stdout)
+    assert "Recreating" in out or "recreating" in out
+    assert "54322" in out
+
+
 def test_install_khoj_starts_stopped_container(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2386,7 +2431,8 @@ def test_start_khoj_execs_khoj_binary_with_env_vars(
     assert cmd == [str(fake_khoj), "--anonymous-mode"]
     env = kw.get("env") or {}
     assert env.get("POSTGRES_HOST") == "localhost"
-    assert env.get("POSTGRES_PORT") == "5432"
+    # Non-5432 on purpose — dodges brew postgresql@* port conflicts.
+    assert env.get("POSTGRES_PORT") == "54322"
     assert env.get("POSTGRES_DB") == "khoj"
     assert env.get("POSTGRES_USER") == "postgres"
     assert env.get("POSTGRES_PASSWORD") == "postgres"
