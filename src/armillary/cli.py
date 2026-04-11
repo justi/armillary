@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime
@@ -13,8 +14,14 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from armillary import metadata, status
+from armillary import launcher, metadata, status
 from armillary.cache import Cache
+from armillary.config import (
+    Config,
+    ConfigError,
+    default_config_path,
+    load_config,
+)
 from armillary.models import ProjectType, Status, UmbrellaFolder
 from armillary.scanner import scan as scan_umbrellas
 
@@ -69,10 +76,13 @@ def start(
 @app.command()
 def scan(
     umbrella: list[Path] = typer.Option(
-        ...,
+        None,
         "--umbrella",
         "-u",
-        help="Umbrella folder to scan. Repeat for multiple.",
+        help=(
+            "Umbrella folder to scan. Repeat for multiple. "
+            "If omitted, falls back to umbrellas in ~/.config/armillary/config.yaml."
+        ),
     ),
     max_depth: int = typer.Option(
         3,
@@ -80,7 +90,7 @@ def scan(
         "-d",
         min=1,
         max=10,
-        help="Max recursion depth per umbrella.",
+        help="Max recursion depth per umbrella (overridden per-entry by config).",
     ),
     no_cache: bool = typer.Option(
         False,
@@ -104,12 +114,20 @@ def scan(
     introspection that should not touch on-disk state, and `--no-metadata`
     for the fast path that just walks the filesystem.
 
-    Config-file driven umbrella folders come in M5. Until then, pass
-    them explicitly, e.g.:
-
-        armillary scan -u ~/Projects -u ~/ideas
+    Umbrella folders come from `--umbrella` flags first, then fall back
+    to the `umbrellas:` block in `~/.config/armillary/config.yaml`. Run
+    `armillary config` to edit the file.
     """
-    umbrellas = [UmbrellaFolder(path=p, max_depth=max_depth) for p in umbrella]
+    umbrellas = _resolve_umbrellas(umbrella, max_depth)
+    if not umbrellas:
+        typer.secho(
+            "No umbrellas to scan. Pass `-u <path>` or add an `umbrellas:` "
+            "block to your config (`armillary config`).",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2)
+
     projects = scan_umbrellas(umbrellas)
 
     if not no_metadata:
@@ -235,19 +253,179 @@ def search(
 
 @app.command("open")
 def open_project(
-    project: str = typer.Argument(..., help="Project name to open."),
+    project_name: str = typer.Argument(
+        ...,
+        help="Project name (as shown by `armillary list`).",
+    ),
+    target: str = typer.Option(
+        "cursor",
+        "--target",
+        "-t",
+        help="Launcher id from your config (cursor, vscode, claude-code, ...).",
+    ),
 ) -> None:
-    """Open a project in the default launcher. (M5)"""
+    """Open a project in the configured launcher.
+
+    Looks the project up in cache by name (case-insensitive substring),
+    resolves the launcher catalogue from the config, and spawns the
+    target tool with `cwd` set to the project's directory.
+    """
+    cfg = _safe_load_config()
+    if cfg is None:
+        raise typer.Exit(2)
+
+    with Cache() as cache:
+        all_projects = cache.list_projects()
+
+    matches = [p for p in all_projects if project_name.lower() in p.name.lower()]
+    if not matches:
+        typer.secho(
+            f"No project in cache matches '{project_name}'. "
+            "Run `armillary list` to see what is indexed.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2)
+    if len(matches) > 1:
+        names = ", ".join(p.name for p in matches[:5])
+        suffix = "" if len(matches) <= 5 else f" (+{len(matches) - 5} more)"
+        typer.secho(
+            f"'{project_name}' is ambiguous: {names}{suffix}. Be more specific.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    project = matches[0]
+    result = launcher.launch(project, target, launchers=cfg.launchers)
+
+    if not result.ok:
+        typer.secho(result.error or "Launch failed.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(2)
+
     typer.secho(
-        f"open '{project}': not implemented yet (milestone M5)",
-        fg=typer.colors.YELLOW,
+        f"Opened {project.name} in {target}.",
+        fg=typer.colors.GREEN,
     )
 
 
 @app.command()
-def config() -> None:
-    """Open the config file in $EDITOR. (M5)"""
-    typer.secho("config: not implemented yet (milestone M5)", fg=typer.colors.YELLOW)
+def config(
+    show_path: bool = typer.Option(
+        False,
+        "--path",
+        help="Print the config file path and exit.",
+    ),
+    init: bool = typer.Option(
+        False,
+        "--init",
+        help="Create a starter config file at the default path if missing.",
+    ),
+) -> None:
+    """Open the config file in $EDITOR (or print its path / create it).
+
+    With no flags, opens `~/.config/armillary/config.yaml` in the editor
+    pointed to by `$EDITOR` (or `nano` as a sensible fallback). Use
+    `--path` to just print the location, or `--init` to write a starter
+    YAML before editing.
+    """
+    config_path = default_config_path()
+
+    if show_path:
+        typer.echo(config_path)
+        return
+
+    if init and not config_path.exists():
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(_STARTER_CONFIG_YAML, encoding="utf-8")
+        typer.secho(f"Created {config_path}", fg=typer.colors.GREEN)
+
+    if not config_path.exists():
+        typer.secho(
+            f"{config_path} does not exist. "
+            "Run `armillary config --init` to create it.",
+            fg=typer.colors.YELLOW,
+        )
+        raise typer.Exit(1)
+
+    editor = os.environ.get("EDITOR", "nano")
+    if shutil_which(editor) is None:
+        typer.secho(
+            f"$EDITOR ({editor!r}) is not on PATH. "
+            f"Set $EDITOR or edit {config_path} manually.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    result = subprocess.run([editor, str(config_path)], check=False)
+    if result.returncode != 0:
+        raise typer.Exit(result.returncode)
+
+
+_STARTER_CONFIG_YAML = """\
+# armillary config — generated starter file
+# Edit and re-run `armillary scan` (no -u flags needed) or
+# `armillary list` to use these defaults.
+
+umbrellas:
+  - path: ~/Projects
+    label: Projects
+    max_depth: 3
+
+# Custom launchers can be added here. Built-in entries (claude-code,
+# codex, cursor, zed, vscode, terminal, finder) are always available
+# even if you do not list them — they only need overriding if you
+# want to change the command or args.
+#
+# Example:
+#
+# launchers:
+#   nvim:
+#     label: Neovim
+#     command: nvim
+#     args: ["{path}"]
+#     icon: "✏️"
+"""
+
+
+def _resolve_umbrellas(
+    cli_umbrellas: list[Path] | None,
+    cli_max_depth: int,
+) -> list[UmbrellaFolder]:
+    """Combine `--umbrella` flags with the umbrellas declared in config.
+
+    CLI flags take precedence — if the user passes any `-u`, the config
+    is ignored entirely so they can override per-invocation. With no
+    `-u`, every umbrella from the config is used (each entry can carry
+    its own `max_depth`).
+    """
+    if cli_umbrellas:
+        return [UmbrellaFolder(path=p, max_depth=cli_max_depth) for p in cli_umbrellas]
+
+    cfg = _safe_load_config()
+    if cfg is None:
+        return []
+    return [
+        UmbrellaFolder(path=u.path, label=u.label, max_depth=u.max_depth)
+        for u in cfg.umbrellas
+    ]
+
+
+def _safe_load_config() -> Config | None:
+    """Load the config file, printing a friendly error to stderr on failure."""
+    try:
+        return load_config()
+    except ConfigError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        return None
+
+
+def shutil_which(name: str) -> str | None:
+    """Lazy import shim so the CLI module stays cheap to import."""
+    import shutil
+
+    return shutil.which(name)
 
 
 if __name__ == "__main__":
