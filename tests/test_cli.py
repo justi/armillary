@@ -778,6 +778,73 @@ def test_config_init_interactive_picker_accepts_specific_numbers(
     assert text.count("- path:") == 1
 
 
+def test_config_init_picker_blank_input_actually_cancels(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Regression for Codex review on PR #12: pressing Enter on the
+    picker prompt must NOT silently accept all candidates."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    work = fake_home / "Projects"
+    _mkrepo(work / "alpha")
+    _mkrepo(work / "beta")
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    config_file = tmp_path / "armillary" / "config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+    monkeypatch.setenv("EDITOR", "true")
+
+    # Press Enter (empty input) at the picker → cancel.
+    result = runner.invoke(app, ["config", "--init"], input="\n")
+
+    # Cancellation: exit non-zero and the file is NOT written.
+    assert result.exit_code != 0
+    assert not config_file.exists()
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
+    assert "no umbrellas selected" in combined.lower()
+
+
+def test_config_init_yaml_handles_special_characters_in_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Regression for Codex review on PR #12: folder names with YAML
+    metacharacters (`#`, `:`) must round-trip through `_render_config_yaml`
+    and `load_config` without truncation or parse errors."""
+    import yaml as _yaml
+
+    from armillary.config import load_config
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    # A folder name with a `#` would otherwise be parsed as a comment by
+    # plain-scalar YAML.
+    weird = fake_home / "Work #archive"
+    _mkrepo(weird / "alpha")
+    _mkrepo(weird / "beta")
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    config_file = tmp_path / "armillary" / "config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+    monkeypatch.setenv("EDITOR", "true")
+
+    result = runner.invoke(app, ["config", "--init", "--non-interactive"])
+    assert result.exit_code == 0, result.stdout
+
+    raw = config_file.read_text()
+    parsed = _yaml.safe_load(raw)
+    assert parsed["umbrellas"][0]["label"] == "Work #archive"
+    # Path should also survive — `_shorten_home_str` may have replaced
+    # the home prefix with `~`, but the suffix must be intact.
+    assert "Work #archive" in parsed["umbrellas"][0]["path"]
+
+    # And `load_config` parses it without error.
+    cfg = load_config(config_file)
+    assert len(cfg.umbrellas) == 1
+    assert "Work #archive" in str(cfg.umbrellas[0].path)
+
+
 def test_config_init_no_candidates_falls_back_to_blank(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
