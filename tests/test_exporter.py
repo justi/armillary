@@ -359,3 +359,33 @@ def test_install_claude_bridge_skips_when_import_line_present(
     )
     assert appended is False
     assert claude_md.read_text() == original
+
+
+def test_install_claude_bridge_repairs_marker_only_state(tmp_path: Path) -> None:
+    """Codex review P3: if a previous install left the marker comment
+    but the `@import` line was later deleted, the next run must
+    re-add the import instead of no-oping on the marker alone."""
+    from armillary.exporter import install_claude_bridge
+
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude").mkdir(parents=True)
+    claude_md = fake_home / ".claude" / "CLAUDE.md"
+    # User hand-deleted the `@armillary/repos-index.md` line but kept
+    # the marker comment.
+    claude_md.write_text(
+        "# My rules\n\n"
+        "# armillary projects index (managed by `armillary install-claude-bridge`)\n"
+        "# — (user removed the @import here by mistake) —\n"
+    )
+
+    db_path = tmp_path / "cache.db"
+    with Cache(db_path=db_path) as cache:
+        cache.upsert([_project("solo")])
+
+    _, _, appended = install_claude_bridge(
+        home=fake_home,
+        db_path=db_path,
+        with_claude_md=True,
+    )
+    assert appended is True
+    assert "@armillary/repos-index.md" in claude_md.read_text()

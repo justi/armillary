@@ -154,14 +154,17 @@ def install_claude_bridge(
 def _ensure_claude_md_import(claude_md: Path) -> bool:
     """Idempotently append the armillary import block to CLAUDE.md.
 
-    Returns True if we actually wrote to the file, False if it was
-    already wired up. The marker line is what gives us idempotency —
-    we look for it (not just the raw @-import) so that a user who
-    deletes the @-line by accident still gets a clean re-append.
+    Returns True if we actually wrote to the file, False if the import
+    line is already present. The idempotency check is on the literal
+    `@armillary/repos-index.md` line only — NOT on the marker comment.
+    If a user previously installed the block and later deletes the
+    @-line while keeping (or not keeping) the marker, we re-add the
+    import so Claude Code stays wired up. The marker is just a
+    "who manages this block" signpost; it has no load-bearing role.
     """
     claude_md = claude_md.expanduser()
     existing = claude_md.read_text(encoding="utf-8") if claude_md.exists() else ""
-    if _CLAUDE_MD_MARKER in existing or _CLAUDE_MD_IMPORT_LINE in existing:
+    if _CLAUDE_MD_IMPORT_LINE in existing:
         return False
 
     # Ensure single blank-line separation from the existing tail.
