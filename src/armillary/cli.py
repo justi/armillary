@@ -115,6 +115,15 @@ def scan(
             "umbrellas; status will be missing for git projects."
         ),
     ),
+    refresh_bridge: bool = typer.Option(
+        False,
+        "--refresh-bridge",
+        help=(
+            "After the scan, re-write the Claude Code bridge repos-index "
+            "at ~/.claude/armillary/repos-index.md so AI sessions see the "
+            "fresh project table. No-op if ~/.claude/ does not exist."
+        ),
+    ),
 ) -> None:
     """Scan umbrella folders and print the project list as JSON.
 
@@ -128,6 +137,20 @@ def scan(
     to the `umbrellas:` block in `~/.config/armillary/config.yaml`. Run
     `armillary config` to edit the file.
     """
+    # `--no-cache --refresh-bridge` is semantically contradictory: the
+    # bridge writer reads from the SQLite cache, so skipping the cache
+    # write would publish stale (or empty) data while the command
+    # claims it refreshed. Reject the combo up front instead of
+    # silently lying to the user.
+    if no_cache and refresh_bridge:
+        typer.secho(
+            "--refresh-bridge cannot be combined with --no-cache — the "
+            "bridge writer reads from the cache. Drop one flag.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2)
+
     umbrellas = _resolve_umbrellas(umbrella, max_depth)
     if not umbrellas:
         typer.secho(
@@ -176,6 +199,32 @@ def scan(
         with Cache() as cache:
             cache.upsert(projects, write_metadata=not no_metadata)
             cache.prune_stale()
+
+    if refresh_bridge:
+        claude_dir = Path.home() / ".claude"
+        if not claude_dir.is_dir():
+            typer.secho(
+                "--refresh-bridge: ~/.claude/ not found — nothing to refresh.",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+        else:
+            try:
+                bridge_path, written, _ = exporter.install_claude_bridge(
+                    with_claude_md=False,
+                )
+            except OSError as exc:
+                typer.secho(
+                    f"--refresh-bridge: could not write bridge: {exc}",
+                    fg=typer.colors.YELLOW,
+                    err=True,
+                )
+            else:
+                typer.secho(
+                    f"--refresh-bridge: wrote {written} project(s) to {bridge_path}",
+                    fg=typer.colors.CYAN,
+                    err=True,
+                )
 
 
 @app.command("list")
@@ -500,6 +549,58 @@ def export_index(
     typer.secho(f"Wrote {written} project(s) to {output}", fg=typer.colors.GREEN)
 
 
+@app.command("install-claude-bridge")
+def install_claude_bridge(
+    with_claude_md: bool = typer.Option(
+        False,
+        "--with-claude-md",
+        help=(
+            "Also append an `@armillary/repos-index.md` import line to "
+            "~/.claude/CLAUDE.md so every Claude Code session in your home "
+            "automatically loads the project table. Idempotent — safe to "
+            "re-run."
+        ),
+    ),
+) -> None:
+    """Write the repos-index for Claude Code at `~/.claude/armillary/repos-index.md`.
+
+    Claude Code reads `CLAUDE.md` files as implicit context. This command
+    writes a fresh project table to `~/.claude/armillary/repos-index.md`
+    and (with `--with-claude-md`) wires it into the top-level CLAUDE.md
+    via the documented `@file` import syntax. The result: every Claude
+    Code session started from your home already knows what armillary
+    has indexed, no manual copy-paste required.
+    """
+    bridge_path, written, appended = exporter.install_claude_bridge(
+        with_claude_md=with_claude_md,
+    )
+
+    if written == 0:
+        typer.secho(
+            f"Wrote {bridge_path} but the cache is empty. "
+            "Run `armillary scan` first, then re-run this command.",
+            fg=typer.colors.YELLOW,
+        )
+    else:
+        typer.secho(
+            f"Wrote {written} project(s) to {bridge_path}",
+            fg=typer.colors.GREEN,
+        )
+
+    if with_claude_md:
+        claude_md = bridge_path.parent.parent / "CLAUDE.md"
+        if appended:
+            typer.secho(
+                f"  ✓ Appended @armillary/repos-index.md import to {claude_md}",
+                fg=typer.colors.GREEN,
+            )
+        else:
+            typer.secho(
+                f"  · {claude_md} already imports armillary — left untouched.",
+                fg=typer.colors.CYAN,
+            )
+
+
 @app.command()
 def config(
     show_path: bool = typer.Option(
@@ -746,8 +847,14 @@ def _init_config_file(
     # because of a setup ceremony failure (the YAML is already written and
     # the user is recoverable).
 
+    # Track whether the initial scan actually populated the cache for
+    # the umbrellas we just wrote. The Claude bridge step reads the cache
+    # directly, so installing without a fresh scan would publish whatever
+    # stale data the cache already holds — which may not match the new
+    # config. Defaults to False so `--skip-scan` short-circuits too.
+    scan_succeeded = False
     if not skip_scan:
-        _run_initial_scan_and_summary(chosen)
+        scan_succeeded = _run_initial_scan_and_summary(chosen)
 
     if not skip_launcher_check:
         _show_launcher_availability()
@@ -758,7 +865,10 @@ def _init_config_file(
         )
 
     if not skip_claude_detect:
-        _detect_claude_code_and_offer_bridge(non_interactive=non_interactive)
+        _detect_claude_code_and_offer_bridge(
+            non_interactive=non_interactive,
+            scan_succeeded=scan_succeeded,
+        )
 
     typer.echo("")
     typer.secho("✓ Setup complete. Try:", fg=typer.colors.GREEN, bold=True)
@@ -771,7 +881,7 @@ def _init_config_file(
 
 def _run_initial_scan_and_summary(
     chosen: list[bootstrap.UmbrellaCandidate],
-) -> None:
+) -> bool:
     """Walk the chosen umbrellas, extract metadata, persist to cache,
     print a per-status summary.
 
@@ -784,6 +894,11 @@ def _run_initial_scan_and_summary(
 
     Errors are caught and printed as a friendly warning — init must
     not abort if the first scan fails.
+
+    Returns True if the cache now reflects the new umbrella selection,
+    False if the scan was short-circuited by an error. Callers use this
+    to decide whether downstream ceremony steps (Claude bridge install)
+    should trust the cache contents.
     """
     typer.echo("")
     typer.secho("Running initial scan…", fg=typer.colors.CYAN)
@@ -816,7 +931,7 @@ def _run_initial_scan_and_summary(
             fg=typer.colors.YELLOW,
         )
         typer.echo("  You can retry later with `armillary scan`. Continuing setup…")
-        return
+        return False
 
     git_count = sum(1 for p in projects if p.type is ProjectType.GIT)
     idea_count = sum(1 for p in projects if p.type is ProjectType.IDEA)
@@ -839,6 +954,7 @@ def _run_initial_scan_and_summary(
         ]
         parts = [f"{status_counts.get(s.value, 0)} {s.value}" for s in order]
         typer.echo(f"    {', '.join(parts)}")
+    return True
 
 
 def _show_launcher_availability() -> None:
@@ -902,12 +1018,26 @@ def _detect_khoj_and_maybe_enable(
     typer.secho(f"  ✓ Enabled khoj in {config_path.name}.", fg=typer.colors.GREEN)
 
 
-def _detect_claude_code_and_offer_bridge(*, non_interactive: bool) -> None:
-    """If `~/.claude/` exists, offer to install the repos-index bridge.
+def _detect_claude_code_and_offer_bridge(
+    *,
+    non_interactive: bool,
+    scan_succeeded: bool,
+) -> None:
+    """If `~/.claude/` exists, install the repos-index bridge.
 
-    PR #16 only PROMPTS — actual install lives in PR #19. We point the
-    user at `armillary export-index ~/.claude/armillary/repos-index.md`
-    as the manual equivalent in the meantime.
+    In interactive mode, asks whether to install and whether to also
+    wire up `~/.claude/CLAUDE.md` via the `@armillary/repos-index.md`
+    import line. In `--non-interactive` mode, skips the prompt entirely
+    — bridge install is opt-in via `armillary install-claude-bridge`
+    from the terminal.
+
+    When `scan_succeeded=False` (the initial scan was skipped via
+    `--skip-scan` or it failed), we refuse to install the bridge from
+    whatever stale contents the cache currently holds. Publishing a
+    repos-index that does not match the just-written config would
+    preload the wrong projects into Claude Code — subtle and confusing.
+    The user is pointed at `armillary scan` + `armillary install-
+    claude-bridge` as the correct recovery path.
     """
     claude_dir = Path.home() / ".claude"
     if not claude_dir.is_dir():
@@ -915,8 +1045,21 @@ def _detect_claude_code_and_offer_bridge(*, non_interactive: bool) -> None:
 
     typer.echo("")
     typer.secho("🤖 Found Claude Code config.", fg=typer.colors.CYAN)
+
+    if not scan_succeeded:
+        typer.echo(
+            "  Skipping bridge install — the initial scan did not run or "
+            "failed, so the cache may not match this config.\n"
+            "  Run `armillary scan` then "
+            "`armillary install-claude-bridge` to wire up Claude Code."
+        )
+        return
+
     if non_interactive:
-        typer.echo("  --non-interactive: skipping Claude Code bridge prompt.")
+        typer.echo(
+            "  --non-interactive: skipping Claude Code bridge prompt. "
+            "Run `armillary install-claude-bridge` later to install."
+        )
         return
 
     if not typer.confirm(
@@ -925,14 +1068,38 @@ def _detect_claude_code_and_offer_bridge(*, non_interactive: bool) -> None:
     ):
         return
 
+    wire_claude_md = typer.confirm(
+        "  Also append @armillary/repos-index.md to ~/.claude/CLAUDE.md?",
+        default=False,
+    )
+
+    try:
+        bridge_path, written, appended = exporter.install_claude_bridge(
+            with_claude_md=wire_claude_md,
+        )
+    except OSError as exc:
+        typer.secho(
+            f"  ⚠ Could not install bridge: {exc}",
+            fg=typer.colors.YELLOW,
+        )
+        return
+
     typer.secho(
-        "  ⚠ Bridge install lands in PR #19 (not yet shipped).",
-        fg=typer.colors.YELLOW,
+        f"  ✓ Wrote {written} project(s) to {bridge_path}",
+        fg=typer.colors.GREEN,
     )
-    typer.echo(
-        "    For now, run manually:\n"
-        "        armillary export-index ~/.claude/armillary/repos-index.md"
-    )
+    if wire_claude_md:
+        claude_md = bridge_path.parent.parent / "CLAUDE.md"
+        if appended:
+            typer.secho(
+                f"  ✓ Appended import line to {claude_md}",
+                fg=typer.colors.GREEN,
+            )
+        else:
+            typer.secho(
+                f"  · {claude_md} already imports armillary — left untouched.",
+                fg=typer.colors.CYAN,
+            )
 
 
 def _ask_for_candidate_selection(

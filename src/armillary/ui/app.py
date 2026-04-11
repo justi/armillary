@@ -33,6 +33,7 @@ if str(_PKG_ROOT) not in sys.path:
 import streamlit as st  # noqa: E402
 
 from armillary import __version__  # noqa: E402
+from armillary import exporter as exporter_mod  # noqa: E402
 from armillary import launcher as launcher_mod  # noqa: E402
 from armillary import metadata as metadata_mod  # noqa: E402
 from armillary import status as status_mod  # noqa: E402
@@ -200,7 +201,11 @@ def main() -> None:
 
 
 def _render_overview() -> None:
-    st.title("🔭 armillary")
+    title_col, export_col = st.columns([5, 2])
+    with title_col:
+        st.title("🔭 armillary")
+    with export_col:
+        _render_export_for_ai_button()
     _render_header_caption()
 
     cfg = _safe_load_config()
@@ -297,6 +302,41 @@ def _render_header_caption() -> None:
     parts.append(f"cache: `{_shorten_home(default_db_path())}`")
 
     st.caption(" · ".join(parts))
+
+
+def _render_export_for_ai_button() -> None:
+    """Download-current-projects-as-markdown button for AI tools.
+
+    Renders the markdown in-memory (no tempfile, no disk write) and hands
+    it to `st.download_button`. The markdown is exactly what
+    `armillary export-index` would emit, so the same document works in
+    Claude Code, Codex, or any other tool that reads `.md` files.
+
+    On click, Streamlit serves the bytes straight to the browser.
+    Nothing on disk changes — that's what
+    `armillary install-claude-bridge` is for.
+    """
+    try:
+        with Cache() as cache:
+            projects = cache.list_projects()
+    except Exception:  # noqa: BLE001 — never let the header crash the page
+        projects = []
+
+    markdown = exporter_mod.render_repos_index(projects)
+    st.download_button(
+        label="📤 Export for AI",
+        data=markdown,
+        file_name="repos-index.md",
+        mime="text/markdown",
+        help=(
+            "Download a markdown table of every cached project. Drop it "
+            "into a Claude Code session, a Codex prompt, or paste it "
+            "into any AI chat. For automatic integration, run "
+            "`armillary install-claude-bridge` from the terminal."
+        ),
+        use_container_width=True,
+        disabled=not projects,
+    )
 
 
 _SEARCH_STATE_KEY = "armillary_search_state"
