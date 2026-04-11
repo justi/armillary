@@ -229,15 +229,20 @@ def _compute_last_modified(path: Path) -> datetime:
     `path.stat().st_mtime` on a directory only changes when entries are
     added or removed at that level — editing `README.md` in place leaves
     the parent dir mtime untouched. We therefore take the max over the
-    directory itself **and** its immediate children, which catches:
+    directory itself **and** its immediate children (root-level edits
+    to files like README, pyproject.toml, package.json, ...).
 
-    - root-level edits (README, pyproject.toml, package.json, ...);
-    - git activity via `.git/` (commits/checkouts mutate index, HEAD, refs).
+    `.git/` is **deliberately excluded** from the candidates. GitPython
+    operations during metadata extraction (`repo.untracked_files` shells
+    out to `git status`, which refreshes `.git/index`) bump the `.git/`
+    mtime as a side effect — using it as a "last edit" signal would make
+    every freshly-scanned project look like it was just touched. The
+    canonical "when was this repo last edited" answer for git projects
+    is `metadata.last_commit_ts`, which the CLI overrides on top of this
+    field after metadata extraction.
 
-    Edits deeper in the tree are still missed — that is M3's job, where
-    `metadata.py` will use GitPython for git repos and a proper recursive
-    walk for idea folders. For M2 this gives a clearly better signal than
-    the bare directory mtime without paying for a full tree walk.
+    For non-git "idea" folders this is still the only signal we have, so
+    edits to root-level notes still get picked up correctly.
     """
     candidates: list[float] = []
     with contextlib.suppress(PermissionError, OSError):
@@ -245,6 +250,8 @@ def _compute_last_modified(path: Path) -> datetime:
 
     with contextlib.suppress(PermissionError, OSError):
         for entry in path.iterdir():
+            if entry.name == ".git":
+                continue
             with contextlib.suppress(PermissionError, OSError):
                 candidates.append(entry.stat().st_mtime)
 

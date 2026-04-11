@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -208,6 +209,39 @@ def test_last_modified_picks_up_idea_file_edits(tmp_path: Path) -> None:
     project = scan_umbrella(_umbrella(tmp_path))[0]
 
     assert project.last_modified.timestamp() >= future - 0.001
+
+
+def test_last_modified_ignores_dot_git_directory(tmp_path: Path) -> None:
+    """Regression for the .git mtime noise bug.
+
+    GitPython's `repo.untracked_files` shells out to `git status`, which
+    refreshes `.git/index` as a side effect. If `_compute_last_modified`
+    looked at `.git/`'s mtime, every freshly-scanned project would look
+    like it was just touched. The scanner must skip `.git/` so the
+    filesystem signal stays meaningful for `--no-metadata` and
+    fault-tolerance fallback paths.
+    """
+    repo = _mkrepo(tmp_path / "repo")
+    readme = repo / "README.md"
+    # Backdate every visible child of `repo/` to 30 days ago.
+    old = time.time() - 30 * 86400
+    os.utime(readme, (old, old))
+    os.utime(repo, (old, old))
+
+    # Now bump `.git/`'s mtime to "right now" — simulating GitPython's
+    # side effect during metadata extraction.
+    fresh = time.time()
+    os.utime(repo / ".git", (fresh, fresh))
+
+    project = scan_umbrella(_umbrella(tmp_path))[0]
+
+    # The freshly-bumped .git/ must NOT contaminate last_modified —
+    # the scanner should report the old README/dir mtime instead.
+    age_days = (datetime.now() - project.last_modified).days
+    assert age_days >= 28, (
+        f"Expected last_modified to be ~30 days old (ignoring .git/), "
+        f"got {project.last_modified} which is {age_days} days old"
+    )
 
 
 # --- regression: P2 (scan must dedupe overlapping umbrellas) ---------------
