@@ -16,9 +16,26 @@ import pytest
 from typer.testing import CliRunner
 
 from armillary import cli
+from armillary.cache import Cache
 from armillary.cli import app
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_cache(
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Redirect the SQLite cache to a per-test tmp location.
+
+    Without this, every `armillary scan` invocation in test_cli.py would
+    write into the user's real `~/Library/Application Support/armillary/
+    cache.db`. Autouse so individual tests cannot forget.
+    """
+    db_path = tmp_path_factory.mktemp("armi-cache") / "cache.db"
+    monkeypatch.setenv("ARMILLARY_CACHE_DB", str(db_path))
+
 
 # Strips SGR / cursor control sequences from captured CLI output. Click and
 # rich-based typer error rendering wrap option names in colour codes whenever
@@ -334,7 +351,6 @@ def test_start_errors_clearly_when_streamlit_missing(
 @pytest.mark.parametrize(
     "command, milestone",
     [
-        (["list"], "M3"),
         (["search", "needle"], "M4"),
         (["open", "some-project"], "M5"),
         (["config"], "M5"),
@@ -347,3 +363,139 @@ def test_placeholder_commands_exit_zero_with_notice(
     assert result.exit_code == 0
     assert "not implemented" in result.stdout
     assert milestone.lower() in result.stdout.lower()
+
+
+# --- M3.1: scan persists to cache, list reads back -------------------------
+
+
+def test_scan_persists_results_to_cache(tmp_path: Path) -> None:
+    """A successful scan must populate the cache the next `list` reads."""
+    _mkrepo(tmp_path / "alpha")
+    _mkrepo(tmp_path / "beta")
+
+    scan_result = runner.invoke(app, ["scan", "-u", str(tmp_path)])
+    assert scan_result.exit_code == 0, scan_result.stdout
+
+    with Cache() as cache:
+        rows = cache.list_projects()
+    assert {r.name for r in rows} == {"alpha", "beta"}
+
+
+def test_scan_no_cache_skips_persistence(tmp_path: Path) -> None:
+    """`--no-cache` must not write anything to disk."""
+    _mkrepo(tmp_path / "alpha")
+
+    result = runner.invoke(app, ["scan", "-u", str(tmp_path), "--no-cache"])
+    assert result.exit_code == 0, result.stdout
+
+    # The cache file may or may not exist depending on whether previous tests
+    # touched it; what matters is that our project is NOT in there.
+    with Cache() as cache:
+        assert cache.count() == 0
+
+
+def test_scan_json_output_unchanged_when_caching(tmp_path: Path) -> None:
+    """Persisting must not alter what we print to stdout. The cache layer
+    is invisible to anyone piping `armillary scan` into jq."""
+    _mkrepo(tmp_path / "alpha")
+
+    cached = runner.invoke(app, ["scan", "-u", str(tmp_path)])
+    no_cache = runner.invoke(app, ["scan", "-u", str(tmp_path), "--no-cache"])
+
+    assert cached.exit_code == 0 and no_cache.exit_code == 0
+    assert json.loads(cached.stdout) == json.loads(no_cache.stdout)
+
+
+def test_list_empty_cache_prints_hint() -> None:
+    """`armillary list` against an empty cache tells the user to scan first."""
+    result = runner.invoke(app, ["list"])
+    assert result.exit_code == 0
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
+    assert "no projects in cache" in combined.lower()
+    assert "armillary scan" in combined.lower()
+
+
+def test_list_renders_table_after_scan(tmp_path: Path) -> None:
+    _mkrepo(tmp_path / "repo-one")
+    runner.invoke(app, ["scan", "-u", str(tmp_path)])
+
+    result = runner.invoke(app, ["list"])
+    assert result.exit_code == 0
+    out = _strip_ansi(result.stdout)
+    assert "repo-one" in out
+    assert "git" in out
+    # rich table heading reflects the count
+    assert "1 project" in out
+
+
+def test_list_filters_by_type(tmp_path: Path) -> None:
+    _mkrepo(tmp_path / "real-repo")
+    sketch = tmp_path / "sketch-pad"
+    sketch.mkdir()
+    (sketch / "notes.md").write_text("x")
+    runner.invoke(app, ["scan", "-u", str(tmp_path)])
+
+    git_only = _strip_ansi(runner.invoke(app, ["list", "--type", "git"]).stdout)
+    idea_only = _strip_ansi(runner.invoke(app, ["list", "--type", "idea"]).stdout)
+
+    assert "real-repo" in git_only
+    assert "sketch-pad" not in git_only
+    assert "sketch-pad" in idea_only
+    assert "real-repo" not in idea_only
+
+
+def test_list_filters_by_umbrella_substring(tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    play = tmp_path / "play"
+    _mkrepo(work / "alpha")
+    _mkrepo(play / "beta")
+
+    runner.invoke(app, ["scan", "-u", str(work), "-u", str(play)])
+
+    result = runner.invoke(app, ["list", "--umbrella", "work"])
+    out = _strip_ansi(result.stdout)
+    assert "alpha" in out
+    assert "beta" not in out
+
+
+def test_list_rejects_invalid_type() -> None:
+    """The --type filter is enum-validated by Click."""
+    result = runner.invoke(app, ["list", "--type", "blueprint"])
+    assert result.exit_code != 0
+
+
+def test_scan_then_rescan_reflects_removed_projects_after_prune(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If a repo disappears and the cutoff has passed, prune_stale wipes it.
+
+    Simulated by running two scans of different umbrella subsets and then
+    forcing the older row's last_scanned_at into the past.
+    """
+    _mkrepo(tmp_path / "gone")
+    _mkrepo(tmp_path / "kept")
+
+    runner.invoke(app, ["scan", "-u", str(tmp_path)])
+
+    # Backdate "gone" to look like it was last seen 30 days ago, then
+    # remove it from the filesystem and rescan.
+    import time as _time
+
+    long_ago = _time.time() - 30 * 86400
+    with Cache() as cache:
+        cache.conn.execute(
+            "UPDATE projects SET last_scanned_at = ? WHERE name = ?",
+            (long_ago, "gone"),
+        )
+        cache.conn.commit()
+
+    # Re-scan only the survivor; default prune_stale (7-day cutoff) drops
+    # the stale row.
+    import shutil as _shutil
+
+    _shutil.rmtree(tmp_path / "gone")
+    runner.invoke(app, ["scan", "-u", str(tmp_path)])
+
+    with Cache() as cache:
+        names = {p.name for p in cache.list_projects()}
+    assert names == {"kept"}
