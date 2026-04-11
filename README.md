@@ -4,7 +4,7 @@
 >
 > *An armillary sphere is an ancient astronomical instrument: concentric rings modeling the celestial sphere, with a fixed center and orbits turning around it. The metaphor fits: you are the center, your projects orbit around you, and `armillary` lets you see the whole system at once.*
 
-**Status:** Pre-alpha. Scanner and CLI scaffolding work; dashboard, metadata, status, launcher, and search are in progress.
+**Status:** Alpha. The full MVP from PLAN.md §5 is implemented and on `main`: scanner with bootstrap, SQLite cache, metadata extraction with status heuristics, Streamlit dashboard with launcher / search / detail views, ripgrep + optional Khoj search, markdown exporter for AI tools. Daily-driver-ready on macOS / Linux.
 
 ## What is this?
 
@@ -69,43 +69,107 @@ Not yet published to PyPI. To run from source:
 ```bash
 git clone git@github.com:justi/armillary.git
 cd armillary
-uv sync                # creates .venv and installs runtime deps
+uv sync                       # creates .venv and installs runtime deps
 .venv/bin/armillary --help
+```
+
+For day-to-day use, install globally with uv so the `armillary`
+command is on your PATH everywhere:
+
+```bash
+uv tool install --editable .
 ```
 
 ## Quick start
 
-The auto-discovery scanner is the first piece that works end-to-end.
-Point it at one or more umbrella folders and it prints every project
-it finds as JSON:
-
 ```bash
-# scan a single umbrella folder
-.venv/bin/armillary scan -u ~/Projects
+# 1. First-run bootstrap: scans ~/ for umbrella folder candidates
+#    (folders with multiple git repos or conventional names like
+#    `Projects`, `repos`, `code`, ...) and lets you pick which to use.
+armillary config --init
 
-# scan several umbrellas at once
-.venv/bin/armillary scan -u ~/Projects -u ~/ideas
+# 2. Index the projects across every umbrella from your config.
+#    Walks the filesystem, extracts git metadata + README + status.
+armillary scan
 
-# limit recursion depth (default 3, allowed 1..10)
-.venv/bin/armillary scan -u ~/Projects --max-depth 5
+# 3. Browse the index — terminal table or browser dashboard.
+armillary list                 # rich table, sortable
+armillary list --status ACTIVE # only fresh projects
+armillary list --type idea     # only loose notes folders
 
-# pipe to a file
-.venv/bin/armillary scan -u ~/Projects > projects.json
+armillary start                # opens http://localhost:8501
 ```
 
-Each entry contains the resolved path, name, type (`git` or `idea`),
-which umbrella found it, and a best-effort `last_modified` timestamp.
+## What works today
 
-You can also launch the (currently placeholder) dashboard:
+| Command | What it does |
+|---|---|
+| `armillary config --init` | Scans `~/` for umbrella candidates, interactive picker, writes `~/.config/armillary/config.yaml` |
+| `armillary config` | Edits existing config in `$EDITOR` |
+| `armillary scan` | Walks umbrellas, extracts metadata (branch, last commit, dirty count, ahead/behind, size, file count, README excerpt, ADRs, notes), computes status, persists to SQLite cache |
+| `armillary list` | Rich terminal table from cache, filters: `--status`, `--type`, `--umbrella` |
+| `armillary search "<query>"` | ripgrep across every cached project, with `--project` substring filter, optional `--khoj` semantic backend |
+| `armillary open <name>` | Launches a project in a configured editor (`--target cursor`/`vscode`/`zed`/`finder`/`terminal`/...) with `cwd` set |
+| `armillary start` | Streamlit dashboard reading from cache: filters, search bar, per-project detail page, launcher dropdown, recent commits, README, notes, ADRs |
+| `armillary export-index` | Markdown table of all cached projects for ingestion by Claude Code / Codex / any AI tool |
 
-```bash
-.venv/bin/armillary start
-# → opens http://localhost:8501
-# → telemetry is disabled by default per the privacy commitment above
+The status heuristic labels each project as **ACTIVE / PAUSED /
+DORMANT / IDEA / IN_PROGRESS** based on commit recency, dirty file
+count, and `TODO.md` checkboxes.
+
+## What is **not** implemented yet
+
+These are in PLAN.md but deferred until needed:
+
+- **Auto-write into Claude Code memory** (PLAN.md §6 v2 — M7b). The
+  `armillary export-index` command produces the markdown file; the
+  remaining piece is wiring it into `~/.claude/CLAUDE.md` automatically.
+- **Tags and groups** for user-defined project metadata layered on
+  auto-discovery (PLAN.md §6 v2)
+- **In-dashboard per-project notes** like "frozen until Q3" (§6 v2)
+- **`adr-tools` format support** that parses ADR structures into a
+  timeline rather than just listing the files (§6 v2)
+- **`SessionStart` hook** that auto-launches the dashboard with
+  Claude Code (§6 v2)
+- All §7 v3 ideas: graph view of project relationships, link
+  detection, weekly changelog aggregator, AI-generated 2-sentence
+  descriptions, notifications, multi-machine sync
+
+The plan itself (`PLAN.md`) is gitignored — kept private as a
+working document. The scope here is the public commitment.
+
+## Configuration
+
+`armillary config --init` creates `~/.config/armillary/config.yaml`
+populated with whatever umbrellas it found under `~/`. The file looks
+like:
+
+```yaml
+umbrellas:
+  - path: ~/Projects
+    label: Projects
+    max_depth: 3
+  - path: ~/projects_prod
+    label: projects_prod
+    max_depth: 3
+
+# Optional: override a built-in launcher or add your own.
+# Built-ins (claude-code, codex, cursor, zed, vscode, terminal, finder)
+# are always available.
+#
+# launchers:
+#   nvim:
+#     label: Neovim
+#     command: nvim
+#     args: ["{path}"]
+#     icon: "✏️"
+
+# Optional: opt in to Khoj semantic search.
+#
+# khoj:
+#   enabled: true
+#   api_url: http://localhost:42110
 ```
-
-The remaining commands (`list`, `search`, `open`, `config`) are stubs
-that print "not implemented yet" and the milestone they belong to.
 
 ## Development
 
@@ -113,24 +177,35 @@ that print "not implemented yet" and the milestone they belong to.
 # install runtime + dev dependencies (pytest, ruff)
 uv sync --extra dev
 
-# run the test suite
+# run the test suite (225 tests covering scanner / metadata / status /
+# cache / config / launcher / search / exporter / bootstrap / CLI)
 .venv/bin/python -m pytest
 
-# run a single file with verbose output
+# lint + format
+.venv/bin/ruff check .
+.venv/bin/ruff format --check .
+
+# focused test runs
 .venv/bin/python -m pytest tests/test_scanner.py -v
 ```
 
+CI runs `pytest` + `ruff check` + `ruff format --check` on every PR
+and push to `main` against Python 3.11 and 3.12.
+
 ## Roadmap
 
-- ✓ Project scaffolding (CLI, package layout, dashboard stub)
-- ✓ Auto-discovery scanner (`armillary scan`, JSON output)
-- → Project hardening (CI workflow, ruff config)
-- ◌ SQLite cache + `armillary list` from cache
-- ◌ Metadata extraction (git info, README, ADRs) and status heuristics
-- ◌ Streamlit dashboard reading from cache
-- ◌ Configuration file and launcher integration
-- ◌ Khoj integration for semantic search *(optional)*
-- ◌ `repos-index.md` exporter for AI tools
+- ✓ Project scaffolding — CLI, package layout, dashboard stub *(M1)*
+- ✓ Auto-discovery scanner *(M2)*
+- ✓ Project hardening — CI workflow, ruff config *(M2.5)*
+- ✓ SQLite cache + `armillary list` *(M3.1)*
+- ✓ Metadata extraction (git info, README, ADRs, notes, ahead/behind, size, file count) and status heuristics *(M3.2)*
+- ✓ Streamlit dashboard reading from cache, with search bar, launcher dropdown, recent commits, notes section *(M4)*
+- ✓ Configuration file (`armillary config`) and launcher integration (`armillary open`) *(M5)*
+- ✓ Search backends — ripgrep default, optional Khoj with automatic fallback *(M6)*
+- ✓ `repos-index.md` exporter for AI tools *(M7a)*
+- ✓ Interactive bootstrap — `armillary config --init` scans `~/` and prompts for umbrellas
+- ◌ Auto-write into Claude Code memory (`@armillary/repos-index.md` import) *(M7b — deferred)*
+- ◌ Tags and groups, in-dashboard notes, ADR timeline parsing *(v2 — deferred)*
 
 ## License
 
@@ -138,6 +213,13 @@ MIT (see [LICENSE](LICENSE))
 
 ## Contributing
 
-The project is in early development and not yet open for external
-contributions. Once the dashboard, cache, and launcher milestones are
-in place, contribution guidelines will be added here.
+The MVP is in place but the project is still single-author and
+shaped by daily-use feedback. External contributions are not yet
+solicited; contribution guidelines and an issue triage policy will
+land once a couple of people other than the author are using it
+regularly.
+
+In the meantime, bug reports through GitHub Issues are welcome —
+especially "this scanner heuristic gets my filesystem layout wrong"
+or "the dashboard does the wrong thing when X". Reproductions
+against a fake `tmp_path` tree are most useful.
