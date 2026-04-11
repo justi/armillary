@@ -1,0 +1,99 @@
+# Private development plan — not for public repo
+PLAN.md
+notes/
+.notes/
+TODO-private.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+.python-version
+
+# Testing and coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# Type checkers
+.mypy_cache/
+.pytype/
+.pyre/
+.ruff_cache/
+
+# Tooling / lock files
+uv.lock
+poetry.lock
+
+# Local workspace data (generated at runtime, per-user)
+*.db
+*.sqlite
+*.sqlite3
+cache/
+.cache/
+
+# Local workspace config (user-specific, runtime-generated)
+.config/
+config.local.yaml
+config.yaml
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Environment variables / secrets
+.env
+.env.local
+.env.*.local
+secrets.yaml
+secrets.json
+
+# Streamlit local state
+.streamlit/secrets.toml
