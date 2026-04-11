@@ -1364,6 +1364,27 @@ def _render_settings_khoj(cfg: Config) -> None:
         "that calls a local Khoj instance instead of ripgrep."
     )
 
+    # When Khoj is not yet set up, surface the install path up front so
+    # users don't have to go hunting for "how do I turn this on". The
+    # block is expanded by default in the disabled state and collapses
+    # once the user flips the checkbox — still one click away.
+    with st.expander(
+        "📦 How to install Khoj",
+        expanded=not cfg.khoj.enabled,
+    ):
+        st.markdown(
+            "Khoj is a separate project with heavy ML dependencies "
+            "(torch, transformers, ~1 GB). armillary does **not** bundle "
+            "it — but you can install it in one command:"
+        )
+        st.code("armillary install-khoj", language="bash")
+        st.markdown("Then start the local Khoj server in a separate terminal:")
+        st.code("khoj --anonymous-mode", language="bash")
+        st.markdown(
+            "Once the server responds at `http://localhost:42110`, "
+            "flip **Enable Khoj** below and hit **💾 Save changes**."
+        )
+
     enabled = st.checkbox(
         "Enable Khoj",
         value=cfg.khoj.enabled,

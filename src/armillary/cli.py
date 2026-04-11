@@ -601,6 +601,79 @@ def install_claude_bridge(
             )
 
 
+@app.command("install-khoj")
+def install_khoj(
+    non_interactive: bool = typer.Option(
+        False,
+        "--non-interactive",
+        "-y",
+        help="Skip the confirmation prompt and install straight away.",
+    ),
+) -> None:
+    """Install Khoj into the current Python environment.
+
+    Runs `pip install khoj` as a subprocess so the user gets a single
+    clickable path to semantic search instead of "go read the Khoj
+    docs". Khoj is a heavy dependency (~1 GB with the default ML
+    models + torch), so the command confirms once before pulling
+    anything down.
+
+    On success, prints the next steps: start the Khoj server in a
+    separate terminal, then rerun `armillary config --init --force`
+    (or flip the toggle in the dashboard Settings → Khoj tab) so
+    armillary picks it up.
+    """
+    typer.secho(
+        "This will run `pip install khoj` in the current Python environment.",
+        fg=typer.colors.CYAN,
+    )
+    typer.echo(
+        "  Khoj pulls ~1 GB of ML dependencies (torch, transformers, …). "
+        "This can take several minutes."
+    )
+    typer.echo(f"  Python:    {sys.executable}")
+    typer.echo(f"  pip cmd:   {sys.executable} -m pip install khoj")
+
+    if not non_interactive and not typer.confirm(
+        "\n  Proceed?",
+        default=False,
+    ):
+        typer.echo("Aborted.")
+        raise typer.Exit(1)
+
+    typer.secho("\nInstalling Khoj…", fg=typer.colors.CYAN)
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "khoj"],
+        check=False,
+    )
+    if result.returncode != 0:
+        typer.secho(
+            f"\npip install khoj failed with exit code {result.returncode}.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        typer.echo(
+            "  Common causes: network error, incompatible Python "
+            "version, conflicting dependencies in the current venv."
+        )
+        raise typer.Exit(result.returncode)
+
+    typer.secho("\n✓ Khoj installed.", fg=typer.colors.GREEN, bold=True)
+    typer.echo("")
+    typer.echo("Next steps:")
+    typer.echo("  1. Start the Khoj server in a separate terminal:")
+    typer.secho("       khoj --anonymous-mode", fg=typer.colors.CYAN)
+    typer.echo("  2. Wire it into armillary:")
+    typer.secho(
+        "       armillary config --init --force",
+        fg=typer.colors.CYAN,
+    )
+    typer.echo(
+        "     (or enable via dashboard Settings → Khoj tab if you "
+        "already have a config)"
+    )
+
+
 @app.command()
 def config(
     show_path: bool = typer.Option(
@@ -1046,25 +1119,35 @@ def _detect_khoj_and_maybe_enable(
     *,
     non_interactive: bool,
 ) -> None:
-    """Probe localhost Khoj. If reachable, auto-enable it in the config.
+    """Probe localhost Khoj. Auto-enable if reachable, otherwise print
+    install instructions so the user can get there in one command.
 
     Policy: if the user has Khoj running at localhost:42110 at init
-    time, they almost certainly want it. Asking `[y/N]` with a default
-    of N was user-hostile — users who pressed Enter ended up with
-    semantic search silently disabled and then wondered why the
-    dashboard said "Khoj disabled in config". Auto-enable is the
-    default; the Settings page (PR #18) is the explicit opt-out.
-
-    Silent on any probe failure (timeout, connection refused, non-200,
-    etc.) — Khoj is optional, most users will not have it running.
+    time, they almost certainly want it — auto-enable, no prompt. If
+    Khoj is NOT reachable we do NOT silently skip: print an explicit
+    "how to install" block pointing at `armillary install-khoj`, so
+    the feature is discoverable without reading the docs. The Settings
+    page (PR #18) is still the explicit opt-out once Khoj is enabled.
     """
     try:
         with urlopen(_KHOJ_HEALTH_URL, timeout=_KHOJ_HEALTH_TIMEOUT) as response:
             status_code = getattr(response, "status", None) or response.getcode()
-            if status_code != 200:
-                return
+            reachable = status_code == 200
     except (HTTPError, URLError, TimeoutError, OSError):
-        return  # Khoj not running, silent
+        reachable = False
+
+    if not reachable:
+        typer.echo("")
+        typer.secho(
+            "🧠 Khoj not detected at localhost:42110.",
+            fg=typer.colors.CYAN,
+        )
+        typer.echo("   Semantic search is optional. To install it in one go:")
+        typer.secho("     armillary install-khoj", fg=typer.colors.CYAN)
+        typer.echo("   Then start the server in another terminal:")
+        typer.secho("     khoj --anonymous-mode", fg=typer.colors.CYAN)
+        typer.echo("   …and rerun `armillary config --init --force` to pick it up.")
+        return
 
     typer.echo("")
     typer.secho("🧠 Detected Khoj at localhost:42110.", fg=typer.colors.CYAN)

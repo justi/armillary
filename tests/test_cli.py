@@ -1236,12 +1236,14 @@ def test_config_init_khoj_auto_enables_in_non_interactive_too(
     assert parsed.get("khoj", {}).get("enabled") is True
 
 
-def test_config_init_khoj_detection_silent_when_unreachable(
+def test_config_init_khoj_detection_prints_install_hint_when_unreachable(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Setup ceremony step 4 negative: when Khoj health probe fails
-    (autouse fixture default), no Khoj prompt appears in stdout and
-    the config does NOT have khoj.enabled set."""
+    """Setup ceremony step 4 negative: when Khoj health probe fails,
+    init now prints an explicit "how to install" block pointing at
+    `armillary install-khoj`. Silent-skip was user-hostile — people
+    could not discover semantic search existed. The config still does
+    NOT enable khoj (we never enable a service we could not reach)."""
     import yaml as _yaml
 
     fake_home = tmp_path / "home"
@@ -1266,6 +1268,62 @@ def test_config_init_khoj_detection_silent_when_unreachable(
     assert result.exit_code == 0, result.stdout
 
     out = _strip_ansi(result.stdout)
+    # "Detected Khoj" never appears because we did NOT detect it.
+    assert "Detected Khoj" not in out
+    # But the install hint IS visible.
+    assert "Khoj not detected" in out
+    assert "install-khoj" in out
+    assert "khoj --anonymous-mode" in out
+    parsed = _yaml.safe_load(config_file.read_text())
+    assert parsed.get("khoj") is None or not parsed["khoj"].get("enabled")
+
+
+def test_config_init_khoj_non_200_response_is_treated_as_unreachable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """If the Khoj endpoint responds but with a non-2xx status (e.g.
+    503 from a service that's still warming up), auto-enable must NOT
+    fire. Only a clean 200 counts as "this user has Khoj"."""
+    import yaml as _yaml
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    _mkrepo(fake_home / "Projects" / "thing")
+
+    def _fake_urlopen_503(*args: Any, **kwargs: Any) -> Any:
+        class FakeResponse:
+            status = 503
+
+            def getcode(self) -> int:
+                return 503
+
+            def __enter__(self) -> FakeResponse:
+                return self
+
+            def __exit__(self, *exc: Any) -> None:
+                return None
+
+        return FakeResponse()
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    monkeypatch.setattr(cli, "urlopen", _fake_urlopen_503)
+
+    config_file = tmp_path / "armillary" / "config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+
+    result = runner.invoke(
+        app,
+        [
+            "config",
+            "--init",
+            "--non-interactive",
+            "--skip-claude-detect",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    out = _strip_ansi(result.stdout)
+    # No "Detected Khoj" line — a 503 is not a detection.
     assert "Detected Khoj" not in out
     parsed = _yaml.safe_load(config_file.read_text())
     assert parsed.get("khoj") is None or not parsed["khoj"].get("enabled")
@@ -1982,6 +2040,108 @@ def test_config_init_non_interactive_skips_bridge_prompt(
     assert not (fake_home / ".claude" / "CLAUDE.md").exists()
     out = _strip_ansi(result.stdout)
     assert "install-claude-bridge" in out
+
+
+# --- armillary install-khoj (follow-up to PR #19) -------------------------
+
+
+def test_install_khoj_runs_pip_install_on_confirm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`armillary install-khoj` spawns `python -m pip install khoj` as a
+    subprocess after the user confirms. Stubs `subprocess.run` so
+    nothing is actually downloaded."""
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        captured["cmd"] = cmd
+
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(app, ["install-khoj"], input="y\n")
+    assert result.exit_code == 0, result.stdout
+
+    assert captured["cmd"][-3:] == ["-m", "pip", "install"] or captured["cmd"][-4:] == [
+        "-m",
+        "pip",
+        "install",
+        "khoj",
+    ]
+    # Next-step instructions are printed
+    out = _strip_ansi(result.stdout)
+    assert "khoj --anonymous-mode" in out
+    assert "armillary config --init --force" in out
+
+
+def test_install_khoj_aborts_without_confirm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bare Enter (default N) aborts without running pip install."""
+    called = False
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        nonlocal called
+        called = True
+
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(app, ["install-khoj"], input="\n")
+    assert result.exit_code != 0
+    assert called is False
+    out = _strip_ansi(result.stdout)
+    assert "Aborted" in out
+
+
+def test_install_khoj_non_interactive_skips_confirm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--non-interactive` / `-y` runs pip install with no prompt."""
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        captured["cmd"] = cmd
+
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(app, ["install-khoj", "-y"])
+    assert result.exit_code == 0, result.stdout
+    assert captured["cmd"][-1] == "khoj"
+
+
+def test_install_khoj_surfaces_pip_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If pip exits non-zero, the CLI exits with the same code and
+    prints a helpful "common causes" line instead of a silent crash."""
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        class Result:
+            returncode = 1
+
+        return Result()
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(app, ["install-khoj", "-y"])
+    assert result.exit_code == 1
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
+    assert "pip install khoj failed" in combined
+    assert "Common causes" in combined
 
 
 def test_search_khoj_disabled_errors_clearly(
