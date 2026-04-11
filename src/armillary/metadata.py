@@ -121,17 +121,24 @@ def _fill_git_fields(repo_path: Path, md: ProjectMetadata) -> None:
     md.last_commit_ts = datetime.fromtimestamp(head.committed_date)
     md.last_commit_author = head.author.name
 
-    # Dirty count: changes-vs-index plus untracked files. Cheap because
-    # it shells out to `git status` once.
+    # Dirty count: anything that would show up under `git status`.
+    # `index.diff(None)` covers unstaged working-tree edits, but misses
+    # files that are staged-but-uncommitted — we need `index.diff("HEAD")`
+    # for those, otherwise `git add some-file && armillary scan` would
+    # incorrectly look like a clean repo.
     try:
-        modified = len(repo.index.diff(None))
+        unstaged = len(repo.index.diff(None))
     except Exception:  # noqa: BLE001
-        modified = 0
+        unstaged = 0
+    try:
+        staged = len(repo.index.diff("HEAD"))
+    except Exception:  # noqa: BLE001
+        staged = 0
     try:
         untracked = len(repo.untracked_files)
     except Exception:  # noqa: BLE001
         untracked = 0
-    md.dirty_count = modified + untracked
+    md.dirty_count = unstaged + staged + untracked
 
 
 # --- README ---------------------------------------------------------------

@@ -124,7 +124,7 @@ def scan(
 
     if not no_cache:
         with Cache() as cache:
-            cache.upsert(projects)
+            cache.upsert(projects, write_metadata=not no_metadata)
             cache.prune_stale()
 
 

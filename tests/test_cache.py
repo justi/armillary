@@ -305,6 +305,66 @@ def test_prune_stale_is_a_noop_when_everything_is_fresh(
     assert cache.count() == 1
 
 
+def test_upsert_basic_only_preserves_existing_metadata(
+    cache: Cache, tmp_path: Path
+) -> None:
+    """Regression for Codex P2: a `--no-metadata` rescan must not wipe
+    cached status / branch / dirty_count from an earlier full scan.
+    """
+    from datetime import datetime as _dt
+
+    from armillary.models import ProjectMetadata, Status
+
+    p = tmp_path / "thing"
+    p.mkdir()
+    project = _make_project(path=p, type=ProjectType.GIT)
+    project.metadata = ProjectMetadata(
+        branch="main",
+        last_commit_sha="abc1234",
+        last_commit_ts=_dt(2025, 6, 1),
+        last_commit_author="Someone",
+        dirty_count=5,
+        readme_excerpt="hello",
+        status=Status.PAUSED,
+    )
+
+    # First: full upsert with metadata
+    cache.upsert([project])
+    [row] = cache.list_projects()
+    assert row.metadata is not None
+    assert row.metadata.status is Status.PAUSED
+    assert row.metadata.branch == "main"
+    assert row.metadata.dirty_count == 5
+
+    # Now: simulate `armillary scan --no-metadata` — same path, but the
+    # in-memory project has no metadata attached.
+    bare_project = _make_project(path=p, type=ProjectType.GIT)
+    assert bare_project.metadata is None
+
+    cache.upsert([bare_project], write_metadata=False)
+
+    [row] = cache.list_projects()
+    assert row.metadata is not None, "metadata must survive a basic-only upsert"
+    assert row.metadata.status is Status.PAUSED
+    assert row.metadata.branch == "main"
+    assert row.metadata.dirty_count == 5
+    assert row.metadata.readme_excerpt == "hello"
+
+
+def test_upsert_basic_only_inserts_new_rows_with_null_metadata(
+    cache: Cache, tmp_path: Path
+) -> None:
+    """A first-ever scan with `--no-metadata` must still insert the row,
+    just with metadata columns left NULL for the next full scan to fill.
+    """
+    project = _make_project(path=tmp_path / "fresh", type=ProjectType.GIT)
+    cache.upsert([project], write_metadata=False)
+
+    [row] = cache.list_projects()
+    assert row.name == "fresh"
+    assert row.metadata is None  # truly nothing extracted yet
+
+
 def test_prune_stale_does_not_touch_unrelated_umbrellas(
     cache: Cache, tmp_path: Path
 ) -> None:

@@ -160,18 +160,37 @@ class Cache:
 
     # ----- mutations --------------------------------------------------------
 
-    def upsert(self, projects: Iterable[Project]) -> int:
-        """Insert or update a batch of projects, including metadata.
+    def upsert(
+        self,
+        projects: Iterable[Project],
+        *,
+        write_metadata: bool = True,
+    ) -> int:
+        """Insert or update a batch of projects.
 
         `last_scanned_at` is stamped with `time.time()` so a later
         `prune_stale()` call can remove rows that no scan has touched in
-        a while. If a project's `metadata` is `None`, the metadata columns
-        on the row are reset to `NULL` — the scanner is the source of
-        truth and a `None` metadata means "we tried and got nothing", not
-        "preserve whatever was there before".
+        a while.
+
+        With `write_metadata=True` (the default) every metadata column
+        is overwritten from each project's `ProjectMetadata`. A `None`
+        metadata in this mode means "we tried extraction and got nothing"
+        and resets the columns to `NULL`.
+
+        With `write_metadata=False` (used by `armillary scan
+        --no-metadata`) the basic scanner columns are refreshed but the
+        metadata columns are left untouched on existing rows. New rows
+        still insert with NULL metadata so the next full scan can
+        populate them. This way a fast rescan does not wipe earlier
+        extraction work.
 
         Returns the number of rows written.
         """
+        if write_metadata:
+            return self._upsert_with_metadata(projects)
+        return self._upsert_basic_only(projects)
+
+    def _upsert_with_metadata(self, projects: Iterable[Project]) -> int:
         now = time.time()
         rows = [_project_to_row(p, now=now) for p in projects]
         self.conn.executemany(
@@ -195,6 +214,38 @@ class Cache:
                 last_commit_author = excluded.last_commit_author,
                 dirty_count        = excluded.dirty_count,
                 metadata_json      = excluded.metadata_json
+            """,
+            rows,
+        )
+        self.conn.commit()
+        return len(rows)
+
+    def _upsert_basic_only(self, projects: Iterable[Project]) -> int:
+        """Refresh just the scanner columns; preserve existing metadata."""
+        now = time.time()
+        rows = [
+            (
+                str(p.path),
+                p.name,
+                p.type.value,
+                str(p.umbrella),
+                p.last_modified.timestamp(),
+                now,
+            )
+            for p in projects
+        ]
+        self.conn.executemany(
+            """
+            INSERT INTO projects (
+                path, name, type, umbrella, last_modified_ts, last_scanned_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(path) DO UPDATE SET
+                name             = excluded.name,
+                type             = excluded.type,
+                umbrella         = excluded.umbrella,
+                last_modified_ts = excluded.last_modified_ts,
+                last_scanned_at  = excluded.last_scanned_at
             """,
             rows,
         )

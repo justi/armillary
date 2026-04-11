@@ -102,6 +102,46 @@ def test_extract_counts_dirty_modified_and_untracked(tmp_path: Path) -> None:
     assert md.dirty_count == 2  # 1 modified + 1 untracked
 
 
+def test_extract_dirty_count_includes_staged_files(tmp_path: Path) -> None:
+    """Regression for Codex P2: `git add` should count as dirty.
+
+    Without the staged-vs-HEAD diff, a repo where someone has staged
+    files but not yet committed shows dirty_count=0 and the status
+    heuristic mis-classifies it. PLAN.md §5 says PAUSED triggers on
+    "dirty files", which staged work obviously is.
+    """
+    repo = _mk_real_git_repo(tmp_path / "staged")
+    # Modify a tracked file and stage it (no commit).
+    (repo / "README.md").write_text("# staged change")
+    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+
+    md = metadata.extract(_git_project(repo))
+
+    assert md.dirty_count == 1
+
+
+def test_extract_dirty_count_combines_staged_unstaged_and_untracked(
+    tmp_path: Path,
+) -> None:
+    repo = _mk_real_git_repo(
+        tmp_path / "all-three",
+        extra_files={"tracked.txt": "original"},
+    )
+
+    # 1 staged: modify tracked.txt and `git add`
+    (repo / "tracked.txt").write_text("staged change")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+
+    # 1 unstaged: now modify README.md without staging
+    (repo / "README.md").write_text("# unstaged")
+
+    # 1 untracked
+    (repo / "new.txt").write_text("untracked")
+
+    md = metadata.extract(_git_project(repo))
+    assert md.dirty_count == 3
+
+
 def test_extract_handles_detached_head(tmp_path: Path) -> None:
     """Detached HEAD must not raise; branch falls back to None."""
     repo = _mk_real_git_repo(tmp_path / "detached")
