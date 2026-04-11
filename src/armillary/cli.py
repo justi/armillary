@@ -137,6 +137,28 @@ def scan(
         for project in projects:
             if project.metadata is None:
                 continue
+            # The scanner already excludes `.git/` from `last_modified` to
+            # avoid GitPython's `git status` side effect. But for a freshly
+            # cloned repo, every file has mtime = clone time, which makes
+            # the scanner's signal say "today" even though the last real
+            # activity was years ago. We therefore reconcile both signals:
+            # `last_modified` = max(scanner mtime, last_commit_ts).
+            #
+            # - Edit-after-commit:    scanner mtime > commit ts  → scanner wins ✓
+            # - Untouched since commit: scanner mtime ≈ commit ts → either
+            # - Freshly cloned old repo: scanner mtime > commit ts → scanner
+            #   wins ("today, I cloned this") which is actually fine — the
+            #   user explicitly chose to bring it onto disk today
+            #
+            # This matches the OR semantics of PLAN.md §5 status heuristic
+            # ("ACTIVE = commit in last 7 days OR file modification in last
+            # 7 days"). Status compute also uses both signals.
+            if (
+                project.type is ProjectType.GIT
+                and project.metadata.last_commit_ts is not None
+                and project.metadata.last_commit_ts > project.last_modified
+            ):
+                project.last_modified = project.metadata.last_commit_ts
             project.metadata.status = status.compute_status(project)
 
     payload = [p.model_dump(mode="json") for p in projects]

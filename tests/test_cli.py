@@ -23,18 +23,25 @@ runner = CliRunner()
 
 
 @pytest.fixture(autouse=True)
-def _isolate_cache(
+def _isolate_state(
     tmp_path_factory: pytest.TempPathFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Redirect the SQLite cache to a per-test tmp location.
+    """Redirect both the SQLite cache and the config file to per-test tmp.
 
     Without this, every `armillary scan` invocation in test_cli.py would
     write into the user's real `~/Library/Application Support/armillary/
-    cache.db`. Autouse so individual tests cannot forget.
+    cache.db` AND read umbrellas from the user's real config — which
+    means tests like `test_scan_requires_umbrella_flag` (which expects
+    a friendly error when there are no umbrellas to resolve) would
+    accidentally succeed because the developer's local config has
+    umbrellas declared. Autouse so individual tests cannot forget.
     """
-    db_path = tmp_path_factory.mktemp("armi-cache") / "cache.db"
+    isolation_dir = tmp_path_factory.mktemp("armi-isolate")
+    db_path = isolation_dir / "cache.db"
+    config_path = isolation_dir / "missing-config.yaml"  # intentionally absent
     monkeypatch.setenv("ARMILLARY_CACHE_DB", str(db_path))
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_path))
 
 
 # Strips SGR / cursor control sequences from captured CLI output. Click and
@@ -366,6 +373,129 @@ def test_start_errors_clearly_when_streamlit_missing(
 
 
 # --- M3.1: scan persists to cache, list reads back -------------------------
+
+
+def test_scan_lifts_last_modified_to_last_commit_when_filesystem_is_older(
+    tmp_path: Path,
+) -> None:
+    """Regression for the .git mtime bug — the cloned-old-repo case.
+
+    A repo with backdated commit AND backdated file mtimes (simulating
+    a long-untouched project) must report `last_modified ≈ commit time`
+    instead of "scan time". The CLI lifts `last_modified` up to
+    `last_commit_ts` whenever the metadata's commit time is newer than
+    the filesystem signal.
+    """
+    import os as _os
+    import subprocess as _sp
+    from datetime import datetime as _dt
+
+    repo = tmp_path / "ancient"
+    repo.mkdir()
+    env = {
+        "GIT_AUTHOR_NAME": "Test",
+        "GIT_AUTHOR_EMAIL": "test@example.com",
+        "GIT_COMMITTER_NAME": "Test",
+        "GIT_COMMITTER_EMAIL": "test@example.com",
+        "GIT_AUTHOR_DATE": "2025-01-15T12:00:00",
+        "GIT_COMMITTER_DATE": "2025-01-15T12:00:00",
+        "PATH": _os.environ.get("PATH", ""),
+    }
+    _sp.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True, env=env)
+    (repo / "README.md").write_text("# ancient\n\nA test project.")
+    _sp.run(["git", "add", "-A"], cwd=repo, check=True, env=env)
+    _sp.run(["git", "commit", "-q", "-m", "old"], cwd=repo, check=True, env=env)
+
+    # Backdate file + dir mtimes too, so the scanner's filesystem signal
+    # is OLDER than the commit. Then last_commit_ts (Jan 2025) wins.
+    old_ts = _dt(2024, 6, 1, 12, 0, 0).timestamp()
+    _os.utime(repo / "README.md", (old_ts, old_ts))
+    _os.utime(repo, (old_ts, old_ts))
+
+    result = runner.invoke(app, ["scan", "-u", str(tmp_path)])
+    assert result.exit_code == 0, result.stdout
+
+    data = json.loads(result.stdout)
+    assert len(data) == 1
+    item = data[0]
+
+    last_mod = _dt.fromisoformat(item["last_modified"])
+    last_commit = _dt.fromisoformat(item["metadata"]["last_commit_ts"])
+    # last_modified should reflect the (newer) commit time, not the
+    # backdated filesystem mtime.
+    assert last_mod == last_commit
+    assert last_mod.year == 2025
+    assert last_mod.month == 1
+
+
+def test_scan_preserves_filesystem_last_modified_when_files_edited_after_commit(
+    tmp_path: Path,
+) -> None:
+    """Regression for the Codex round-1 P2 finding on PR #9.
+
+    If the user edits a file AFTER the last commit, `last_modified`
+    must reflect the edit (not the older commit time). Otherwise the
+    dashboard claims a busy repo is "weeks old" just because the user
+    has not yet committed their work.
+    """
+    import os as _os
+    import subprocess as _sp
+    import time as _time
+    from datetime import datetime as _dt
+
+    repo = tmp_path / "edited"
+    repo.mkdir()
+    env = {
+        "GIT_AUTHOR_NAME": "Test",
+        "GIT_AUTHOR_EMAIL": "test@example.com",
+        "GIT_COMMITTER_NAME": "Test",
+        "GIT_COMMITTER_EMAIL": "test@example.com",
+        "GIT_AUTHOR_DATE": "2025-01-15T12:00:00",
+        "GIT_COMMITTER_DATE": "2025-01-15T12:00:00",
+        "PATH": _os.environ.get("PATH", ""),
+    }
+    _sp.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True, env=env)
+    (repo / "README.md").write_text("# original")
+    _sp.run(["git", "add", "-A"], cwd=repo, check=True, env=env)
+    _sp.run(["git", "commit", "-q", "-m", "old"], cwd=repo, check=True, env=env)
+
+    # Now edit a file — `now` is much newer than the 2025 commit.
+    _time.sleep(0.05)
+    (repo / "README.md").write_text("# edited after the old commit")
+
+    result = runner.invoke(app, ["scan", "-u", str(tmp_path)])
+    assert result.exit_code == 0, result.stdout
+
+    data = json.loads(result.stdout)
+    item = data[0]
+    last_mod = _dt.fromisoformat(item["last_modified"])
+    last_commit = _dt.fromisoformat(item["metadata"]["last_commit_ts"])
+
+    # last_modified must reflect the edit ("today"), NOT collapse to commit time
+    assert last_mod > last_commit
+    # And must be roughly "now"
+    age_seconds = (_dt.now() - last_mod).total_seconds()
+    assert age_seconds < 30, f"Expected last_modified ≈ now, got {last_mod}"
+
+
+def test_scan_no_metadata_keeps_filesystem_last_modified(
+    tmp_path: Path,
+) -> None:
+    """With `--no-metadata`, no extraction happens so the override does
+    not fire — the scanner's filesystem-based `last_modified` is the
+    only signal we have. This test pins the contract."""
+    _mkrepo(tmp_path / "thing")
+
+    result = runner.invoke(app, ["scan", "-u", str(tmp_path), "--no-metadata"])
+    assert result.exit_code == 0, result.stdout
+
+    data = json.loads(result.stdout)
+    assert data[0]["metadata"] is None
+    # last_modified is whatever the scanner produced — we just check it
+    # was set to *something* and not crashed.
+    from datetime import datetime as _dt
+
+    _dt.fromisoformat(data[0]["last_modified"])
 
 
 def test_scan_persists_results_to_cache(tmp_path: Path) -> None:
