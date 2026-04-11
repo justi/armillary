@@ -351,6 +351,117 @@ def test_upsert_basic_only_preserves_existing_metadata(
     assert row.metadata.readme_excerpt == "hello"
 
 
+def test_v2_metadata_json_without_new_fields_still_reads(
+    cache: Cache, tmp_path: Path
+) -> None:
+    """Regression for Codex review on PR #10.
+
+    A row written with the old metadata_json shape (no `ahead`, `behind`,
+    `size_bytes`, `file_count`, `note_paths` keys) must still be readable
+    after the metadata extraction grew those fields. The new fields just
+    come back as None / [] until the next scan refreshes the row.
+
+    This is the test that justifies NOT bumping SCHEMA_VERSION when we
+    only add metadata_json keys.
+    """
+    import json as _json
+
+    p = tmp_path / "legacy"
+    p.mkdir()
+    # Write directly via SQL using the legacy metadata_json shape
+    legacy_json = _json.dumps(
+        {
+            "last_commit_sha": "abc1234",
+            "readme_excerpt": "Old project",
+            "adr_paths": ["/tmp/adr/0001.md"],
+        }
+    )
+    cache.conn.execute(
+        """
+        INSERT INTO projects (
+            path, name, type, umbrella,
+            last_modified_ts, last_scanned_at,
+            status, branch, last_commit_ts, last_commit_author,
+            dirty_count, metadata_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(p),
+            "legacy",
+            "git",
+            str(p.parent),
+            1700000000.0,
+            1700000000.0,
+            "DORMANT",
+            "main",
+            1700000000.0,
+            "Old Author",
+            0,
+            legacy_json,
+        ),
+    )
+    cache.conn.commit()
+
+    [row] = cache.list_projects()
+    assert row.name == "legacy"
+    assert row.metadata is not None
+    # Old fields still present
+    assert row.metadata.last_commit_sha == "abc1234"
+    assert row.metadata.readme_excerpt == "Old project"
+    assert len(row.metadata.adr_paths) == 1
+    # New fields default to None / []
+    assert row.metadata.ahead is None
+    assert row.metadata.behind is None
+    assert row.metadata.size_bytes is None
+    assert row.metadata.file_count is None
+    assert row.metadata.note_paths == []
+
+
+def test_upsert_round_trips_all_v3_metadata_fields(
+    cache: Cache, tmp_path: Path
+) -> None:
+    """Regression for PR #10: every new field added in schema v3
+    (ahead, behind, size_bytes, file_count, note_paths) must round-trip
+    through cache.upsert → cache.list_projects intact.
+    """
+    from datetime import datetime as _dt
+
+    from armillary.models import ProjectMetadata, Status
+
+    p = tmp_path / "thing"
+    p.mkdir()
+    project = _make_project(path=p, type=ProjectType.GIT)
+    project.metadata = ProjectMetadata(
+        branch="main",
+        last_commit_sha="abc1234",
+        last_commit_ts=_dt(2025, 6, 1),
+        last_commit_author="Someone",
+        dirty_count=2,
+        ahead=3,
+        behind=4,
+        size_bytes=12345,
+        file_count=42,
+        readme_excerpt="Hello",
+        adr_paths=[Path("/tmp/adr/0001.md")],
+        note_paths=[Path("/tmp/notes/january.md"), Path("/tmp/notes/february.md")],
+        status=Status.ACTIVE,
+    )
+
+    cache.upsert([project])
+    [row] = cache.list_projects()
+
+    assert row.metadata is not None
+    assert row.metadata.ahead == 3
+    assert row.metadata.behind == 4
+    assert row.metadata.size_bytes == 12345
+    assert row.metadata.file_count == 42
+    assert {p.name for p in row.metadata.note_paths} == {
+        "january.md",
+        "february.md",
+    }
+
+
 def test_upsert_basic_only_inserts_new_rows_with_null_metadata(
     cache: Cache, tmp_path: Path
 ) -> None:

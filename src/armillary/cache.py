@@ -16,6 +16,15 @@ Schema history:
   last_commit_author, dirty_count (M3.2). README excerpt and ADR list
   live in `metadata_json` since they are not used in WHERE clauses.
 
+Note on `metadata_json`-only additions: when PR #10 added
+`ahead`/`behind`/`size_bytes`/`file_count`/`note_paths`, those went
+into `metadata_json` without changing the column layout. The schema
+version stayed at 2 because every existing row is still perfectly
+readable — `_row_to_metadata` uses `.get()` with `None` defaults so
+old records simply have `None` for the new fields until the next
+rescan refreshes them. Bumping the schema version is reserved for
+actual table-shape changes.
+
 The cache is intentionally **not** the search engine. Filtering and
 sorting happen here in SQL so the dashboard (M4) can read directly,
 but anything richer (semantic search, full text) lives elsewhere.
@@ -384,8 +393,13 @@ def _row_to_metadata(row: sqlite3.Row) -> ProjectMetadata | None:
         ),
         last_commit_author=row["last_commit_author"],
         dirty_count=row["dirty_count"],
+        ahead=extra.get("ahead"),
+        behind=extra.get("behind"),
+        size_bytes=extra.get("size_bytes"),
+        file_count=extra.get("file_count"),
         readme_excerpt=extra.get("readme_excerpt"),
         adr_paths=[Path(p) for p in extra.get("adr_paths", [])],
+        note_paths=[Path(p) for p in extra.get("note_paths", [])],
         status=Status(row["status"]) if row["status"] else None,
     )
 
@@ -394,8 +408,13 @@ def _serialize_metadata_extra(md: ProjectMetadata) -> str | None:
     """Serialize the `ProjectMetadata` fields that don't get their own column."""
     payload = {
         "last_commit_sha": md.last_commit_sha,
+        "ahead": md.ahead,
+        "behind": md.behind,
+        "size_bytes": md.size_bytes,
+        "file_count": md.file_count,
         "readme_excerpt": md.readme_excerpt,
         "adr_paths": [str(p) for p in md.adr_paths],
+        "note_paths": [str(p) for p in md.note_paths],
     }
     # Drop empty keys to keep the JSON small and the diff readable.
     cleaned = {k: v for k, v in payload.items() if v not in (None, [], "")}
