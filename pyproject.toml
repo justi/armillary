@@ -58,3 +58,31 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/armillary"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Test files use longer assertion lines and may import fixtures that
+# look unused to a static checker.
+"tests/**" = ["E501"]
+# typer's idiomatic API requires `Option(...)` / `Argument(...)` calls in
+# function defaults. Migrating to `Annotated[T, Option(...)]` is a separate
+# refactor; suppress B008 for now in the CLI module only.
+"src/armillary/cli.py" = ["B008"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

@@ -11,7 +11,6 @@ import pytest
 from armillary.models import ProjectType, UmbrellaFolder
 from armillary.scanner import scan, scan_umbrella
 
-
 # --- fixture builders -------------------------------------------------------
 
 
