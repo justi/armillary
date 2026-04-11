@@ -684,13 +684,76 @@ def test_config_init_blank_creates_starter_file(
     config_file = tmp_path / "armillary" / "config.yaml"
     monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
 
-    # After writing, `config` proceeds to open `$EDITOR`. Use `true`.
-    monkeypatch.setenv("EDITOR", "true")
+    # `$EDITOR` is intentionally set to a sentinel that would fail loudly
+    # if `config --init` accidentally tried to open it. The fix below
+    # ensures `--init` returns BEFORE the editor branch ever runs.
+    monkeypatch.setenv("EDITOR", "definitely-not-a-real-editor")
 
     result = runner.invoke(app, ["config", "--init", "--blank"])
     assert result.exit_code == 0, result.stdout
     assert config_file.exists()
     assert "umbrellas" in config_file.read_text()
+
+
+def test_config_init_does_not_open_editor_after_writing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Regression for the user-reported "init opens nano" bug.
+
+    `armillary config --init` should write the file and exit cleanly.
+    Falling through to `$EDITOR` is surprising — the user just chose
+    what goes into the file, they do not expect nano to pop up.
+    Use plain `armillary config` to edit afterwards.
+    """
+    config_file = tmp_path / "armillary" / "config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+    # Sentinel: if the code falls through to the editor branch, this
+    # value will trip the `which()` check and the test will fail loudly.
+    monkeypatch.setenv("EDITOR", "definitely-not-a-real-editor")
+
+    # Guard rail: subprocess.run must NOT be called for the editor.
+    real_run = cli.subprocess.run
+
+    def trapped_run(cmd: list[str], **kwargs: Any) -> Any:
+        # The init flow itself never runs `subprocess.run`, so any call
+        # here is the editor branch. Fail loudly with the cmd in the
+        # assertion message so future regressions are obvious.
+        raise AssertionError(f"config --init unexpectedly opened the editor: {cmd}")
+
+    monkeypatch.setattr(cli.subprocess, "run", trapped_run)
+
+    result = runner.invoke(app, ["config", "--init", "--blank"])
+    assert result.exit_code == 0, result.stdout
+    assert config_file.exists()
+    # Sanity: the trap above means we definitely did not open EDITOR.
+    del real_run
+
+
+def test_config_init_when_file_exists_errors_out(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--init` against an existing file must NOT silently overwrite or
+    fall through to the editor — it must error out and tell the user
+    how to recover (`armillary config` to edit, or remove the file
+    first to rerun init)."""
+    config_file = tmp_path / "armillary" / "config.yaml"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("umbrellas: []\n")
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+    monkeypatch.setenv("EDITOR", "true")
+
+    # Guard rail again: editor must not be called.
+    def trapped_run(cmd: list[str], **kwargs: Any) -> Any:
+        raise AssertionError(f"editor opened on init-with-existing: {cmd}")
+
+    monkeypatch.setattr(cli.subprocess, "run", trapped_run)
+
+    result = runner.invoke(app, ["config", "--init", "--blank"])
+    assert result.exit_code != 0
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
+    assert "already exists" in combined.lower()
+    # File contents are unchanged
+    assert config_file.read_text() == "umbrellas: []\n"
 
 
 def test_config_init_non_interactive_uses_discovered_umbrellas(

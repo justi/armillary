@@ -539,8 +539,23 @@ def config(
         typer.echo(config_path)
         return
 
-    if init and not config_path.exists():
+    if init:
+        # `--init` is a "create" operation: write the file and exit.
+        # Falling through to the editor below would be surprising — the
+        # user just chose what to put in the file, they do not expect
+        # nano to pop up immediately afterwards. Use plain
+        # `armillary config` if they want to edit it.
+        if config_path.exists():
+            typer.secho(
+                f"{config_path} already exists. "
+                "Edit it with `armillary config`, or remove it first to "
+                "rerun init.",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+            raise typer.Exit(1)
         _init_config_file(config_path, non_interactive=non_interactive, blank=blank)
+        return
 
     if not config_path.exists():
         typer.secho(
