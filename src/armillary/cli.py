@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
 
 import typer
+
+from armillary.models import UmbrellaFolder
+from armillary.scanner import scan as scan_umbrellas
 
 app = typer.Typer(
     name="armillary",
@@ -40,9 +44,30 @@ def start(
 
 
 @app.command()
-def scan() -> None:
-    """Re-scan umbrella folders and update the cache. (M2)"""
-    typer.secho("scan: not implemented yet (milestone M2)", fg=typer.colors.YELLOW)
+def scan(
+    umbrella: list[Path] = typer.Option(
+        ...,
+        "--umbrella",
+        "-u",
+        help="Umbrella folder to scan. Repeat for multiple.",
+    ),
+    max_depth: int = typer.Option(
+        3, "--max-depth", "-d", help="Max recursion depth per umbrella."
+    ),
+) -> None:
+    """Scan umbrella folders and print the project list as JSON.
+
+    Config-file driven umbrella folders come in M5. Until then, pass
+    them explicitly, e.g.:
+
+        armillary scan -u ~/Projects -u ~/ideas
+    """
+    umbrellas = [
+        UmbrellaFolder(path=p, max_depth=max_depth) for p in umbrella
+    ]
+    projects = scan_umbrellas(umbrellas)
+    payload = [p.model_dump(mode="json") for p in projects]
+    typer.echo(json.dumps(payload, indent=2, ensure_ascii=False))
 
 
 @app.command("list")
