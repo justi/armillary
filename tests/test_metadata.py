@@ -120,6 +120,202 @@ def test_extract_dirty_count_includes_staged_files(tmp_path: Path) -> None:
     assert md.dirty_count == 1
 
 
+def _git_env() -> dict[str, str]:
+    import os as _os
+
+    return {
+        "GIT_AUTHOR_NAME": "Test",
+        "GIT_AUTHOR_EMAIL": "test@example.com",
+        "GIT_COMMITTER_NAME": "Test",
+        "GIT_COMMITTER_EMAIL": "test@example.com",
+        "PATH": _os.environ.get("PATH", ""),
+    }
+
+
+def _set_fake_upstream(repo: Path, ref_sha: str) -> None:
+    """Wire up `origin/main` → `ref_sha` and configure main to track it,
+    without needing a real remote. Pure refs + config plumbing."""
+    env = _git_env()
+    # 1. Make `origin` exist as a remote (URL is irrelevant — we never push).
+    subprocess.run(
+        ["git", "remote", "add", "origin", "/tmp/fake-armillary-remote"],
+        cwd=repo,
+        check=True,
+        env=env,
+    )
+    # 2. Set the remote-tracking ref to the desired SHA.
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/main", ref_sha],
+        cwd=repo,
+        check=True,
+        env=env,
+    )
+    # 3. Tell main to track origin/main via raw config (avoids the
+    #    `--set-upstream-to` validation that wants a real fetched branch).
+    subprocess.run(
+        ["git", "config", "branch.main.remote", "origin"],
+        cwd=repo,
+        check=True,
+        env=env,
+    )
+    subprocess.run(
+        ["git", "config", "branch.main.merge", "refs/heads/main"],
+        cwd=repo,
+        check=True,
+        env=env,
+    )
+
+
+def test_extract_ahead_when_local_is_ahead_of_upstream(tmp_path: Path) -> None:
+    """Local main has 2 commits beyond a fake `origin/main` → ahead=2, behind=0."""
+    env = _git_env()
+    repo = _mk_real_git_repo(tmp_path / "ahead-repo")
+
+    initial_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    ).stdout.strip()
+
+    for i in range(2):
+        (repo / f"new-{i}.txt").write_text(str(i))
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True, env=env)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", f"new {i}"], cwd=repo, check=True, env=env
+        )
+
+    _set_fake_upstream(repo, initial_sha)
+
+    md = metadata.extract(_git_project(repo))
+
+    assert md.ahead == 2
+    assert md.behind == 0
+
+
+def test_extract_behind_when_upstream_is_ahead(tmp_path: Path) -> None:
+    """Local main is rewound to initial; fake `origin/main` points at
+    a "future" commit → ahead=0, behind=1.
+    """
+    env = _git_env()
+    repo = _mk_real_git_repo(tmp_path / "behind-repo")
+
+    initial_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    ).stdout.strip()
+
+    (repo / "future.txt").write_text("future")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, env=env)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "future"], cwd=repo, check=True, env=env
+    )
+    future_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    ).stdout.strip()
+
+    subprocess.run(
+        ["git", "reset", "--hard", "-q", initial_sha],
+        cwd=repo,
+        check=True,
+        env=env,
+    )
+
+    _set_fake_upstream(repo, future_sha)
+
+    md = metadata.extract(_git_project(repo))
+
+    assert md.ahead == 0
+    assert md.behind == 1
+
+
+def test_extract_ahead_behind_none_when_no_upstream(tmp_path: Path) -> None:
+    """A repo with no `origin` configured should leave ahead/behind as None,
+    NOT as 0 — distinguishes "no remote" from "fully synced"."""
+    repo = _mk_real_git_repo(tmp_path / "lonely")
+    md = metadata.extract(_git_project(repo))
+    assert md.ahead is None
+    assert md.behind is None
+
+
+def test_extract_size_and_file_count(tmp_path: Path) -> None:
+    repo = _mk_real_git_repo(
+        tmp_path / "sized",
+        extra_files={
+            "src/main.py": "print('hi')\n",  # 12 bytes
+            "src/lib.py": "x = 1\n",  # 6 bytes
+        },
+    )
+    md = metadata.extract(_git_project(repo))
+
+    # README.md (~25 bytes) + src/main.py (12) + src/lib.py (6) = ~43+
+    assert md.file_count == 3
+    assert md.size_bytes is not None
+    assert md.size_bytes > 30
+    assert md.size_bytes < 200  # not exploding
+
+
+def test_extract_size_skips_noisy_directories(tmp_path: Path) -> None:
+    """`.git`, `node_modules`, `.venv`, etc. must not inflate the count."""
+    repo = _mk_real_git_repo(
+        tmp_path / "noisy",
+        extra_files={
+            "src/code.py": "x = 1\n",
+            "node_modules/leftpad/index.js": "fake huge dep\n" * 100,
+            "__pycache__/cached.pyc": "fake bytecode\n" * 50,
+            ".venv/lib/site.py": "venv junk\n" * 100,
+        },
+    )
+    md = metadata.extract(_git_project(repo))
+
+    # README.md + src/code.py = 2 user files. The 3 noisy paths must be
+    # excluded entirely from both file_count and size_bytes.
+    assert md.file_count == 2
+
+
+def test_extract_note_files(tmp_path: Path) -> None:
+    repo = _mk_real_git_repo(tmp_path / "noted")
+    (repo / "TODO.md").write_text("- [ ] one\n")
+    (repo / "CHANGELOG.md").write_text("# changes")
+    (repo / "notes").mkdir()
+    (repo / "notes" / "2024-01.md").write_text("january")
+    (repo / "notes" / "2024-02.md").write_text("february")
+    (repo / "docs").mkdir()
+    (repo / "docs" / "guide.md").write_text("guide")
+    # README.md is NOT a note even though it is a markdown file
+    # (it has its own dedicated extraction path).
+
+    md = metadata.extract(_git_project(repo))
+
+    note_names = {p.name for p in md.note_paths}
+    assert note_names == {
+        "TODO.md",
+        "CHANGELOG.md",
+        "2024-01.md",
+        "2024-02.md",
+        "guide.md",
+    }
+    assert "README.md" not in note_names
+
+
+def test_extract_note_files_returns_empty_when_no_notes(tmp_path: Path) -> None:
+    repo = _mk_real_git_repo(tmp_path / "bare")
+    md = metadata.extract(_git_project(repo))
+    # README.md is excluded; no other markdown anywhere.
+    assert md.note_paths == []
+
+
 def test_extract_dirty_count_combines_staged_unstaged_and_untracked(
     tmp_path: Path,
 ) -> None:

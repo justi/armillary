@@ -15,6 +15,12 @@ Schema history:
 - v2 — adds metadata columns: status, branch, last_commit_ts,
   last_commit_author, dirty_count (M3.2). README excerpt and ADR list
   live in `metadata_json` since they are not used in WHERE clauses.
+- v3 — adds ahead/behind, size_bytes, file_count, note_paths to
+  `metadata_json` (PR #10 / PLAN.md §5 M2 gaps). No new columns —
+  none of these are queryable filters yet, so the JSON blob is the
+  right place. The cache rebuild on schema bump means existing v2
+  rows get re-extracted on the next scan rather than partially
+  populated.
 
 The cache is intentionally **not** the search engine. Filtering and
 sorting happen here in SQL so the dashboard (M4) can read directly,
@@ -36,7 +42,7 @@ from typing import Any, Self
 
 from .models import Project, ProjectMetadata, ProjectType, Status
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA_SQL = """
 CREATE TABLE projects (
@@ -384,8 +390,13 @@ def _row_to_metadata(row: sqlite3.Row) -> ProjectMetadata | None:
         ),
         last_commit_author=row["last_commit_author"],
         dirty_count=row["dirty_count"],
+        ahead=extra.get("ahead"),
+        behind=extra.get("behind"),
+        size_bytes=extra.get("size_bytes"),
+        file_count=extra.get("file_count"),
         readme_excerpt=extra.get("readme_excerpt"),
         adr_paths=[Path(p) for p in extra.get("adr_paths", [])],
+        note_paths=[Path(p) for p in extra.get("note_paths", [])],
         status=Status(row["status"]) if row["status"] else None,
     )
 
@@ -394,8 +405,13 @@ def _serialize_metadata_extra(md: ProjectMetadata) -> str | None:
     """Serialize the `ProjectMetadata` fields that don't get their own column."""
     payload = {
         "last_commit_sha": md.last_commit_sha,
+        "ahead": md.ahead,
+        "behind": md.behind,
+        "size_bytes": md.size_bytes,
+        "file_count": md.file_count,
         "readme_excerpt": md.readme_excerpt,
         "adr_paths": [str(p) for p in md.adr_paths],
+        "note_paths": [str(p) for p in md.note_paths],
     }
     # Drop empty keys to keep the JSON small and the diff readable.
     cleaned = {k: v for k, v in payload.items() if v not in (None, [], "")}
