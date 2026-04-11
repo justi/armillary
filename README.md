@@ -4,6 +4,28 @@
 >
 > *An armillary sphere is an ancient astronomical instrument: concentric rings modeling the celestial sphere, with a fixed center and orbits turning around it. The metaphor fits: you are the center, your projects orbit around you, and `armillary` lets you see the whole system at once.*
 
+```text
+   Your scattered projects                              What armillary gives you
+   ─────────────────────────                            ────────────────────────
+
+   ~/Projects/                                          📋  armillary list
+     alpha-app/                                             terminal table, sortable
+     beta-prototype/        ┌───────────────────┐
+     research-notes/        │                   │       🌐  armillary start
+                            │     armillary     │           browser dashboard, filters
+   ~/projects_prod/         │                   │
+     client-x/        ────▶ │  scan + index +   │ ────▶ 🔍  armillary search "needle"
+     deploy-tool/           │   SQLite cache    │           ripgrep across all files
+                            │                   │
+   ~/code/                  └───────────────────┘       🚀  armillary open <name>
+     experiments/                    │                      Cursor / Zed / VS Code / ...
+     ...                             │
+                                     ▼                  📤  armillary export-index
+                          status: ACTIVE / PAUSED /         Markdown for Claude / Codex
+                                  DORMANT / IDEA /
+                                  IN_PROGRESS
+```
+
 **Status:** Alpha. The full MVP from PLAN.md §5 is implemented and on `main`: scanner with bootstrap, SQLite cache, metadata extraction with status heuristics, Streamlit dashboard with launcher / search / detail views, ripgrep + optional Khoj search, markdown exporter for AI tools. Daily-driver-ready on macOS / Linux.
 
 ## What is this?
