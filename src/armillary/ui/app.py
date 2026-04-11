@@ -13,6 +13,8 @@ script and route via `st.query_params["project"]`.
 
 from __future__ import annotations
 
+import contextlib
+import shlex
 import shutil
 import subprocess
 import sys
@@ -38,8 +40,12 @@ from armillary.cache import Cache, default_db_path  # noqa: E402
 from armillary.config import (  # noqa: E402
     Config,
     ConfigError,
+    KhojConfigBlock,
+    LauncherConfig,
+    UmbrellaConfig,
     default_config_path,
     load_config,
+    write_config,
 )
 from armillary.models import Project, ProjectType, UmbrellaFolder  # noqa: E402
 from armillary.scanner import scan as scan_umbrellas_fn  # noqa: E402
@@ -180,8 +186,11 @@ def _run_dashboard_scan(cfg: Config | None) -> tuple[bool, str]:
 
 def main() -> None:
     params = st.query_params
+    page = params.get("page")
     project_path = params.get("project")
-    if project_path:
+    if page == "settings":
+        _render_settings_page()
+    elif project_path:
         _render_project_detail(project_path)
     else:
         _render_overview()
@@ -622,6 +631,15 @@ def _render_sidebar(rows: list[dict[str, Any]], cfg: Config | None) -> dict[str,
             else:
                 st.error(message)
 
+        st.divider()
+        if st.button(
+            "⚙️ Settings",
+            use_container_width=True,
+            key="sidebar_settings",
+        ):
+            st.query_params["page"] = "settings"
+            st.rerun()
+
     return {
         "status": status_pick,
         "type": type_pick,
@@ -955,6 +973,410 @@ def _load_project(project_path: str) -> Project | None:
             if str(project.path) == project_path:
                 return project
     return None
+
+
+# --- settings page ---------------------------------------------------------
+
+
+def _render_settings_page() -> None:
+    """In-UI editor for the YAML config — umbrellas, launchers, Khoj.
+
+    Replaces the "edit YAML by hand" workflow per the user-stated rule
+    "what you can't click in the UI doesn't exist". Three tabs, each
+    with its own form + Save button. Inline test affordances for the
+    things that can be tested without leaving the page (launcher PATH
+    check, Khoj health probe).
+
+    Loading the page itself is read-only — the only filesystem writes
+    happen on explicit "Save" button clicks.
+    """
+    if st.button("← Back to overview", key="settings_back"):
+        with contextlib.suppress(KeyError):
+            del st.query_params["page"]
+        st.rerun()
+
+    st.title("⚙️ Settings")
+    st.caption(f"Editing `{_shorten_home(default_config_path())}`")
+
+    try:
+        cfg = load_config()
+    except ConfigError as exc:
+        st.error(f"Config could not be loaded:\n\n```\n{exc}\n```")
+        st.info(
+            "Fix the YAML by hand (`armillary config` from a terminal), "
+            "then click Reload below."
+        )
+        if st.button("🔄 Reload config"):
+            st.rerun()
+        return
+
+    tabs = st.tabs(["Umbrellas", "Launchers", "Khoj"])
+    with tabs[0]:
+        _render_settings_umbrellas(cfg)
+    with tabs[1]:
+        _render_settings_launchers(cfg)
+    with tabs[2]:
+        _render_settings_khoj(cfg)
+
+
+# ----- Umbrellas tab -------------------------------------------------------
+
+
+def _render_settings_umbrellas(cfg: Config) -> None:
+    st.subheader("Umbrellas")
+    st.caption(
+        "Folders the scanner walks. Each entry becomes a `-u` argument "
+        "for `armillary scan`."
+    )
+
+    edited: list[UmbrellaConfig] = []
+
+    if not cfg.umbrellas:
+        st.info(
+            "_No umbrellas configured. Add one below or run "
+            "`armillary config --init` from your terminal._"
+        )
+
+    for idx, umbrella in enumerate(cfg.umbrellas):
+        cols = st.columns([4, 2, 1, 1])
+        with cols[0]:
+            new_path = st.text_input(
+                "Path",
+                value=str(umbrella.path),
+                key=f"umbrella_path_{idx}",
+                label_visibility="collapsed" if idx > 0 else "visible",
+            )
+        with cols[1]:
+            new_label = st.text_input(
+                "Label",
+                value=umbrella.label or "",
+                key=f"umbrella_label_{idx}",
+                label_visibility="collapsed" if idx > 0 else "visible",
+            )
+        with cols[2]:
+            new_depth = st.number_input(
+                "Max depth",
+                min_value=1,
+                max_value=10,
+                value=umbrella.max_depth,
+                key=f"umbrella_depth_{idx}",
+                label_visibility="collapsed" if idx > 0 else "visible",
+            )
+        with cols[3]:
+            # Spacer for vertical alignment with the input rows above
+            if idx == 0:
+                st.write("")
+            remove = st.button(
+                "✕",
+                key=f"umbrella_remove_{idx}",
+                help="Remove this umbrella",
+            )
+        if not remove:
+            edited.append(
+                UmbrellaConfig(
+                    path=Path(new_path),
+                    label=new_label or None,
+                    max_depth=int(new_depth),
+                )
+            )
+
+    st.divider()
+    st.markdown("**Add umbrella**")
+    add_cols = st.columns([4, 2, 1, 1])
+    with add_cols[0]:
+        new_path = st.text_input(
+            "New path",
+            value="",
+            placeholder="~/Projects",
+            key="umbrella_add_path",
+        )
+    with add_cols[1]:
+        new_label = st.text_input(
+            "New label",
+            value="",
+            placeholder="(auto)",
+            key="umbrella_add_label",
+        )
+    with add_cols[2]:
+        new_depth = st.number_input(
+            "Depth",
+            min_value=1,
+            max_value=10,
+            value=3,
+            key="umbrella_add_depth",
+        )
+    with add_cols[3]:
+        st.write("")
+        add_clicked = st.button("Add", key="umbrella_add_btn")
+
+    if add_clicked:
+        if not new_path.strip():
+            st.error("Path cannot be empty.")
+        else:
+            expanded = Path(new_path).expanduser()
+            label = new_label.strip() or expanded.name
+            edited.append(
+                UmbrellaConfig(
+                    path=expanded,
+                    label=label,
+                    max_depth=int(new_depth),
+                )
+            )
+            cfg.umbrellas = edited
+            _save_settings(cfg)
+            return
+
+    st.divider()
+    if st.button("💾 Save changes", key="umbrellas_save", type="primary"):
+        cfg.umbrellas = edited
+        _save_settings(cfg)
+
+
+# ----- Launchers tab -------------------------------------------------------
+
+
+def _render_settings_launchers(cfg: Config) -> None:
+    st.subheader("Launchers")
+    st.caption(
+        "Tools `armillary open` can spawn. Built-in entries are always "
+        "available even when removed from this list — they reappear "
+        "after a save."
+    )
+
+    edited: dict[str, LauncherConfig] = {}
+
+    for target_id in sorted(cfg.launchers.keys()):
+        launcher = cfg.launchers[target_id]
+        on_path = shutil.which(launcher.command) is not None
+        status = "🟢 on PATH" if on_path else "🔴 missing"
+
+        with st.expander(f"{launcher.icon or '·'} {target_id} — {status}"):
+            cols_top = st.columns([3, 3, 1, 1])
+            with cols_top[0]:
+                new_label = st.text_input(
+                    "Label",
+                    value=launcher.label,
+                    key=f"launcher_label_{target_id}",
+                )
+            with cols_top[1]:
+                new_command = st.text_input(
+                    "Command",
+                    value=launcher.command,
+                    key=f"launcher_command_{target_id}",
+                )
+            with cols_top[2]:
+                new_icon = st.text_input(
+                    "Icon",
+                    value=launcher.icon or "",
+                    key=f"launcher_icon_{target_id}",
+                )
+            with cols_top[3]:
+                new_terminal = st.checkbox(
+                    "Terminal",
+                    value=launcher.terminal,
+                    key=f"launcher_terminal_{target_id}",
+                    help=(
+                        "Mark interactive terminal apps (codex, claude-code) "
+                        "so the dashboard hides them and the CLI keeps stdio."
+                    ),
+                )
+
+            new_args = st.text_input(
+                "Args (space-separated, use `{path}` for project path)",
+                value=" ".join(shlex.quote(a) for a in launcher.args),
+                key=f"launcher_args_{target_id}",
+            )
+
+            cols_bottom = st.columns([1, 1, 4])
+            with cols_bottom[0]:
+                test_clicked = st.button(
+                    "🧪 Test",
+                    key=f"launcher_test_{target_id}",
+                    help="Check whether the command is on PATH (no spawn)",
+                )
+            with cols_bottom[1]:
+                remove_clicked = st.button(
+                    "✕ Remove",
+                    key=f"launcher_remove_{target_id}",
+                )
+
+            if test_clicked:
+                resolved = shutil.which(new_command)
+                if resolved:
+                    st.success(f"Found: `{resolved}`")
+                else:
+                    st.error(
+                        f"`{new_command}` is not on PATH. Install it or "
+                        "fix the command above."
+                    )
+
+            if not remove_clicked:
+                try:
+                    parsed_args = shlex.split(new_args) if new_args.strip() else []
+                except ValueError as exc:
+                    st.error(f"Could not parse args: {exc}")
+                    parsed_args = launcher.args
+                edited[target_id] = LauncherConfig(
+                    label=new_label,
+                    command=new_command,
+                    args=parsed_args,
+                    icon=new_icon or None,
+                    terminal=new_terminal,
+                )
+
+    st.divider()
+    st.markdown("**Add custom launcher**")
+    with st.form("launcher_add_form", clear_on_submit=True):
+        a_cols = st.columns([2, 3, 3])
+        with a_cols[0]:
+            new_id = st.text_input("ID", placeholder="nvim")
+        with a_cols[1]:
+            new_label = st.text_input("Label", placeholder="Neovim")
+        with a_cols[2]:
+            new_command = st.text_input("Command", placeholder="nvim")
+
+        b_cols = st.columns([4, 2, 1])
+        with b_cols[0]:
+            new_args = st.text_input("Args", value="{path}", placeholder="{path}")
+        with b_cols[1]:
+            new_icon = st.text_input("Icon", value="", placeholder="✏️")
+        with b_cols[2]:
+            new_terminal = st.checkbox("Terminal", value=False)
+
+        add_clicked = st.form_submit_button("Add")
+
+    if add_clicked:
+        cleaned_id = new_id.strip()
+        if not cleaned_id:
+            st.error("ID cannot be empty.")
+        elif cleaned_id in edited:
+            st.error(f"Launcher id `{cleaned_id}` already exists.")
+        elif not new_command.strip():
+            st.error("Command cannot be empty.")
+        else:
+            try:
+                parsed_args = shlex.split(new_args) if new_args.strip() else []
+            except ValueError as exc:
+                st.error(f"Could not parse args: {exc}")
+                return
+            edited[cleaned_id] = LauncherConfig(
+                label=new_label.strip() or cleaned_id,
+                command=new_command.strip(),
+                args=parsed_args,
+                icon=new_icon or None,
+                terminal=new_terminal,
+            )
+            cfg.launchers = edited
+            _save_settings(cfg)
+            return
+
+    st.divider()
+    if st.button("💾 Save changes", key="launchers_save", type="primary"):
+        cfg.launchers = edited
+        _save_settings(cfg)
+
+
+# ----- Khoj tab ------------------------------------------------------------
+
+
+def _render_settings_khoj(cfg: Config) -> None:
+    st.subheader("Khoj semantic search")
+    st.caption(
+        "Optional. When enabled, the search bar gets a 🧠 Semantic toggle "
+        "that calls a local Khoj instance instead of ripgrep."
+    )
+
+    enabled = st.checkbox(
+        "Enable Khoj",
+        value=cfg.khoj.enabled,
+        key="khoj_enabled",
+    )
+    api_url = st.text_input(
+        "API URL",
+        value=cfg.khoj.api_url,
+        key="khoj_api_url",
+    )
+    api_key = st.text_input(
+        "API key (optional, sent as Bearer token)",
+        value=cfg.khoj.api_key or "",
+        type="password",
+        key="khoj_api_key",
+    )
+    timeout_seconds = st.slider(
+        "Timeout (seconds)",
+        min_value=0.5,
+        max_value=60.0,
+        value=cfg.khoj.timeout_seconds,
+        step=0.5,
+        key="khoj_timeout",
+    )
+
+    cols = st.columns([1, 1, 4])
+    with cols[0]:
+        test_clicked = st.button("🧪 Test connection", key="khoj_test")
+    with cols[1]:
+        save_clicked = st.button("💾 Save changes", key="khoj_save", type="primary")
+
+    if test_clicked:
+        _test_khoj_connection(api_url, api_key, timeout_seconds)
+
+    if save_clicked:
+        cfg.khoj = KhojConfigBlock(
+            enabled=enabled,
+            api_url=api_url,
+            api_key=api_key or None,
+            timeout_seconds=timeout_seconds,
+        )
+        _save_settings(cfg)
+
+
+def _test_khoj_connection(api_url: str, api_key: str, timeout: float) -> None:
+    """Probe `<api_url>/api/health` with the form-supplied timeout.
+
+    Treats any 2xx status as success. Catches the same exception family
+    as the CLI's init Khoj-detect step plus `KhojResponseError` for
+    safety.
+    """
+    from urllib.error import HTTPError, URLError
+    from urllib.request import Request, urlopen
+
+    try:
+        url = f"{api_url.rstrip('/')}/api/health"
+        request = Request(url)
+        if api_key:
+            request.add_header("Authorization", f"Bearer {api_key}")
+        with urlopen(request, timeout=timeout) as response:
+            status = getattr(response, "status", None) or response.getcode()
+            if 200 <= int(status) < 300:
+                st.success(f"Khoj responded with HTTP {status}.")
+            else:
+                st.error(f"Khoj responded with HTTP {status}.")
+    except HTTPError as exc:
+        st.error(f"Khoj returned HTTP {exc.code}: {exc.reason}")
+    except (URLError, TimeoutError, OSError) as exc:
+        st.error(f"Khoj unreachable at {api_url}: {exc}")
+    except Exception as exc:  # noqa: BLE001 — surface anything weird
+        st.error(f"Khoj test failed: {exc}")
+
+
+# ----- save helper ---------------------------------------------------------
+
+
+def _save_settings(cfg: Config) -> None:
+    """Persist `cfg` to YAML, clear data caches, rerun.
+
+    Called by every "💾 Save changes" button. Streamlit reruns from the
+    top after `st.rerun()`, so the user lands on the freshly-saved view.
+    """
+    try:
+        write_config(cfg)
+    except OSError as exc:
+        st.error(f"Could not write config: {exc}")
+        return
+    _load_overview_rows.clear()
+    _load_project.clear()
+    st.success("Saved.")
+    st.rerun()
 
 
 main()

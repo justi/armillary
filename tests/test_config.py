@@ -216,3 +216,164 @@ def test_umbrella_config_validates_max_depth_at_construction() -> None:
         UmbrellaConfig(path=Path("/tmp"), max_depth=0)
     with pytest.raises(ValidationError):
         UmbrellaConfig(path=Path("/tmp"), max_depth=11)
+
+
+# --- write_config (PR #18) -------------------------------------------------
+
+
+def test_write_config_round_trip(tmp_path: Path) -> None:
+    """Build a fully-populated Config, write, reload, assert equal on
+    every user-facing field."""
+    from armillary.config import (
+        KhojConfigBlock,
+        LauncherConfig,
+        write_config,
+    )
+
+    target = tmp_path / "config.yaml"
+    cfg = Config(
+        umbrellas=[
+            UmbrellaConfig(path=Path("/tmp/work"), label="Work", max_depth=4),
+            UmbrellaConfig(path=Path("/tmp/play")),
+        ],
+        launchers={
+            "cursor": LauncherConfig(label="Cursor", command="cursor", args=["{path}"]),
+            "nvim": LauncherConfig(
+                label="Neovim",
+                command="nvim",
+                args=["{path}"],
+                terminal=True,
+            ),
+        },
+        khoj=KhojConfigBlock(
+            enabled=True,
+            api_url="http://localhost:42110",
+            api_key="secret",
+            timeout_seconds=10.0,
+        ),
+    )
+
+    written = write_config(cfg, target)
+    assert written == target
+    assert target.exists()
+
+    reloaded = load_config(target)
+
+    # Umbrellas
+    assert len(reloaded.umbrellas) == 2
+    assert reloaded.umbrellas[0].path == Path("/tmp/work")
+    assert reloaded.umbrellas[0].label == "Work"
+    assert reloaded.umbrellas[0].max_depth == 4
+    assert reloaded.umbrellas[1].path == Path("/tmp/play")
+    assert reloaded.umbrellas[1].label is None
+    assert reloaded.umbrellas[1].max_depth == 3
+
+    # Launchers
+    assert "cursor" in reloaded.launchers
+    assert reloaded.launchers["cursor"].command == "cursor"
+    assert reloaded.launchers["nvim"].terminal is True
+
+    # Khoj
+    assert reloaded.khoj.enabled is True
+    assert reloaded.khoj.api_url == "http://localhost:42110"
+    assert reloaded.khoj.api_key == "secret"
+    assert reloaded.khoj.timeout_seconds == 10.0
+
+
+def test_write_config_is_idempotent(tmp_path: Path) -> None:
+    """Two writes of the same Config produce byte-identical files.
+
+    Critical for the dashboard settings page: Streamlit reruns the
+    script after every interaction, so the writer can fire many times.
+    Non-deterministic output (random key order, timestamps) would make
+    `git diff` of the config file noisy.
+    """
+    from armillary.config import write_config
+
+    target = tmp_path / "config.yaml"
+    cfg = Config(
+        umbrellas=[UmbrellaConfig(path=Path("/tmp/x"), label="X")],
+    )
+
+    write_config(cfg, target)
+    first = target.read_bytes()
+
+    write_config(cfg, target)
+    second = target.read_bytes()
+
+    assert first == second
+
+
+def test_write_config_includes_header_comment(tmp_path: Path) -> None:
+    """The first line is a fixed comment so users editing the YAML by
+    hand know what manages it."""
+    from armillary.config import write_config
+
+    target = tmp_path / "config.yaml"
+    write_config(
+        Config(umbrellas=[UmbrellaConfig(path=Path("/tmp/x"))]),
+        target,
+    )
+    text = target.read_text()
+    assert text.startswith("# armillary config")
+
+
+def test_write_config_empty_sections_serialize_cleanly(tmp_path: Path) -> None:
+    """Config() with default-everything (empty umbrellas, default launchers,
+    Khoj disabled) round-trips without raising."""
+    from armillary.config import write_config
+
+    target = tmp_path / "config.yaml"
+    cfg = Config()
+    write_config(cfg, target)
+    reloaded = load_config(target)
+    assert reloaded.umbrellas == []
+    assert "cursor" in reloaded.launchers  # built-in catalogue restored
+    assert reloaded.khoj.enabled is False
+
+
+def test_write_config_atomic_via_tmp_then_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If `os.replace` never fires, the original file must be untouched.
+
+    Simulates a crash mid-save by raising INSIDE the os.replace call —
+    the .tmp file might be on disk but the real config is unchanged.
+    """
+    from armillary.config import write_config
+
+    target = tmp_path / "config.yaml"
+    target.write_text("# original — must not be lost\numbrellas: []\n")
+    original = target.read_text()
+
+    def crashing_replace(src: object, dst: object) -> None:
+        raise RuntimeError("simulated crash before replace")
+
+    import armillary.config as cfg_mod
+
+    monkeypatch.setattr(cfg_mod.os, "replace", crashing_replace)
+
+    cfg = Config(umbrellas=[UmbrellaConfig(path=Path("/tmp/new"))])
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        write_config(cfg, target)
+
+    # The original file is intact
+    assert target.read_text() == original
+
+
+def test_write_config_honors_default_path_via_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """When called with `path=None`, write_config writes to the path
+    returned by `default_config_path()`, which honors `ARMILLARY_CONFIG`."""
+    from armillary.config import write_config
+
+    custom = tmp_path / "armi" / "custom-config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(custom))
+
+    cfg = Config(umbrellas=[UmbrellaConfig(path=Path("/tmp/x"))])
+    written = write_config(cfg)
+
+    assert written == custom
+    assert custom.exists()
+    assert "umbrellas" in custom.read_text()
