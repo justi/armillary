@@ -137,6 +137,18 @@ def scan(
         for project in projects:
             if project.metadata is None:
                 continue
+            # `last_modified` from the scanner is filesystem mtime, which is
+            # too noisy for git repos: GitPython's `repo.untracked_files`
+            # call refreshes `.git/index` as a side effect, which we then
+            # see as a "fresh" mtime. The canonical "when was this repo
+            # last touched" answer is the last commit time. Override here
+            # so the JSON output, the cache, and every downstream display
+            # all see the same correct value.
+            if (
+                project.type is ProjectType.GIT
+                and project.metadata.last_commit_ts is not None
+            ):
+                project.last_modified = project.metadata.last_commit_ts
             project.metadata.status = status.compute_status(project)
 
     payload = [p.model_dump(mode="json") for p in projects]
