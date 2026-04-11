@@ -8,6 +8,7 @@ by `test_scanner.py`; here we only verify the CLI wiring.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,18 @@ from armillary import cli
 from armillary.cli import app
 
 runner = CliRunner()
+
+# Strips SGR / cursor control sequences from captured CLI output. Click and
+# rich-based typer error rendering wrap option names in colour codes whenever
+# they think the output is going to a terminal — which happens on GitHub
+# Actions runners but not on a typical local pytest invocation. Substring
+# assertions like `"max-depth" in stdout` would otherwise see
+# `--\x1b[1;36mmax\x1b[0m\x1b[1;36m-depth\x1b[0m` and silently miss.
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_ESCAPE_RE.sub("", text)
 
 
 # --- helpers ----------------------------------------------------------------
@@ -116,7 +129,8 @@ def test_scan_requires_umbrella_flag() -> None:
 
     assert result.exit_code != 0
     # Typer/Click reports missing required option
-    assert "umbrella" in (result.stdout + result.stderr).lower()
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
+    assert "umbrella" in combined.lower()
 
 
 def test_scan_short_flags_match_long(tmp_path: Path) -> None:
@@ -140,7 +154,7 @@ def test_scan_rejects_max_depth_out_of_range(tmp_path: Path, bad_value: str) -> 
     result = runner.invoke(app, ["scan", "-u", str(tmp_path), "--max-depth", bad_value])
 
     assert result.exit_code != 0
-    combined = result.stdout + (result.stderr or "")
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
     assert "Traceback" not in combined
     assert "ValidationError" not in combined
     # Click's IntRange error mentions the option name and the bound
@@ -309,7 +323,7 @@ def test_start_errors_clearly_when_streamlit_missing(
     result = runner.invoke(app, ["start"])
 
     assert result.exit_code == 2
-    combined = result.stdout + (result.stderr or "")
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
     assert "streamlit" in combined.lower()
     assert "not installed" in combined.lower()
 
