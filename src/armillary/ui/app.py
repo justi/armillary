@@ -1,19 +1,14 @@
 """Streamlit dashboard for armillary.
 
-The dashboard is a **read-only consumer of the SQLite cache**. It never
-runs the scanner, never opens GitPython, never reads README files —
-that all happens in `armillary scan` from the CLI. Streamlit reruns
-the whole script on every interaction, so anything expensive in this
-file would tank the dashboard the moment a user with 100+ projects
-clicked a filter.
+The dashboard is a **read-only consumer of the SQLite cache** for every
+rerender. The hot path (filter click, search submit, page navigation)
+never walks the filesystem or opens GitPython — that work is bounded
+to the explicit "Scan now" button and the per-detail-page `git log`.
+Streamlit reruns the whole script on every interaction; anything
+expensive in the rerender path would tank a 100+ project view.
 
 The two views (overview table and per-project detail) live in the same
 script and route via `st.query_params["project"]`.
-
-The dashboard does call `git log` (subprocess) on the detail view to
-show recent commits, and `ripgrep` (via `armillary.search.LiteralSearch`)
-when the user submits a search. Both are user-triggered and bounded —
-not in the per-rerun hot path.
 """
 
 from __future__ import annotations
@@ -37,6 +32,8 @@ import streamlit as st  # noqa: E402
 
 from armillary import __version__  # noqa: E402
 from armillary import launcher as launcher_mod  # noqa: E402
+from armillary import metadata as metadata_mod  # noqa: E402
+from armillary import status as status_mod  # noqa: E402
 from armillary.cache import Cache, default_db_path  # noqa: E402
 from armillary.config import (  # noqa: E402
     Config,
@@ -44,8 +41,14 @@ from armillary.config import (  # noqa: E402
     default_config_path,
     load_config,
 )
-from armillary.models import Project  # noqa: E402
-from armillary.search import LiteralSearch, SearchHit  # noqa: E402
+from armillary.models import Project, ProjectType, UmbrellaFolder  # noqa: E402
+from armillary.scanner import scan as scan_umbrellas_fn  # noqa: E402
+from armillary.search import (  # noqa: E402
+    KhojConfig,
+    KhojSearch,
+    LiteralSearch,
+    SearchHit,
+)
 
 st.set_page_config(
     page_title="armillary",
@@ -113,6 +116,65 @@ def _shorten_home(path: Path) -> str:
     return "~" + s[len(home) :] if s.startswith(home) else s
 
 
+# --- shared scan operation -------------------------------------------------
+
+
+def _run_dashboard_scan(cfg: Config | None) -> tuple[bool, str]:
+    """Walk the configured umbrellas, persist to cache, return status.
+
+    Mirrors the pipeline used by `cli.scan` and PR #16's
+    `_run_initial_scan_and_summary`: scanner → metadata → status compute
+    (with the `last_modified = max(fs, last_commit_ts)` lift for git
+    repos) → cache.upsert. Then clears Streamlit's data caches so the
+    rerender shows the fresh data.
+
+    Returns `(ok, message)`. The caller is responsible for `st.rerun()`.
+
+    This is the **only** place in the dashboard where filesystem walks
+    are allowed. The hot path stays read-only — this function only runs
+    when the user explicitly clicks "Scan filesystem now".
+    """
+    if cfg is None:
+        return False, "Config could not be loaded. Check your config.yaml syntax."
+    if not cfg.umbrellas:
+        return (
+            False,
+            "No umbrellas configured. Run `armillary config --init` from "
+            "your terminal to set up.",
+        )
+
+    try:
+        umbrellas = [
+            UmbrellaFolder(path=u.path, label=u.label, max_depth=u.max_depth)
+            for u in cfg.umbrellas
+        ]
+        projects = scan_umbrellas_fn(umbrellas)
+        metadata_mod.extract_all(projects)
+        for project in projects:
+            if project.metadata is None:
+                continue
+            if (
+                project.type is ProjectType.GIT
+                and project.metadata.last_commit_ts is not None
+                and project.metadata.last_commit_ts > project.last_modified
+            ):
+                project.last_modified = project.metadata.last_commit_ts
+            project.metadata.status = status_mod.compute_status(project)
+
+        with Cache() as cache:
+            cache.upsert(projects, write_metadata=True)
+            cache.prune_stale()
+    except Exception as exc:  # noqa: BLE001 — surface error to the UI, not crash
+        return False, f"Scan failed: {exc}"
+
+    # Both data caches must be cleared BEFORE the rerun so the next
+    # rerender reads fresh rows instead of the 60-second-stale TTL.
+    _load_overview_rows.clear()
+    _load_project.clear()
+
+    return True, f"Scanned {len(projects)} project(s)."
+
+
 # --- routing ---------------------------------------------------------------
 
 
@@ -132,21 +194,18 @@ def _render_overview() -> None:
     st.title("🔭 armillary")
     _render_header_caption()
 
+    cfg = _safe_load_config()
     rows = _load_overview_rows()
+
     if not rows:
-        st.info(
-            "No projects in cache yet. Run `armillary scan -u <path>` from "
-            "your terminal to populate the dashboard."
-        )
+        _render_empty_cache_state(cfg)
         return
 
-    cfg = _safe_load_config()
-
-    filters = _render_sidebar(rows)
+    filters = _render_sidebar(rows, cfg)
     name_filter = filters.pop("name_substring", "")
 
     # Top-level search bar — runs ripgrep across cached projects on demand.
-    _render_search_section(rows)
+    _render_search_section(rows, cfg)
 
     filtered = _apply_filters(rows, filters=filters, search=name_filter)
     _render_summary_metrics(filtered)
@@ -157,10 +216,48 @@ def _render_overview() -> None:
         return
 
     _render_table(filtered)
-    # cfg may be None if config is malformed; the table doesn't need it
-    # but we keep the variable around so future overview-level launcher
-    # affordances have a single place to plug in.
-    del cfg
+
+
+def _render_empty_cache_state(cfg: Config | None) -> None:
+    """Show a friendly first-launch screen with a real "Scan now" button.
+
+    Replaces the old text hint that told the user to "go to the terminal" —
+    that violated the rule "what you can't click in the UI doesn't exist".
+    """
+    st.subheader("🪐 Cache is empty")
+    st.write(
+        "armillary needs to walk the filesystem at least once to discover "
+        "your projects. Click the button below to run a scan against the "
+        "umbrellas in your config."
+    )
+
+    can_scan = cfg is not None and bool(cfg.umbrellas)
+
+    col_btn, col_help = st.columns([1, 2])
+    with col_btn:
+        if st.button(
+            "🔁 Scan filesystem now",
+            use_container_width=True,
+            disabled=not can_scan,
+            key="empty_state_scan",
+        ):
+            with st.spinner("Scanning…"):
+                ok, message = _run_dashboard_scan(cfg)
+            if ok:
+                st.success(message)
+                st.rerun()
+            else:
+                st.error(message)
+    with col_help:
+        if can_scan:
+            st.caption(
+                f"Will scan: {', '.join(_shorten_home(u.path) for u in cfg.umbrellas)}"
+            )
+        else:
+            st.warning(
+                "No umbrellas configured. Run `armillary config --init` "
+                "from your terminal first."
+            )
 
 
 def _render_header_caption() -> None:
@@ -192,27 +289,69 @@ def _render_header_caption() -> None:
 _SEARCH_STATE_KEY = "armillary_search_state"
 
 
-def _render_search_section(rows: list[dict[str, Any]]) -> None:
-    """Top-level ripgrep search across all cached projects.
+def _render_search_section(rows: list[dict[str, Any]], cfg: Config | None) -> None:
+    """Top-level search across all cached projects.
 
     PLAN.md §5: 'Global search bar at the top — first iteration:
-    ripgrep literal search'. Form-based so the search only fires
-    on submit, not on every keystroke. Results live in
-    `st.session_state` so they survive subsequent reruns triggered
-    by per-result navigation buttons (otherwise the early-return
-    after `submitted` would drop the entire results section on the
-    next click and the button events would never fire).
+    ripgrep literal search; second iteration: Khoj semantic search'.
+    Form-based so the search only fires on submit, not on every
+    keystroke. Results live in `st.session_state` so they survive
+    subsequent reruns triggered by per-result navigation buttons
+    (otherwise the early-return after `submitted` would drop the
+    entire results section on the next click and the button events
+    would never fire — PR #11 mid-PR fix).
+
+    Controls:
+    - text input for the query
+    - dropdown to restrict to one project (optional)
+    - Khoj toggle (only when `cfg.khoj.enabled` is True)
+    - max hits number input (1..500, default 50)
+    - Search submit button
     """
+    project_options = ["(all projects)"] + sorted(r["Name"] for r in rows)
+    khoj_available = cfg is not None and cfg.khoj.enabled
+
     with st.form("search_form", clear_on_submit=False):
+        # Row 1: query + Search button
         col_q, col_btn = st.columns([6, 1])
         with col_q:
             query = st.text_input(
-                "Search across project files (ripgrep)",
+                "Search across project files",
                 placeholder="Type a query and press Search…",
                 label_visibility="collapsed",
             )
         with col_btn:
             submitted = st.form_submit_button("🔍 Search", use_container_width=True)
+
+        # Row 2: filters / options
+        opt_cols = st.columns([3, 2, 2] if khoj_available else [3, 2, 2])
+        with opt_cols[0]:
+            project_pick = st.selectbox(
+                "Restrict to project",
+                project_options,
+                index=0,
+            )
+        with opt_cols[1]:
+            max_hits = st.number_input(
+                "Max hits",
+                min_value=1,
+                max_value=500,
+                value=50,
+                step=10,
+            )
+        with opt_cols[2]:
+            if khoj_available:
+                use_khoj = st.checkbox(
+                    "🧠 Semantic (Khoj)",
+                    value=False,
+                    help=(
+                        "Use Khoj's semantic search instead of ripgrep. "
+                        "Falls back to ripgrep on any Khoj failure."
+                    ),
+                )
+            else:
+                use_khoj = False
+                st.caption("_Khoj disabled in config_")
 
     if submitted:
         cleaned = query.strip()
@@ -220,33 +359,123 @@ def _render_search_section(rows: list[dict[str, Any]]) -> None:
             # Empty submit clears any previous results — gives the user
             # an explicit way to dismiss the section.
             st.session_state.pop(_SEARCH_STATE_KEY, None)
-        elif not LiteralSearch.is_available():
-            st.session_state[_SEARCH_STATE_KEY] = {
-                "query": cleaned,
-                "error": (
-                    "ripgrep (`rg`) is not on PATH. Install it "
-                    "(`brew install ripgrep`) to use search."
-                ),
-            }
         else:
-            backend = LiteralSearch()
-            hits_by_project: list[tuple[dict[str, Any], list[SearchHit]]] = []
-            with st.spinner(f"Searching {len(rows)} projects for '{cleaned}'…"):
-                for row in rows:
-                    project_path = Path(row["_path"])
-                    try:
-                        hits = backend.search(
-                            cleaned, root=project_path, max_results=20
-                        )
-                    except Exception:  # noqa: BLE001 — best effort, skip broken
-                        continue
-                    if hits:
-                        hits_by_project.append((row, hits))
-            st.session_state[_SEARCH_STATE_KEY] = {
-                "query": cleaned,
-                "results": hits_by_project,
-            }
+            _run_search_and_store(
+                rows=rows,
+                cfg=cfg,
+                query=cleaned,
+                project_pick=(
+                    None if project_pick == "(all projects)" else project_pick
+                ),
+                max_hits=int(max_hits),
+                use_khoj=use_khoj,
+            )
 
+    _render_search_results()
+
+
+def _run_search_and_store(
+    *,
+    rows: list[dict[str, Any]],
+    cfg: Config | None,
+    query: str,
+    project_pick: str | None,
+    max_hits: int,
+    use_khoj: bool,
+) -> None:
+    """Execute the chosen search backend, persist results to session state.
+
+    Stores under `_SEARCH_STATE_KEY` so subsequent reruns (triggered by
+    "Open project detail" buttons) can keep rendering the results
+    without re-querying.
+    """
+    backend, backend_label, error = _build_dashboard_search_backend(cfg, use_khoj)
+    if error is not None:
+        st.session_state[_SEARCH_STATE_KEY] = {"query": query, "error": error}
+        return
+
+    # Restrict the projects we iterate to either the selected one or all.
+    if project_pick is not None:
+        target_rows = [r for r in rows if r["Name"] == project_pick]
+    else:
+        target_rows = rows
+
+    hits_by_project: list[tuple[dict[str, Any], list[SearchHit]]] = []
+    total_hits = 0
+    with st.spinner(f"Searching {len(target_rows)} project(s) for '{query}'…"):
+        for row in target_rows:
+            if total_hits >= max_hits:
+                break
+            project_path = Path(row["_path"])
+            remaining = max_hits - total_hits
+            try:
+                hits = backend.search(
+                    query,
+                    root=project_path,
+                    max_results=remaining,
+                )
+            except Exception:  # noqa: BLE001 — best effort, skip broken project
+                continue
+            if hits:
+                hits_by_project.append((row, hits))
+                total_hits += len(hits)
+
+    st.session_state[_SEARCH_STATE_KEY] = {
+        "query": query,
+        "results": hits_by_project,
+        "backend": backend_label,
+        "max_hits": max_hits,
+    }
+
+
+def _build_dashboard_search_backend(
+    cfg: Config | None, use_khoj: bool
+) -> tuple[Any, str, str | None]:
+    """Pick a backend for the search submit, with the same fallback
+    semantics as `cli.search` but adapted to the dashboard:
+
+    - When `use_khoj` is False: LiteralSearch (ripgrep). Returns an
+      error string if `rg` is missing.
+    - When `use_khoj` is True: KhojSearch with LiteralSearch fallback
+      if `rg` is also available, or no fallback otherwise.
+
+    Returns `(backend, label_for_banner, error_or_None)`.
+    """
+    if not use_khoj:
+        if not LiteralSearch.is_available():
+            return (
+                None,
+                "ripgrep",
+                "ripgrep (`rg`) is not on PATH. Install it (`brew install "
+                "ripgrep`) to use literal search.",
+            )
+        return LiteralSearch(), "ripgrep", None
+
+    # Khoj path. cfg is guaranteed non-None+enabled here because the
+    # checkbox only renders when khoj is enabled.
+    assert cfg is not None
+    fallback: LiteralSearch | None = (
+        LiteralSearch() if LiteralSearch.is_available() else None
+    )
+    backend = KhojSearch(
+        config=KhojConfig(
+            api_url=cfg.khoj.api_url,
+            api_key=cfg.khoj.api_key,
+            timeout_seconds=cfg.khoj.timeout_seconds,
+        ),
+        fallback=fallback,
+    )
+    return backend, "semantic (Khoj)", None
+
+
+def _render_search_results() -> None:
+    """Render the persisted search results from session state.
+
+    Lives in its own function (not inside `_render_search_section`)
+    so the rendering pass runs on EVERY rerun — not only on the
+    rerun where the form was submitted. That's the PR #11 mid-PR fix
+    for "results disappear when you click a per-result button".
+    """
     state = st.session_state.get(_SEARCH_STATE_KEY)
     if not state:
         return
@@ -258,16 +487,17 @@ def _render_search_section(rows: list[dict[str, Any]]) -> None:
         return
 
     hits_by_project = state["results"]
+    backend_label = state.get("backend", "ripgrep")
     total_hits = sum(len(h) for _, h in hits_by_project)
     if total_hits == 0:
-        st.warning(f"No matches for '{saved_query}'.")
+        st.warning(f"No matches for '{saved_query}' ({backend_label}).")
         return
 
     header_col, clear_col = st.columns([5, 1])
     with header_col:
         st.success(
             f"Found {total_hits} match(es) for '{saved_query}' "
-            f"in {len(hits_by_project)} project(s)."
+            f"in {len(hits_by_project)} project(s) ({backend_label})."
         )
     with clear_col:
         if st.button("✕ Clear", use_container_width=True, key="clear_search"):
@@ -294,7 +524,7 @@ def _render_search_section(rows: list[dict[str, Any]]) -> None:
     st.divider()
 
 
-def _render_sidebar(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _render_sidebar(rows: list[dict[str, Any]], cfg: Config | None) -> dict[str, Any]:
     with st.sidebar:
         st.header("Filters")
 
@@ -312,13 +542,40 @@ def _render_sidebar(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
         st.divider()
         st.caption(f"{len(rows)} projects in cache")
-        if st.button("🔄 Refresh from cache", use_container_width=True):
-            # Both data caches need to be invalidated — otherwise reopening
-            # a project detail page after a scan would still show the old
-            # branch / status / README for up to a minute.
+
+        # Two distinct refresh paths:
+        #   "Reload from cache" — cheap, just rereads SQLite (clears the
+        #   60-second TTL on st.cache_data). Use after `armillary scan`
+        #   from a terminal.
+        #   "Scan filesystem now" — expensive, walks the umbrellas, runs
+        #   metadata extraction, computes status, persists to cache.
+        if st.button(
+            "🔄 Reload from cache",
+            use_container_width=True,
+            key="sidebar_reload",
+        ):
             _load_overview_rows.clear()
             _load_project.clear()
             st.rerun()
+
+        scan_disabled = cfg is None or not cfg.umbrellas
+        scan_help = None
+        if scan_disabled:
+            scan_help = "No umbrellas in config. Run `armillary config --init`."
+        if st.button(
+            "🔁 Scan filesystem now",
+            use_container_width=True,
+            disabled=scan_disabled,
+            help=scan_help,
+            key="sidebar_scan",
+        ):
+            with st.spinner("Scanning…"):
+                ok, message = _run_dashboard_scan(cfg)
+            if ok:
+                st.success(message)
+                st.rerun()
+            else:
+                st.error(message)
 
     return {
         "status": status_pick,
