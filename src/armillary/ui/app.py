@@ -404,7 +404,7 @@ def _render_search_section(rows: list[dict[str, Any]], cfg: Config | None) -> No
                 )
             else:
                 use_khoj = False
-                st.caption("_Khoj disabled in config_")
+                st.caption("_Semantic search off — enable in ⚙️ Settings → Khoj_")
 
     if submitted:
         cleaned = query.strip()

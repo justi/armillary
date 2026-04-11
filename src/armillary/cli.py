@@ -1046,10 +1046,17 @@ def _detect_khoj_and_maybe_enable(
     *,
     non_interactive: bool,
 ) -> None:
-    """Probe localhost Khoj. If reachable AND user agrees, rewrite the
-    config with `khoj.enabled: true`. Silent on any failure (timeout,
-    connection refused, non-200, etc.) — Khoj is opt-in, missing it
-    is the normal case for most users.
+    """Probe localhost Khoj. If reachable, auto-enable it in the config.
+
+    Policy: if the user has Khoj running at localhost:42110 at init
+    time, they almost certainly want it. Asking `[y/N]` with a default
+    of N was user-hostile — users who pressed Enter ended up with
+    semantic search silently disabled and then wondered why the
+    dashboard said "Khoj disabled in config". Auto-enable is the
+    default; the Settings page (PR #18) is the explicit opt-out.
+
+    Silent on any probe failure (timeout, connection refused, non-200,
+    etc.) — Khoj is optional, most users will not have it running.
     """
     try:
         with urlopen(_KHOJ_HEALTH_URL, timeout=_KHOJ_HEALTH_TIMEOUT) as response:
@@ -1061,18 +1068,16 @@ def _detect_khoj_and_maybe_enable(
 
     typer.echo("")
     typer.secho("🧠 Detected Khoj at localhost:42110.", fg=typer.colors.CYAN)
-    if non_interactive:
-        typer.echo("  --non-interactive: skipping Khoj enable prompt.")
-        return
-
-    if not typer.confirm("  Enable semantic search?", default=False):
-        return
 
     config_path.write_text(
         _render_config_yaml(chosen, khoj_enabled=True),
         encoding="utf-8",
     )
-    typer.secho(f"  ✓ Enabled khoj in {config_path.name}.", fg=typer.colors.GREEN)
+    typer.secho(
+        f"  ✓ Enabled semantic search in {config_path.name}. "
+        "Toggle it off via the dashboard's Settings → Khoj tab.",
+        fg=typer.colors.GREEN,
+    )
 
 
 def _detect_claude_code_and_offer_bridge(

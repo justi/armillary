@@ -1165,11 +1165,13 @@ def test_config_init_launcher_detection_lists_available_and_missing(
     del real_which  # silence linter
 
 
-def test_config_init_khoj_detection_offers_enable_when_health_responds(
+def test_config_init_khoj_detection_auto_enables_when_health_responds(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Setup ceremony step 4: when localhost Khoj responds 200 and the
-    user says yes, the YAML is rewritten with `khoj.enabled: true`."""
+    """Setup ceremony step 4: when localhost Khoj responds 200, the YAML
+    is auto-rewritten with `khoj.enabled: true` — no prompt. Users who
+    have Khoj running almost certainly want it; the dashboard Settings
+    page is the explicit opt-out."""
     import yaml as _yaml
 
     fake_home = tmp_path / "home"
@@ -1182,7 +1184,7 @@ def test_config_init_khoj_detection_offers_enable_when_health_responds(
     config_file = tmp_path / "armillary" / "config.yaml"
     monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
 
-    # Picker accepts all + Khoj prompt says y. Claude prompt EOFs to N.
+    # Picker accepts all. No Khoj prompt expected anymore.
     result = runner.invoke(
         app,
         [
@@ -1190,10 +1192,46 @@ def test_config_init_khoj_detection_offers_enable_when_health_responds(
             "--init",
             "--skip-claude-detect",
         ],
-        input="all\ny\n",
+        input="all\n",
     )
     assert result.exit_code == 0, result.stdout
 
+    parsed = _yaml.safe_load(config_file.read_text())
+    assert parsed.get("khoj", {}).get("enabled") is True
+
+    out = _strip_ansi(result.stdout)
+    assert "Detected Khoj" in out
+    assert "Enabled semantic search" in out
+
+
+def test_config_init_khoj_auto_enables_in_non_interactive_too(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Non-interactive mode also auto-enables a reachable Khoj — the
+    whole point of auto-enable is that Khoj availability is a clear
+    signal of user intent, no matter which init flavour ran."""
+    import yaml as _yaml
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    _mkrepo(fake_home / "Projects" / "thing")
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    monkeypatch.setattr(cli, "urlopen", _fake_urlopen_200)
+
+    config_file = tmp_path / "armillary" / "config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+
+    result = runner.invoke(
+        app,
+        [
+            "config",
+            "--init",
+            "--non-interactive",
+            "--skip-claude-detect",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
     parsed = _yaml.safe_load(config_file.read_text())
     assert parsed.get("khoj", {}).get("enabled") is True
 
