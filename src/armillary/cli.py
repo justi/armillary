@@ -773,8 +773,17 @@ def _run_initial_scan_and_summary(
     chosen: list[bootstrap.UmbrellaCandidate],
 ) -> None:
     """Walk the chosen umbrellas, extract metadata, persist to cache,
-    print a per-status summary. Errors are caught and printed as a
-    friendly warning — init must not abort if the first scan fails.
+    print a per-status summary.
+
+    The cache is **cleared first** so a re-run of `armillary config
+    --init` (after the user removed the old config) leaves the cache
+    containing exactly the new umbrella selection — not stale rows
+    from a previous setup. `prune_stale()` is too lenient here: it
+    only deletes rows older than 7 days, so recent entries from a
+    removed umbrella would persist for up to a week.
+
+    Errors are caught and printed as a friendly warning — init must
+    not abort if the first scan fails.
     """
     typer.echo("")
     typer.secho("Running initial scan…", fg=typer.colors.CYAN)
@@ -797,8 +806,10 @@ def _run_initial_scan_and_summary(
             project.metadata.status = status.compute_status(project)
 
         with Cache() as cache:
+            # Init is "fresh setup" — start from a clean slate so no
+            # rows from a removed umbrella linger in the dashboard.
+            cache.clear_projects()
             cache.upsert(projects, write_metadata=True)
-            cache.prune_stale()
     except Exception as exc:  # noqa: BLE001 — never abort init on scan failure
         typer.secho(
             f"⚠ Initial scan failed: {exc}",

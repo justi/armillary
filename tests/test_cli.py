@@ -1255,6 +1255,69 @@ def test_config_init_blank_does_not_run_setup_ceremony(
         assert cache.count() == 0
 
 
+def test_config_init_clears_stale_cache_rows(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Regression for Codex review on PR #16: re-running init after
+    removing the old config must NOT leave stale projects from the
+    previous umbrella selection in the cache.
+
+    `prune_stale()` only deletes rows older than 7 days; we need to
+    actively wipe the cache before the new scan, otherwise recent
+    rows from a removed umbrella linger in `armillary list` and the
+    dashboard for up to a week.
+    """
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+
+    # Pre-populate the cache with a project from a "previous" umbrella
+    # that is NOT going to be in the new config.
+    from datetime import datetime as _dt
+
+    from armillary.models import Project, ProjectType
+
+    obsolete_dir = fake_home / "old-umbrella"
+    obsolete_dir.mkdir(parents=True)
+    obsolete = Project(
+        path=obsolete_dir / "obsolete-project",
+        name="obsolete-project",
+        type=ProjectType.GIT,
+        umbrella=obsolete_dir,
+        last_modified=_dt.now(),
+    )
+    with Cache() as cache:
+        cache.upsert([obsolete])
+        assert cache.count() == 1
+
+    # New umbrella, completely different
+    new_umbrella = fake_home / "Projects"
+    _mkrepo(new_umbrella / "fresh-project")
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    config_file = tmp_path / "armillary" / "config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+
+    result = runner.invoke(
+        app,
+        [
+            "config",
+            "--init",
+            "--non-interactive",
+            "--skip-khoj-detect",
+            "--skip-claude-detect",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    # The obsolete project must be GONE; only fresh-project remains.
+    with Cache() as cache:
+        names = {p.name for p in cache.list_projects()}
+    assert names == {"fresh-project"}, (
+        f"stale rows from previous setup leaked into post-init cache: {names}"
+    )
+
+
 def test_config_init_failed_initial_scan_does_not_abort_init(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
