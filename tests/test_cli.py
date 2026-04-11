@@ -27,21 +27,38 @@ def _isolate_state(
     tmp_path_factory: pytest.TempPathFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Redirect both the SQLite cache and the config file to per-test tmp.
+    """Redirect cache + config + Khoj probe to safe defaults.
 
-    Without this, every `armillary scan` invocation in test_cli.py would
-    write into the user's real `~/Library/Application Support/armillary/
-    cache.db` AND read umbrellas from the user's real config — which
-    means tests like `test_scan_requires_umbrella_flag` (which expects
-    a friendly error when there are no umbrellas to resolve) would
-    accidentally succeed because the developer's local config has
-    umbrellas declared. Autouse so individual tests cannot forget.
+    Three things every test gets for free:
+
+    1. SQLite cache redirected to a per-test tmp file so `armillary scan`
+       does not write to the user's real `~/Library/Application Support/
+       armillary/cache.db`.
+    2. `ARMILLARY_CONFIG` pointed at a non-existent path so the test never
+       reads the developer's local umbrellas.
+    3. `cli.urlopen` stubbed to raise `URLError` so `armillary config
+       --init` never accidentally probes the dev machine's localhost
+       Khoj. Tests that exercise the Khoj detection path explicitly
+       re-monkeypatch this attribute.
+
+    Without #1+#2 a test like `test_scan_requires_umbrella_flag` would
+    silently succeed because the developer's config has umbrellas. Without
+    #3 a test running `--init` would block on a real network call to
+    `localhost:42110` and either time out or pop a confirmation prompt
+    depending on what's running.
     """
+    from urllib.error import URLError as _URLError
+
     isolation_dir = tmp_path_factory.mktemp("armi-isolate")
     db_path = isolation_dir / "cache.db"
     config_path = isolation_dir / "missing-config.yaml"  # intentionally absent
     monkeypatch.setenv("ARMILLARY_CACHE_DB", str(db_path))
     monkeypatch.setenv("ARMILLARY_CONFIG", str(config_path))
+
+    def _no_khoj(*args: Any, **kwargs: Any) -> Any:
+        raise _URLError("test isolation: Khoj health probe disabled")
+
+    monkeypatch.setattr(cli, "urlopen", _no_khoj)
 
 
 # Strips SGR / cursor control sequences from captured CLI output. Click and
@@ -906,6 +923,378 @@ def test_config_init_yaml_handles_special_characters_in_path(
     cfg = load_config(config_file)
     assert len(cfg.umbrellas) == 1
     assert "Work #archive" in str(cfg.umbrellas[0].path)
+
+
+# --- PR #16: setup ceremony in `config --init` ----------------------------
+
+
+def _fake_urlopen_200(*args: Any, **kwargs: Any) -> Any:
+    """Fake urlopen returning a 200 response — for Khoj-detected tests."""
+    from io import BytesIO
+
+    class FakeResponse:
+        status = 200
+
+        def __init__(self) -> None:
+            self._buf = BytesIO(b'{"status": "ok"}')
+
+        def read(self) -> bytes:
+            return self._buf.read()
+
+        def getcode(self) -> int:
+            return 200
+
+        def __enter__(self) -> FakeResponse:
+            return self
+
+        def __exit__(self, *exc: Any) -> None:
+            return None
+
+    return FakeResponse()
+
+
+def test_config_init_runs_initial_scan_and_populates_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Setup ceremony step 1: after writing YAML, run a real scan and
+    populate the SQLite cache so the user can immediately
+    `armillary list` / `armillary start` without a separate scan."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    work = fake_home / "Projects"
+    _mkrepo(work / "alpha")
+    _mkrepo(work / "beta")
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    config_file = tmp_path / "armillary" / "config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+
+    result = runner.invoke(
+        app,
+        [
+            "config",
+            "--init",
+            "--non-interactive",
+            "--skip-khoj-detect",
+            "--skip-claude-detect",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    # Cache must contain both projects after init
+    with Cache() as cache:
+        names = {p.name for p in cache.list_projects()}
+    assert names == {"alpha", "beta"}
+
+    out = _strip_ansi(result.stdout)
+    assert "Indexed 2 project" in out
+
+
+def test_config_init_summary_counts_status_correctly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Setup ceremony step 2: per-status summary line printed after scan."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    work = fake_home / "Projects"
+    _mkrepo(work / "git-thing")
+    idea = work / "idea-thing"
+    idea.mkdir()
+    (idea / "notes.md").write_text("notes")
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    config_file = tmp_path / "armillary" / "config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+
+    result = runner.invoke(
+        app,
+        [
+            "config",
+            "--init",
+            "--non-interactive",
+            "--skip-khoj-detect",
+            "--skip-claude-detect",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    out = _strip_ansi(result.stdout)
+    assert "1 git, 1 idea" in out
+    # Status line is "N ACTIVE, M PAUSED, ..."
+    assert "ACTIVE" in out
+    assert "DORMANT" in out or "IDEA" in out  # at least one status counted
+
+
+def test_config_init_launcher_detection_lists_available_and_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Setup ceremony step 3: cross-checks `cfg.launchers` against
+    `shutil.which` and prints which are reachable on PATH."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    _mkrepo(fake_home / "Projects" / "thing")
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    # Pretend `cursor` and `code` are on PATH but `zed` and `claude` are not.
+    real_which = cli.shutil_which
+
+    def fake_which(name: str) -> str | None:
+        if name in {"cursor", "code", "open"}:
+            return f"/usr/bin/{name}"
+        return None
+
+    import shutil as _shutil
+
+    monkeypatch.setattr(_shutil, "which", fake_which)
+
+    config_file = tmp_path / "armillary" / "config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+
+    result = runner.invoke(
+        app,
+        [
+            "config",
+            "--init",
+            "--non-interactive",
+            "--skip-khoj-detect",
+            "--skip-claude-detect",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    out = _strip_ansi(result.stdout)
+    assert "available" in out.lower()
+    assert "cursor" in out
+    assert "missing" in out.lower()
+    assert "zed" in out or "claude" in out
+    del real_which  # silence linter
+
+
+def test_config_init_khoj_detection_offers_enable_when_health_responds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Setup ceremony step 4: when localhost Khoj responds 200 and the
+    user says yes, the YAML is rewritten with `khoj.enabled: true`."""
+    import yaml as _yaml
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    _mkrepo(fake_home / "Projects" / "thing")
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    monkeypatch.setattr(cli, "urlopen", _fake_urlopen_200)
+
+    config_file = tmp_path / "armillary" / "config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+
+    # Picker accepts all + Khoj prompt says y. Claude prompt EOFs to N.
+    result = runner.invoke(
+        app,
+        [
+            "config",
+            "--init",
+            "--skip-claude-detect",
+        ],
+        input="all\ny\n",
+    )
+    assert result.exit_code == 0, result.stdout
+
+    parsed = _yaml.safe_load(config_file.read_text())
+    assert parsed.get("khoj", {}).get("enabled") is True
+
+
+def test_config_init_khoj_detection_silent_when_unreachable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Setup ceremony step 4 negative: when Khoj health probe fails
+    (autouse fixture default), no Khoj prompt appears in stdout and
+    the config does NOT have khoj.enabled set."""
+    import yaml as _yaml
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    _mkrepo(fake_home / "Projects" / "thing")
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    # Note: do NOT override the autouse `_no_khoj` stub.
+
+    config_file = tmp_path / "armillary" / "config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+
+    result = runner.invoke(
+        app,
+        [
+            "config",
+            "--init",
+            "--non-interactive",
+            "--skip-claude-detect",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    out = _strip_ansi(result.stdout)
+    assert "Detected Khoj" not in out
+    parsed = _yaml.safe_load(config_file.read_text())
+    assert parsed.get("khoj") is None or not parsed["khoj"].get("enabled")
+
+
+def test_config_init_skip_khoj_flag_skips_detection_entirely(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Setup ceremony step 4 with --skip-khoj-detect: even if Khoj
+    responds 200, no prompt appears and no enable happens."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    _mkrepo(fake_home / "Projects" / "thing")
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    monkeypatch.setattr(cli, "urlopen", _fake_urlopen_200)
+
+    config_file = tmp_path / "armillary" / "config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+
+    result = runner.invoke(
+        app,
+        [
+            "config",
+            "--init",
+            "--non-interactive",
+            "--skip-khoj-detect",
+            "--skip-claude-detect",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    out = _strip_ansi(result.stdout)
+    assert "Detected Khoj" not in out
+
+
+def test_config_init_claude_code_detection_when_dot_claude_exists(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Setup ceremony step 5: presence of `~/.claude/` triggers a
+    prompt mentioning the bridge install path."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    (fake_home / ".claude").mkdir()
+    _mkrepo(fake_home / "Projects" / "thing")
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    config_file = tmp_path / "armillary" / "config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+
+    # Picker accepts all, Claude prompt says y.
+    result = runner.invoke(
+        app,
+        [
+            "config",
+            "--init",
+            "--skip-khoj-detect",
+        ],
+        input="all\ny\n",
+    )
+    assert result.exit_code == 0, result.stdout
+
+    out = _strip_ansi(result.stdout)
+    assert "Found Claude Code" in out
+    # PR #16 only points at the equivalent command — actual install is PR #19
+    assert "repos-index.md" in out
+
+
+def test_config_init_claude_code_detection_skipped_when_no_dot_claude(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Without `~/.claude/`, the Claude detection step is silent."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    _mkrepo(fake_home / "Projects" / "thing")
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    config_file = tmp_path / "armillary" / "config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+
+    result = runner.invoke(
+        app,
+        [
+            "config",
+            "--init",
+            "--non-interactive",
+            "--skip-khoj-detect",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    out = _strip_ansi(result.stdout)
+    assert "Found Claude Code" not in out
+
+
+def test_config_init_blank_does_not_run_setup_ceremony(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--init --blank` writes the placeholder and exits — no scan, no
+    detection, no summary, nothing in cache."""
+    config_file = tmp_path / "armillary" / "config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+
+    result = runner.invoke(app, ["config", "--init", "--blank"])
+    assert result.exit_code == 0, result.stdout
+
+    out = _strip_ansi(result.stdout)
+    assert "Running initial scan" not in out
+    assert "Indexed" not in out
+    assert "Detected Khoj" not in out
+    assert "Found Claude Code" not in out
+
+    # Cache must be empty too
+    with Cache() as cache:
+        assert cache.count() == 0
+
+
+def test_config_init_failed_initial_scan_does_not_abort_init(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Setup ceremony robustness: a crash inside the initial scan must
+    NOT abort init. The YAML is already written and the user is in a
+    recoverable state — print a warning and keep going."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    _mkrepo(fake_home / "Projects" / "thing")
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    # Make metadata.extract_all blow up on every call
+    def boom(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("simulated GitPython explosion")
+
+    from armillary import metadata as metadata_mod
+
+    monkeypatch.setattr(metadata_mod, "extract_all", boom)
+
+    config_file = tmp_path / "armillary" / "config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+
+    result = runner.invoke(
+        app,
+        [
+            "config",
+            "--init",
+            "--non-interactive",
+            "--skip-khoj-detect",
+            "--skip-claude-detect",
+        ],
+    )
+    # Init must NOT abort on scan failure
+    assert result.exit_code == 0, result.stdout
+    assert config_file.exists()
+
+    out = _strip_ansi(result.stdout)
+    assert "Initial scan failed" in out
+    assert "simulated GitPython explosion" in out
 
 
 def test_config_init_no_candidates_falls_back_to_blank(

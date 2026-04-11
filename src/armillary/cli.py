@@ -10,6 +10,8 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import urlopen
 
 import typer
 from rich.console import Console
@@ -26,6 +28,12 @@ from armillary.config import (
 from armillary.models import ProjectType, Status, UmbrellaFolder
 from armillary.scanner import scan as scan_umbrellas
 from armillary.search import KhojConfig, KhojSearch, LiteralSearch
+
+# Khoj health probe used by `config --init` to offer auto-enable.
+# 1-second timeout — Khoj either runs locally and answers immediately,
+# or it's not there. We don't want init to hang on a slow remote.
+_KHOJ_HEALTH_URL = "http://localhost:42110/api/health"
+_KHOJ_HEALTH_TIMEOUT = 1.0
 
 app = typer.Typer(
     name="armillary",
@@ -504,18 +512,46 @@ def config(
         "--init",
         help=(
             "Create a config at the default path. By default scans `~/` for "
-            "umbrella folder candidates and asks you to pick which to include."
+            "umbrella folder candidates, asks you to pick, writes the YAML, "
+            "runs an initial scan, and offers to enable Khoj / Claude Code "
+            "bridges if it detects them."
         ),
     ),
     non_interactive: bool = typer.Option(
         False,
         "--non-interactive",
-        help="With --init, accept all detected candidates without asking.",
+        help=(
+            "With --init, accept all detected candidates without asking and "
+            "treat Khoj / Claude Code prompts as 'no'."
+        ),
     ),
     blank: bool = typer.Option(
         False,
         "--blank",
-        help="With --init, write a minimal placeholder config without scanning.",
+        help=(
+            "With --init, write a minimal placeholder config without scanning, "
+            "without setup ceremony."
+        ),
+    ),
+    skip_scan: bool = typer.Option(
+        False,
+        "--skip-scan",
+        help="With --init, skip the initial filesystem scan + cache populate.",
+    ),
+    skip_launcher_check: bool = typer.Option(
+        False,
+        "--skip-launcher-check",
+        help="With --init, skip listing which launchers are on PATH.",
+    ),
+    skip_khoj_detect: bool = typer.Option(
+        False,
+        "--skip-khoj-detect",
+        help="With --init, skip probing localhost for a running Khoj.",
+    ),
+    skip_claude_detect: bool = typer.Option(
+        False,
+        "--skip-claude-detect",
+        help="With --init, skip checking for ~/.claude/.",
     ),
 ) -> None:
     """Open the config file in $EDITOR (or print its path / create it).
@@ -523,13 +559,18 @@ def config(
     With no flags, opens `~/.config/armillary/config.yaml` in the editor
     pointed to by `$EDITOR` (or `nano` as a sensible fallback). Use
     `--path` to just print the location, or `--init` to create the
-    file:
+    file as part of a one-stop setup ceremony:
 
-    - `--init` (default): scans `~/` for umbrella candidates (folders
-      with multiple git repos or conventional names like `Projects`,
-      `repos`, `code`), asks you to pick, writes the selection.
-    - `--init --non-interactive`: same scan, takes all candidates.
-    - `--init --blank`: writes a minimal placeholder file without scanning.
+    1. Scans `~/` for umbrella candidates and asks you to pick
+    2. Runs an initial `armillary scan` to populate the cache
+    3. Prints a per-status summary of what was indexed
+    4. Lists which configured launchers are on PATH
+    5. Probes localhost for Khoj and offers to enable semantic search
+    6. Detects `~/.claude/` and offers to install the AI bridge
+    7. Prints next-step hints
+
+    Each numbered step has a `--skip-*` flag for scripted setups.
+    `--blank` writes the YAML and exits without running the ceremony.
 
     PLAN.md §5 "Bootstrap": this is the two-phase first-run experience.
     """
@@ -540,11 +581,11 @@ def config(
         return
 
     if init:
-        # `--init` is a "create" operation: write the file and exit.
-        # Falling through to the editor below would be surprising — the
-        # user just chose what to put in the file, they do not expect
-        # nano to pop up immediately afterwards. Use plain
-        # `armillary config` if they want to edit it.
+        # `--init` is a "create" operation: write the file (with whatever
+        # ceremony the flags allow) and exit. Falling through to the
+        # editor below would be surprising — the user just walked through
+        # the picker + setup ceremony, they do not expect nano to pop up
+        # afterwards. Use plain `armillary config` if they want to edit.
         if config_path.exists():
             typer.secho(
                 f"{config_path} already exists. "
@@ -554,7 +595,15 @@ def config(
                 err=True,
             )
             raise typer.Exit(1)
-        _init_config_file(config_path, non_interactive=non_interactive, blank=blank)
+        _init_config_file(
+            config_path,
+            non_interactive=non_interactive,
+            blank=blank,
+            skip_scan=skip_scan,
+            skip_launcher_check=skip_launcher_check,
+            skip_khoj_detect=skip_khoj_detect,
+            skip_claude_detect=skip_claude_detect,
+        )
         return
 
     if not config_path.exists():
@@ -606,12 +655,25 @@ def _init_config_file(
     *,
     non_interactive: bool,
     blank: bool,
+    skip_scan: bool = False,
+    skip_launcher_check: bool = False,
+    skip_khoj_detect: bool = False,
+    skip_claude_detect: bool = False,
 ) -> None:
-    """Discover umbrella candidates, ask the user, write the config.
+    """Discover umbrellas, write config, run setup ceremony.
 
-    The three modes (`--blank`, `--non-interactive`, default interactive)
-    differ only in how umbrellas are chosen — the YAML render is the same
-    for all of them.
+    Modes:
+    - `blank=True` writes the placeholder file and exits — no scan,
+      no detection, no ceremony. Escape hatch for users who want to
+      hand-edit YAML themselves.
+    - `non_interactive=True` accepts every detected candidate without
+      asking the user, and treats Khoj/Claude prompts as 'no'.
+    - default (no flags) runs the full ceremony: pick → write →
+      scan → summary → launcher check → Khoj detect → Claude
+      detect → final hint.
+
+    Each `skip_*` flag short-circuits one ceremony step for scripted
+    setups (and tests). `blank=True` implies all skips.
     """
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -677,7 +739,189 @@ def _init_config_file(
             f"    - {_shorten_home_str(candidate.path)}  "
             f"({candidate.git_count} git, {candidate.idea_count} idea)"
         )
-    typer.echo("\nNext: armillary scan")
+
+    # ----- setup ceremony -------------------------------------------------
+    # Each step is independent and may be skipped via its flag. Errors in
+    # any step print a friendly message and continue — init never aborts
+    # because of a setup ceremony failure (the YAML is already written and
+    # the user is recoverable).
+
+    if not skip_scan:
+        _run_initial_scan_and_summary(chosen)
+
+    if not skip_launcher_check:
+        _show_launcher_availability()
+
+    if not skip_khoj_detect:
+        _detect_khoj_and_maybe_enable(
+            config_path, chosen, non_interactive=non_interactive
+        )
+
+    if not skip_claude_detect:
+        _detect_claude_code_and_offer_bridge(non_interactive=non_interactive)
+
+    typer.echo("")
+    typer.secho("✓ Setup complete. Try:", fg=typer.colors.GREEN, bold=True)
+    typer.echo("    armillary start    # browser dashboard")
+    typer.echo("    armillary list     # terminal table")
+
+
+# ----- setup ceremony helpers ----------------------------------------------
+
+
+def _run_initial_scan_and_summary(
+    chosen: list[bootstrap.UmbrellaCandidate],
+) -> None:
+    """Walk the chosen umbrellas, extract metadata, persist to cache,
+    print a per-status summary. Errors are caught and printed as a
+    friendly warning — init must not abort if the first scan fails.
+    """
+    typer.echo("")
+    typer.secho("Running initial scan…", fg=typer.colors.CYAN)
+
+    try:
+        umbrellas = [UmbrellaFolder(path=c.path, max_depth=3) for c in chosen]
+        projects = scan_umbrellas(umbrellas)
+        metadata.extract_all(projects)
+        for project in projects:
+            if project.metadata is None:
+                continue
+            # Same `last_modified = max(fs, last_commit_ts)` lift used by
+            # `armillary scan` — see cli.scan() for the rationale.
+            if (
+                project.type is ProjectType.GIT
+                and project.metadata.last_commit_ts is not None
+                and project.metadata.last_commit_ts > project.last_modified
+            ):
+                project.last_modified = project.metadata.last_commit_ts
+            project.metadata.status = status.compute_status(project)
+
+        with Cache() as cache:
+            cache.upsert(projects, write_metadata=True)
+            cache.prune_stale()
+    except Exception as exc:  # noqa: BLE001 — never abort init on scan failure
+        typer.secho(
+            f"⚠ Initial scan failed: {exc}",
+            fg=typer.colors.YELLOW,
+        )
+        typer.echo("  You can retry later with `armillary scan`. Continuing setup…")
+        return
+
+    git_count = sum(1 for p in projects if p.type is ProjectType.GIT)
+    idea_count = sum(1 for p in projects if p.type is ProjectType.IDEA)
+
+    status_counts: dict[str, int] = {}
+    for p in projects:
+        if p.metadata is not None and p.metadata.status is not None:
+            label = p.metadata.status.value
+            status_counts[label] = status_counts.get(label, 0) + 1
+
+    typer.secho(f"\n✓ Indexed {len(projects)} project(s):", fg=typer.colors.GREEN)
+    typer.echo(f"    {git_count} git, {idea_count} idea")
+    if status_counts:
+        order = [
+            Status.ACTIVE,
+            Status.PAUSED,
+            Status.DORMANT,
+            Status.IDEA,
+            Status.IN_PROGRESS,
+        ]
+        parts = [f"{status_counts.get(s.value, 0)} {s.value}" for s in order]
+        typer.echo(f"    {', '.join(parts)}")
+
+
+def _show_launcher_availability() -> None:
+    """Cross-check `cfg.launchers` against `shutil.which()` and print
+    a 2-line summary of which commands are reachable on PATH."""
+    cfg = _safe_load_config()
+    if cfg is None or not cfg.launchers:
+        return
+
+    import shutil as _shutil
+
+    available: list[str] = []
+    missing: list[str] = []
+    for target_id, launcher_cfg in cfg.launchers.items():
+        label = f"{launcher_cfg.command} ({target_id})"
+        if _shutil.which(launcher_cfg.command) is not None:
+            available.append(label)
+        else:
+            missing.append(label)
+
+    typer.echo("")
+    typer.secho("Checking launcher availability…", fg=typer.colors.CYAN)
+    if available:
+        typer.secho(f"  ✓ available: {', '.join(available)}", fg=typer.colors.GREEN)
+    if missing:
+        typer.secho(f"  ✗ missing:   {', '.join(missing)}", fg=typer.colors.YELLOW)
+
+
+def _detect_khoj_and_maybe_enable(
+    config_path: Path,
+    chosen: list[bootstrap.UmbrellaCandidate],
+    *,
+    non_interactive: bool,
+) -> None:
+    """Probe localhost Khoj. If reachable AND user agrees, rewrite the
+    config with `khoj.enabled: true`. Silent on any failure (timeout,
+    connection refused, non-200, etc.) — Khoj is opt-in, missing it
+    is the normal case for most users.
+    """
+    try:
+        with urlopen(_KHOJ_HEALTH_URL, timeout=_KHOJ_HEALTH_TIMEOUT) as response:
+            status_code = getattr(response, "status", None) or response.getcode()
+            if status_code != 200:
+                return
+    except (HTTPError, URLError, TimeoutError, OSError):
+        return  # Khoj not running, silent
+
+    typer.echo("")
+    typer.secho("🧠 Detected Khoj at localhost:42110.", fg=typer.colors.CYAN)
+    if non_interactive:
+        typer.echo("  --non-interactive: skipping Khoj enable prompt.")
+        return
+
+    if not typer.confirm("  Enable semantic search?", default=False):
+        return
+
+    config_path.write_text(
+        _render_config_yaml(chosen, khoj_enabled=True),
+        encoding="utf-8",
+    )
+    typer.secho(f"  ✓ Enabled khoj in {config_path.name}.", fg=typer.colors.GREEN)
+
+
+def _detect_claude_code_and_offer_bridge(*, non_interactive: bool) -> None:
+    """If `~/.claude/` exists, offer to install the repos-index bridge.
+
+    PR #16 only PROMPTS — actual install lives in PR #19. We point the
+    user at `armillary export-index ~/.claude/armillary/repos-index.md`
+    as the manual equivalent in the meantime.
+    """
+    claude_dir = Path.home() / ".claude"
+    if not claude_dir.is_dir():
+        return
+
+    typer.echo("")
+    typer.secho("🤖 Found Claude Code config.", fg=typer.colors.CYAN)
+    if non_interactive:
+        typer.echo("  --non-interactive: skipping Claude Code bridge prompt.")
+        return
+
+    if not typer.confirm(
+        "  Install armillary repos-index bridge for AI sessions?",
+        default=False,
+    ):
+        return
+
+    typer.secho(
+        "  ⚠ Bridge install lands in PR #19 (not yet shipped).",
+        fg=typer.colors.YELLOW,
+    )
+    typer.echo(
+        "    For now, run manually:\n"
+        "        armillary export-index ~/.claude/armillary/repos-index.md"
+    )
 
 
 def _ask_for_candidate_selection(
@@ -745,6 +989,8 @@ def _parse_selection(raw: str, total: int) -> set[int]:
 
 def _render_config_yaml(
     candidates: list[bootstrap.UmbrellaCandidate],
+    *,
+    khoj_enabled: bool = False,
 ) -> str:
     """Render a `Config`-shaped YAML document for the chosen umbrellas.
 
@@ -752,10 +998,15 @@ def _render_config_yaml(
     metacharacters (`:`, `#`, `-`, leading whitespace, ...) is properly
     quoted. Hand-crafted f-strings would silently truncate or break
     on names like `~/Work #old` or `~/Foo: Bar`.
+
+    `khoj_enabled=True` adds a real `khoj:` block to the payload (with
+    `enabled: true` + the localhost API URL) and drops the commented-out
+    Khoj footer so the file does not have both a real block and a
+    placeholder comment.
     """
     import yaml as _yaml
 
-    payload = {
+    payload: dict[str, object] = {
         "umbrellas": [
             {
                 "path": _shorten_home_str(candidate.path),
@@ -765,6 +1016,11 @@ def _render_config_yaml(
             for candidate in candidates
         ],
     }
+    if khoj_enabled:
+        payload["khoj"] = {
+            "enabled": True,
+            "api_url": "http://localhost:42110",
+        }
 
     header = (
         "# armillary config — generated by `armillary config --init`\n"
@@ -777,7 +1033,7 @@ def _render_config_yaml(
         default_flow_style=False,
         allow_unicode=True,
     )
-    footer = (
+    launcher_footer = (
         "\n"
         "# Custom launchers can be added here. Built-in entries (claude-code,\n"
         "# codex, cursor, zed, vscode, terminal, finder) are always available\n"
@@ -792,6 +1048,8 @@ def _render_config_yaml(
         "#     command: nvim\n"
         '#     args: ["{path}"]\n'
         '#     icon: "✏️"\n'
+    )
+    khoj_comment = (
         "\n"
         "# Khoj semantic search (optional, opt-in):\n"
         "#\n"
@@ -799,7 +1057,11 @@ def _render_config_yaml(
         "#   enabled: true\n"
         "#   api_url: http://localhost:42110\n"
     )
-    return header + body + footer
+    if khoj_enabled:
+        # Real khoj block already in `body` — only the launcher comment
+        # makes sense as documentation footer.
+        return header + body + launcher_footer
+    return header + body + launcher_footer + khoj_comment
 
 
 def _shorten_home_str(path: Path) -> str:
