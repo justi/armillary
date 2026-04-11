@@ -2397,9 +2397,15 @@ def test_start_khoj_execs_khoj_binary_with_env_vars(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Happy path: container is running, khoj binary exists, we exec
-    it with the right POSTGRES_* env vars."""
+    it with both POSTGRES_* and KHOJ_ADMIN_* env vars. The latter
+    prevents Khoj from dropping into an interactive Email/Password
+    prompt on first run (real bug — user hit this end-to-end)."""
     _set_which(monkeypatch, docker="/fake/bin/docker")
     _no_sleep(monkeypatch)
+
+    # Redirect ARMILLARY_CONFIG so _khoj_admin_env_path() writes into
+    # tmp_path, not the developer's real ~/.config/armillary.
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(tmp_path / "armillary" / "config.yaml"))
 
     # Fake khoj binary inside a fake venv/bin
     fake_bin = tmp_path / "bin"
@@ -2436,6 +2442,64 @@ def test_start_khoj_execs_khoj_binary_with_env_vars(
     assert env.get("POSTGRES_DB") == "khoj"
     assert env.get("POSTGRES_USER") == "postgres"
     assert env.get("POSTGRES_PASSWORD") == "postgres"
+    # Admin credentials auto-generated + injected so Khoj never prompts
+    assert env.get("KHOJ_ADMIN_EMAIL") == "admin@armillary.local"
+    assert env.get("KHOJ_ADMIN_PASSWORD")  # random string, non-empty
+    assert len(env["KHOJ_ADMIN_PASSWORD"]) >= 16
+
+    # File persisted on disk with the same password start-khoj used
+    admin_env_path = tmp_path / "armillary" / "khoj-admin.env"
+    assert admin_env_path.is_file()
+    file_contents = admin_env_path.read_text()
+    assert "KHOJ_ADMIN_EMAIL=admin@armillary.local" in file_contents
+    assert f"KHOJ_ADMIN_PASSWORD={env['KHOJ_ADMIN_PASSWORD']}" in file_contents
+
+
+def test_start_khoj_reuses_existing_admin_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Second run must NOT re-roll the password — otherwise the admin
+    account persisted in Postgres would drift from the env and Khoj
+    would hit "authentication failed" on every subsequent restart."""
+    _set_which(monkeypatch, docker="/fake/bin/docker")
+    _no_sleep(monkeypatch)
+
+    config_dir = tmp_path / "armillary"
+    config_dir.mkdir()
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_dir / "config.yaml"))
+    # Pre-seed the env file with a known password
+    (config_dir / "khoj-admin.env").write_text(
+        "KHOJ_ADMIN_EMAIL=existing@localhost\n"
+        "KHOJ_ADMIN_PASSWORD=sticky-password-12345\n"
+    )
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_khoj = fake_bin / "khoj"
+    fake_khoj.write_text("#!/bin/sh\n")
+    fake_khoj.chmod(0o755)
+    fake_python = fake_bin / "python"
+    fake_python.write_text("")
+    monkeypatch.setattr(cli.sys, "executable", str(fake_python))
+
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> _FakeProc:
+        calls.append((list(cmd), dict(kwargs)))
+        if cmd[:2] == ["docker", "ps"]:
+            return _FakeProc(returncode=0, stdout="running")
+        return _FakeProc(returncode=0)
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(app, ["start-khoj"])
+    assert result.exit_code == 0, result.stdout
+
+    khoj_calls = [(c, k) for c, k in calls if str(fake_khoj) in c]
+    assert len(khoj_calls) == 1
+    env = khoj_calls[0][1].get("env") or {}
+    assert env.get("KHOJ_ADMIN_EMAIL") == "existing@localhost"
+    assert env.get("KHOJ_ADMIN_PASSWORD") == "sticky-password-12345"
 
 
 def test_start_khoj_without_docker_errors_out(

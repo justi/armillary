@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import json
 import os
+import secrets
 import shlex
 import subprocess
 import sys
@@ -723,6 +725,24 @@ def install_khoj(
 
     _provision_khoj_postgres_container()
 
+    # Generate / reuse local admin credentials so Khoj does not drop
+    # into its interactive `Email: / Password:` prompt on first run.
+    admin_env = _ensure_khoj_admin_env()
+    admin_env_path = _khoj_admin_env_path()
+    typer.echo("")
+    typer.secho(
+        f"✓ Khoj admin credentials at {admin_env_path}",
+        fg=typer.colors.GREEN,
+    )
+    typer.echo(
+        f"  Email:     {admin_env['KHOJ_ADMIN_EMAIL']}\n"
+        "  Password:  <hidden — see the file above, 0600 perms>"
+    )
+    typer.echo(
+        "  These auto-log in to http://localhost:42110/server/admin "
+        "once Khoj is running."
+    )
+
     typer.echo("")
     typer.secho("Next steps:", bold=True)
     typer.echo("  1. Start the Khoj server (foreground, logs in the terminal):")
@@ -763,6 +783,80 @@ _KHOJ_DB_HOST = "localhost"
 # backend connects to the right process.
 _KHOJ_DB_PORT = "54322"
 _KHOJ_CONTAINER_PORT = "5432"
+
+
+def _khoj_admin_env_path() -> Path:
+    """Where the auto-generated Khoj admin credentials live on disk.
+
+    Sits next to `config.yaml` so it travels with the rest of the
+    user's armillary state and inherits the same `ARMILLARY_CONFIG`
+    override for tests.
+    """
+    return default_config_path().parent / "khoj-admin.env"
+
+
+def _load_khoj_admin_env() -> dict[str, str] | None:
+    """Read `khoj-admin.env` into a dict, or None if it does not exist.
+
+    Format is `KEY=VALUE\\n` lines (no quoting, no shell escaping) —
+    deliberately minimal so users can inspect and edit the file by
+    hand without parsing concerns.
+    """
+    path = _khoj_admin_env_path()
+    if not path.is_file():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    env: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        env[key.strip()] = value.strip()
+    return env
+
+
+def _ensure_khoj_admin_env() -> dict[str, str]:
+    """Return the Khoj admin credentials, generating them on first call.
+
+    Policy: the container is local-only, the admin account exists
+    purely to satisfy Khoj's first-run initialisation, and we never
+    surface the password over the network. A 32-char url-safe random
+    password stored at 0600 is enough; users who want to rotate it
+    can delete the file and rerun `install-khoj`.
+
+    Subsequent calls are pure reads — we do NOT re-roll the password,
+    otherwise the stored admin in Postgres would drift from the env
+    and Khoj would hit "authentication failed" on every restart.
+    """
+    existing = _load_khoj_admin_env()
+    if (
+        existing
+        and existing.get("KHOJ_ADMIN_EMAIL")
+        and existing.get("KHOJ_ADMIN_PASSWORD")
+    ):
+        return existing
+
+    env = {
+        "KHOJ_ADMIN_EMAIL": "admin@armillary.local",
+        "KHOJ_ADMIN_PASSWORD": secrets.token_urlsafe(16),
+    }
+    path = _khoj_admin_env_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = "\n".join(f"{k}={v}" for k, v in env.items()) + "\n"
+    path.write_text(
+        "# armillary — auto-generated Khoj admin credentials\n"
+        "# Used by `armillary start-khoj` to initialise the local Khoj\n"
+        "# admin panel at http://localhost:42110/server/admin.\n"
+        "# Delete this file and rerun `armillary install-khoj` to rotate.\n" + body,
+        encoding="utf-8",
+    )
+    with contextlib.suppress(OSError):
+        path.chmod(0o600)
+    return env
 
 
 def _docker_container_state(name: str) -> str:
@@ -1105,6 +1199,11 @@ def start_khoj() -> None:
             "POSTGRES_PASSWORD": _KHOJ_DB_PASSWORD,
         }
     )
+    # Inject auto-generated admin credentials so Khoj does NOT drop
+    # into its interactive "Email: / Password:" prompt on first run.
+    # `_ensure_khoj_admin_env` is a read-through — generates on first
+    # call, subsequent calls just load the existing file.
+    env.update(_ensure_khoj_admin_env())
 
     typer.secho(
         f"Starting Khoj server ({khoj_bin}) — Ctrl-C to stop.",
@@ -1113,6 +1212,10 @@ def start_khoj() -> None:
     typer.echo(
         "First start downloads the default sentence-transformers model "
         "(~500 MB). Subsequent starts reuse the cache."
+    )
+    typer.echo(
+        "Admin credentials for http://localhost:42110/server/admin are "
+        f"in {_khoj_admin_env_path()}."
     )
     typer.echo("")
 
