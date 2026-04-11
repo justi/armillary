@@ -1373,36 +1373,29 @@ def _render_settings_khoj(cfg: Config) -> None:
         expanded=not cfg.khoj.enabled,
     ):
         st.markdown(
-            "Khoj is a separate project with heavy ML dependencies "
-            "(torch, transformers, ~1 GB) **and it requires PostgreSQL "
-            "15+ with the pgvector extension** — it does not support "
-            "SQLite. armillary cannot install Postgres for you. The "
-            "shortest path on macOS is:"
+            "Khoj needs **PostgreSQL 15+ with the pgvector extension** — "
+            "it does not support SQLite. armillary provisions the "
+            "database for you via **Docker** (pgvector/pgvector:pg15 "
+            "image) so there's no host-side package manager conflict. "
+            "You need Docker Desktop running."
         )
-        st.markdown("**1. Install the Khoj Python package:**")
+        st.markdown("**1. Install the Khoj Python package + provision Postgres:**")
         st.code("armillary install-khoj", language="bash")
-        st.markdown("**2. Install Postgres 15 + pgvector:**")
-        st.code(
-            "brew install postgresql@15 pgvector\nbrew services start postgresql@15",
-            language="bash",
+        st.caption(
+            "Runs `uv pip install khoj`, creates the `khoj-pg` Docker "
+            "container, and enables pgvector."
         )
-        st.markdown("**3. Create the `khoj` database and enable pgvector:**")
-        st.code(
-            'createdb khoj\npsql khoj -c "CREATE EXTENSION IF NOT EXISTS vector;"',
-            language="bash",
+        st.markdown("**2. Start the Khoj server in a separate terminal:**")
+        st.code("armillary start-khoj", language="bash")
+        st.caption(
+            "Foreground process; exports the Postgres env vars and "
+            "execs `khoj --anonymous-mode`. First start downloads the "
+            "sentence-transformers model (~500 MB)."
         )
-        st.markdown("**4. Start the Khoj server in a separate terminal:**")
-        st.code("khoj --anonymous-mode", language="bash")
         st.markdown(
-            "**5.** Once the server responds at `http://localhost:42110`, "
+            "**3.** Once the server responds at `http://localhost:42110`, "
             "flip **Enable Khoj** below and hit **💾 Save changes**. "
             "Use the 🧪 Test connection button to verify."
-        )
-        st.caption(
-            "Alternative: the Khoj docs at "
-            "https://docs.khoj.dev/get-started/setup describe a "
-            "docker-compose setup that bundles Postgres + pgvector in "
-            "one command."
         )
 
     enabled = st.checkbox(

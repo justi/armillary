@@ -8,6 +8,7 @@ import os
 import shlex
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -689,43 +690,44 @@ def install_khoj(
         )
         raise typer.Exit(result.returncode)
 
-    typer.secho("\n✓ Khoj installed.", fg=typer.colors.GREEN, bold=True)
+    typer.secho("\n✓ Khoj package installed.", fg=typer.colors.GREEN, bold=True)
     typer.echo("")
-    typer.secho(
-        "⚠ Khoj requires PostgreSQL 15+ with the pgvector extension.",
-        fg=typer.colors.YELLOW,
-        bold=True,
-    )
-    typer.echo(
-        "  Khoj does NOT support SQLite — it stores embeddings in a Postgres\n"
-        "  database called `khoj`. armillary cannot install Postgres for you,\n"
-        "  but here is the shortest path on macOS:"
-    )
+
+    # Khoj requires PostgreSQL 15 + pgvector. Rather than print a brew
+    # recipe and hope the user's machine is not booby-trapped (we got
+    # burned by `brew install pgvector` compiling against postgresql@14
+    # while the user ran @15 — "extension control file" not found),
+    # we now provision an isolated Postgres container via Docker. One
+    # command, no host-side package managers, no version conflicts.
+    if shutil_which("docker") is None:
+        typer.secho(
+            "⚠ Docker not found. Khoj needs PostgreSQL 15 + pgvector to run.",
+            fg=typer.colors.YELLOW,
+            bold=True,
+        )
+        typer.echo(
+            "  armillary install-khoj uses Docker to provision the database\n"
+            "  (container image: pgvector/pgvector:pg15) to avoid brew\n"
+            "  formula conflicts and give you a reproducible setup.\n"
+        )
+        typer.echo("  Install Docker Desktop, then rerun `armillary install-khoj`:")
+        typer.secho(
+            "       https://www.docker.com/products/docker-desktop/",
+            fg=typer.colors.CYAN,
+        )
+        typer.echo(
+            "\n  Or set up Postgres + pgvector yourself and start the Khoj\n"
+            "  server with POSTGRES_HOST=… POSTGRES_DB=khoj env vars."
+        )
+        raise typer.Exit(1)
+
+    _provision_khoj_postgres_container()
+
     typer.echo("")
-    typer.echo("  1. Install Postgres + pgvector via Homebrew:")
-    typer.secho(
-        "       brew install postgresql@15 pgvector",
-        fg=typer.colors.CYAN,
-    )
-    typer.secho("       brew services start postgresql@15", fg=typer.colors.CYAN)
-    typer.echo("     (or use the Khoj docker-compose setup:")
-    typer.secho(
-        "       https://docs.khoj.dev/get-started/setup",
-        fg=typer.colors.CYAN,
-    )
-    typer.echo("     — both paths documented in Khoj docs.)")
-    typer.echo("")
-    typer.echo("  2. Create the `khoj` database and enable pgvector:")
-    typer.secho("       createdb khoj", fg=typer.colors.CYAN)
-    typer.secho(
-        '       psql khoj -c "CREATE EXTENSION IF NOT EXISTS vector;"',
-        fg=typer.colors.CYAN,
-    )
-    typer.echo("")
-    typer.echo("  3. Start the Khoj server in a separate terminal:")
-    typer.secho("       khoj --anonymous-mode", fg=typer.colors.CYAN)
-    typer.echo("")
-    typer.echo("  4. Wire it into armillary:")
+    typer.secho("Next steps:", bold=True)
+    typer.echo("  1. Start the Khoj server (foreground, logs in the terminal):")
+    typer.secho("       armillary start-khoj", fg=typer.colors.CYAN)
+    typer.echo("  2. In a SECOND terminal, wire it into armillary:")
     typer.secho(
         "       armillary config --init --force",
         fg=typer.colors.CYAN,
@@ -734,11 +736,316 @@ def install_khoj(
         "     (or enable via dashboard Settings → Khoj tab if you "
         "already have a config)"
     )
-    typer.echo("")
-    typer.echo(
-        'If `khoj --anonymous-mode` crashes with `database "khoj" does not '
-        "exist`,\nyou skipped step 2 — create the database and rerun."
+
+
+# --- Khoj docker / runner helpers -----------------------------------------
+
+_KHOJ_PG_CONTAINER = "khoj-pg"
+_KHOJ_PG_IMAGE = "pgvector/pgvector:pg15"
+_KHOJ_PG_VOLUME = "khoj-pg-data"
+_KHOJ_DB_NAME = "khoj"
+_KHOJ_DB_USER = "postgres"
+_KHOJ_DB_PASSWORD = "postgres"  # noqa: S105 — local dev DB, not a secret
+_KHOJ_DB_HOST = "localhost"
+_KHOJ_DB_PORT = "5432"
+
+
+def _docker_container_state(name: str) -> str:
+    """Return "running", "stopped", or "missing" for a docker container."""
+    # `docker ps -a --filter name=^<name>$ --format {{.State}}` — the
+    # caret/dollar anchor prevents accidental prefix matches on
+    # "khoj-pg-backup" etc.
+    result = subprocess.run(
+        [
+            "docker",
+            "ps",
+            "-a",
+            "--filter",
+            f"name=^{name}$",
+            "--format",
+            "{{.State}}",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
     )
+    if result.returncode != 0:
+        return "missing"
+    state = result.stdout.strip().lower()
+    if not state:
+        return "missing"
+    if state == "running":
+        return "running"
+    return "stopped"
+
+
+def _provision_khoj_postgres_container() -> None:
+    """Create (or reuse) the Khoj Postgres+pgvector docker container.
+
+    Idempotent:
+    - Missing  → `docker run -d --name khoj-pg …`
+    - Stopped  → `docker start khoj-pg`
+    - Running  → skip
+    Always follows with a wait-for-ready loop and
+    `CREATE EXTENSION IF NOT EXISTS vector` so subsequent reruns just
+    confirm the DB is healthy.
+    """
+    state = _docker_container_state(_KHOJ_PG_CONTAINER)
+    typer.secho(
+        f"Provisioning Postgres+pgvector container `{_KHOJ_PG_CONTAINER}`…",
+        fg=typer.colors.CYAN,
+    )
+    typer.echo(f"  Image:     {_KHOJ_PG_IMAGE}")
+    typer.echo(f"  Volume:    {_KHOJ_PG_VOLUME} (persists embeddings)")
+    typer.echo(f"  Port:      {_KHOJ_DB_HOST}:{_KHOJ_DB_PORT}")
+
+    if state == "running":
+        typer.secho("  ✓ Container already running.", fg=typer.colors.GREEN)
+    elif state == "stopped":
+        typer.secho(
+            "  · Container exists but stopped — starting.",
+            fg=typer.colors.CYAN,
+        )
+        r = subprocess.run(
+            ["docker", "start", _KHOJ_PG_CONTAINER],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if r.returncode != 0:
+            typer.secho(
+                f"  ✗ docker start failed: {r.stderr.strip()}",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(r.returncode or 2)
+        typer.secho("  ✓ Container started.", fg=typer.colors.GREEN)
+    else:
+        typer.secho("  · Creating new container.", fg=typer.colors.CYAN)
+        r = subprocess.run(
+            [
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                _KHOJ_PG_CONTAINER,
+                "-p",
+                f"{_KHOJ_DB_PORT}:5432",
+                "-e",
+                f"POSTGRES_DB={_KHOJ_DB_NAME}",
+                "-e",
+                f"POSTGRES_USER={_KHOJ_DB_USER}",
+                "-e",
+                f"POSTGRES_PASSWORD={_KHOJ_DB_PASSWORD}",
+                "-v",
+                f"{_KHOJ_PG_VOLUME}:/var/lib/postgresql/data",
+                _KHOJ_PG_IMAGE,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if r.returncode != 0:
+            typer.secho(
+                f"  ✗ docker run failed: {r.stderr.strip()}",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            typer.echo(
+                "  Common causes: port 5432 already in use (brew postgres?), "
+                "docker daemon not running, disk full."
+            )
+            raise typer.Exit(r.returncode or 2)
+        typer.secho("  ✓ Container created.", fg=typer.colors.GREEN)
+
+    # Wait for the DB to accept connections before we touch it.
+    typer.secho("  · Waiting for Postgres to accept connections…", fg=typer.colors.CYAN)
+    if not _wait_for_postgres_ready(timeout_s=30):
+        typer.secho(
+            "  ✗ Postgres did not become ready within 30 seconds.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        typer.echo(f"  Check logs with: docker logs {_KHOJ_PG_CONTAINER}")
+        raise typer.Exit(2)
+    typer.secho("  ✓ Postgres ready.", fg=typer.colors.GREEN)
+
+    # Enable pgvector. Idempotent via IF NOT EXISTS.
+    typer.secho(
+        "  · Enabling pgvector extension (CREATE EXTENSION IF NOT EXISTS vector)…",
+        fg=typer.colors.CYAN,
+    )
+    r = subprocess.run(
+        [
+            "docker",
+            "exec",
+            _KHOJ_PG_CONTAINER,
+            "psql",
+            "-U",
+            _KHOJ_DB_USER,
+            "-d",
+            _KHOJ_DB_NAME,
+            "-c",
+            "CREATE EXTENSION IF NOT EXISTS vector;",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if r.returncode != 0:
+        typer.secho(
+            f"  ✗ Could not enable pgvector: {r.stderr.strip()}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(r.returncode or 2)
+    typer.secho("  ✓ pgvector enabled.", fg=typer.colors.GREEN)
+
+
+def _wait_for_postgres_ready(*, timeout_s: int = 30) -> bool:
+    """Poll `pg_isready` inside the khoj-pg container until it answers.
+
+    The `pgvector/pgvector:pg15` image ships `pg_isready`, so we call
+    it via `docker exec` rather than trying a raw TCP connect from the
+    host (which would add a psycopg2 dependency just for this probe).
+    Returns True on success, False on timeout.
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        result = subprocess.run(
+            [
+                "docker",
+                "exec",
+                _KHOJ_PG_CONTAINER,
+                "pg_isready",
+                "-U",
+                _KHOJ_DB_USER,
+                "-d",
+                _KHOJ_DB_NAME,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def _khoj_binary_path() -> Path | None:
+    """Resolve the `khoj` executable that this armillary venv installed.
+
+    Prefers `<sys.executable>/../khoj` because that's exactly where
+    `uv pip install --python <interp>` dropped it. Falls back to
+    `shutil.which("khoj")` for the rare case the user activated the
+    venv and wants the shell-resolved path.
+    """
+    venv_bin = Path(sys.executable).parent / "khoj"
+    if venv_bin.is_file() and os.access(venv_bin, os.X_OK):
+        return venv_bin
+    on_path = shutil_which("khoj")
+    if on_path:
+        return Path(on_path)
+    return None
+
+
+@app.command("start-khoj")
+def start_khoj() -> None:
+    """Start the Khoj server in the foreground, wired to the docker DB.
+
+    Exports the Postgres env vars that point at the `khoj-pg` container
+    provisioned by `armillary install-khoj`, finds the `khoj` binary in
+    this venv, and execs it in `--anonymous-mode`. Runs in the
+    foreground so the user sees logs and can Ctrl-C normally; this is a
+    development server, not a daemon.
+
+    Preconditions (checked and reported):
+    - `khoj-pg` container must exist and be running (or stoppable).
+    - `khoj` binary must be reachable (i.e. `armillary install-khoj`
+      must have been run first).
+    """
+    if shutil_which("docker") is None:
+        typer.secho(
+            "Docker not found. Run `armillary install-khoj` first.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    state = _docker_container_state(_KHOJ_PG_CONTAINER)
+    if state == "missing":
+        typer.secho(
+            f"Container `{_KHOJ_PG_CONTAINER}` does not exist.\n"
+            "Run `armillary install-khoj` to create it.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+    if state == "stopped":
+        typer.secho(
+            f"Starting stopped container `{_KHOJ_PG_CONTAINER}`…",
+            fg=typer.colors.CYAN,
+        )
+        r = subprocess.run(
+            ["docker", "start", _KHOJ_PG_CONTAINER],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if r.returncode != 0:
+            typer.secho(
+                f"docker start failed: {r.stderr.strip()}",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(r.returncode or 2)
+
+    if not _wait_for_postgres_ready(timeout_s=15):
+        typer.secho(
+            f"Postgres did not become ready. Check: docker logs {_KHOJ_PG_CONTAINER}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    khoj_bin = _khoj_binary_path()
+    if khoj_bin is None:
+        typer.secho(
+            "`khoj` binary not found. Run `armillary install-khoj` first.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "POSTGRES_HOST": _KHOJ_DB_HOST,
+            "POSTGRES_PORT": _KHOJ_DB_PORT,
+            "POSTGRES_DB": _KHOJ_DB_NAME,
+            "POSTGRES_USER": _KHOJ_DB_USER,
+            "POSTGRES_PASSWORD": _KHOJ_DB_PASSWORD,
+        }
+    )
+
+    typer.secho(
+        f"Starting Khoj server ({khoj_bin}) — Ctrl-C to stop.",
+        fg=typer.colors.CYAN,
+    )
+    typer.echo(
+        "First start downloads the default sentence-transformers model "
+        "(~500 MB). Subsequent starts reuse the cache."
+    )
+    typer.echo("")
+
+    # Foreground exec so the user sees logs and Ctrl-C Just Works.
+    result = subprocess.run(
+        [str(khoj_bin), "--anonymous-mode"],
+        env=env,
+        check=False,
+    )
+    raise typer.Exit(result.returncode)
 
 
 def _pick_khoj_installer() -> tuple[list[str], str]:
@@ -1228,14 +1535,13 @@ def _detect_khoj_and_maybe_enable(
             fg=typer.colors.CYAN,
         )
         typer.echo(
-            "   Semantic search is optional. To set it up:\n"
-            "     1. `armillary install-khoj`      (pip-installs the Khoj package)\n"
-            "     2. Install Postgres 15 + pgvector "
-            "(Khoj needs a real DB — not SQLite)\n"
-            "     3. `createdb khoj && psql khoj -c "
-            "'CREATE EXTENSION vector;'`\n"
-            "     4. `khoj --anonymous-mode` in another terminal\n"
-            "     5. Rerun `armillary config --init --force` to pick it up"
+            "   Semantic search is optional. To set it up (needs Docker):\n"
+            "     1. `armillary install-khoj`  "
+            "(pip-installs Khoj + provisions pgvector via Docker)\n"
+            "     2. `armillary start-khoj`    "
+            "(runs the Khoj server in a separate terminal)\n"
+            "     3. Rerun `armillary config --init --force` "
+            "to pick it up"
         )
         return
 

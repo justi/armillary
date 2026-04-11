@@ -1270,10 +1270,10 @@ def test_config_init_khoj_detection_prints_install_hint_when_unreachable(
     out = _strip_ansi(result.stdout)
     # "Detected Khoj" never appears because we did NOT detect it.
     assert "Detected Khoj" not in out
-    # But the install hint IS visible.
+    # But the install hint IS visible and mentions both commands.
     assert "Khoj not detected" in out
     assert "install-khoj" in out
-    assert "khoj --anonymous-mode" in out
+    assert "start-khoj" in out
     parsed = _yaml.safe_load(config_file.read_text())
     assert parsed.get("khoj") is None or not parsed["khoj"].get("enabled")
 
@@ -2042,103 +2042,196 @@ def test_config_init_non_interactive_skips_bridge_prompt(
     assert "install-claude-bridge" in out
 
 
-# --- armillary install-khoj (follow-up to PR #19) -------------------------
+# --- armillary install-khoj / start-khoj (Docker-based flow) --------------
 
 
-def _force_no_uv(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pretend `uv` is not on PATH so install-khoj picks the pip branch."""
+class _FakeProc:
+    """Bare minimum CompletedProcess stand-in for monkeypatched subprocess.run.
+
+    Carries stdout/stderr so `capture_output=True` code paths that read
+    them for user-facing error messages do not AttributeError."""
+
+    def __init__(self, returncode: int = 0, stdout: str = "", stderr: str = "") -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _set_which(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    uv: str | None = "/fake/bin/uv",
+    docker: str | None = "/fake/bin/docker",
+) -> None:
+    """Stub `cli.shutil_which` so install-khoj / start-khoj see (or miss)
+    `uv` and `docker` deterministically regardless of the CI box."""
     real_which = cli.shutil_which
 
-    def no_uv(name: str) -> str | None:
+    def fake(name: str) -> str | None:
         if name == "uv":
-            return None
+            return uv
+        if name == "docker":
+            return docker
         return real_which(name)
 
-    monkeypatch.setattr(cli, "shutil_which", no_uv)
+    monkeypatch.setattr(cli, "shutil_which", fake)
 
 
-def _force_uv_at(monkeypatch: pytest.MonkeyPatch, path: str) -> None:
-    """Pretend `uv` resolves to `path` on PATH."""
-    real_which = cli.shutil_which
-
-    def has_uv(name: str) -> str | None:
-        if name == "uv":
-            return path
-        return real_which(name)
-
-    monkeypatch.setattr(cli, "shutil_which", has_uv)
+def _no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Kill `time.sleep` in the wait-for-postgres loop so tests fly."""
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
 
 
-def test_install_khoj_uses_pip_when_no_uv(
+def test_install_khoj_provisions_docker_container_happy_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """With no `uv` on PATH, install-khoj falls back to
-    `python -m pip install khoj`."""
-    _force_no_uv(monkeypatch)
-    captured: dict[str, Any] = {}
+    """Full happy path: uv present, docker present, no existing khoj-pg
+    container → install-khoj runs `uv pip install`, creates the
+    container, waits for Postgres, enables pgvector, and points the
+    user at `armillary start-khoj`."""
+    _set_which(monkeypatch, uv="/fake/bin/uv", docker="/fake/bin/docker")
+    _no_sleep(monkeypatch)
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
-        captured["cmd"] = cmd
+    calls: list[list[str]] = []
 
-        class Result:
-            returncode = 0
-
-        return Result()
-
-    monkeypatch.setattr(cli.subprocess, "run", fake_run)
-
-    result = runner.invoke(app, ["install-khoj"], input="y\n")
-    assert result.exit_code == 0, result.stdout
-    assert captured["cmd"][1:] == ["-m", "pip", "install", "khoj"]
-    out = _strip_ansi(result.stdout)
-    assert "pip install" in out
-    assert "khoj --anonymous-mode" in out
-    assert "armillary config --init --force" in out
-
-
-def test_install_khoj_prefers_uv_when_available(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """When `uv` is on PATH, install-khoj uses
-    `uv pip install --python <interp> khoj` — works on uv-created venvs
-    that never shipped pip, which was the original bug report."""
-    _force_uv_at(monkeypatch, "/fake/bin/uv")
-    captured: dict[str, Any] = {}
-
-    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
-        captured["cmd"] = cmd
-
-        class Result:
-            returncode = 0
-
-        return Result()
+    def fake_run(cmd: list[str], **kwargs: Any) -> _FakeProc:
+        calls.append(list(cmd))
+        # `docker ps -a --filter name=^khoj-pg$ --format {{.State}}` —
+        # first call checks container state, we report "missing" by
+        # returning empty stdout.
+        if cmd[:2] == ["docker", "ps"]:
+            return _FakeProc(returncode=0, stdout="")
+        # Everything else (pip, docker run, pg_isready, docker exec)
+        # succeeds.
+        return _FakeProc(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
 
     result = runner.invoke(app, ["install-khoj", "-y"])
     assert result.exit_code == 0, result.stdout
-    assert captured["cmd"][0] == "/fake/bin/uv"
-    assert captured["cmd"][1:4] == ["pip", "install", "--python"]
-    assert captured["cmd"][-1] == "khoj"
+
+    # The expected call sequence: pip, ps-state, run, pg_isready, exec.
+    # Assert pip install fired exactly once.
+    assert any(c[:1] == ["/fake/bin/uv"] for c in calls)
+    # Container state check
+    assert any(c[:2] == ["docker", "ps"] and "--filter" in c for c in calls)
+    # Container create
+    docker_run = [c for c in calls if c[:2] == ["docker", "run"]]
+    assert len(docker_run) == 1
+    run_cmd = docker_run[0]
+    assert "--name" in run_cmd
+    assert "khoj-pg" in run_cmd
+    assert "pgvector/pgvector:pg15" in run_cmd
+    # pg_isready probe
+    assert any("pg_isready" in c for c in calls)
+    # CREATE EXTENSION
+    exec_calls = [c for c in calls if c[:2] == ["docker", "exec"]]
+    assert any(
+        "CREATE EXTENSION IF NOT EXISTS vector;" in " ".join(c) for c in exec_calls
+    )
+
     out = _strip_ansi(result.stdout)
-    assert "uv pip install" in out
+    assert "armillary start-khoj" in out
+    assert "armillary config --init --force" in out
+
+
+def test_install_khoj_reuses_running_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If `khoj-pg` is already running, install-khoj must NOT `docker
+    run` again (that would fail with "name in use") — it just re-runs
+    `CREATE EXTENSION IF NOT EXISTS vector` to make sure pgvector is on
+    and prints the next-step hint."""
+    _set_which(monkeypatch, uv="/fake/bin/uv", docker="/fake/bin/docker")
+    _no_sleep(monkeypatch)
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> _FakeProc:
+        calls.append(list(cmd))
+        if cmd[:2] == ["docker", "ps"]:
+            return _FakeProc(returncode=0, stdout="running")
+        return _FakeProc(returncode=0)
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(app, ["install-khoj", "-y"])
+    assert result.exit_code == 0, result.stdout
+
+    # No `docker run -d --name khoj-pg …` call — container already up.
+    assert not any(c[:2] == ["docker", "run"] for c in calls)
+    # But pgvector CREATE EXTENSION still ran.
+    assert any(
+        "CREATE EXTENSION IF NOT EXISTS vector;" in " ".join(c)
+        for c in calls
+        if c[:2] == ["docker", "exec"]
+    )
+
+
+def test_install_khoj_starts_stopped_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If `khoj-pg` exists but is stopped, install-khoj `docker start`s
+    it rather than creating a duplicate."""
+    _set_which(monkeypatch, uv="/fake/bin/uv", docker="/fake/bin/docker")
+    _no_sleep(monkeypatch)
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> _FakeProc:
+        calls.append(list(cmd))
+        if cmd[:2] == ["docker", "ps"]:
+            return _FakeProc(returncode=0, stdout="exited")
+        return _FakeProc(returncode=0)
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(app, ["install-khoj", "-y"])
+    assert result.exit_code == 0, result.stdout
+    assert any(c[:3] == ["docker", "start", "khoj-pg"] for c in calls)
+    assert not any(c[:2] == ["docker", "run"] for c in calls)
+
+
+def test_install_khoj_without_docker_exits_with_clear_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Docker is now mandatory for install-khoj (we burned on brew
+    pgvector/postgresql version skew). If docker is not on PATH, the
+    command must fail with an actionable message pointing at Docker
+    Desktop, NOT proceed to a broken provisioning attempt."""
+    _set_which(monkeypatch, uv="/fake/bin/uv", docker=None)
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> _FakeProc:
+        calls.append(list(cmd))
+        return _FakeProc(returncode=0)
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(app, ["install-khoj", "-y"])
+    assert result.exit_code != 0
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
+    assert "Docker not found" in combined
+    assert "docker.com" in combined
+    # pip install still ran (that half works without docker)
+    assert any(c[:1] == ["/fake/bin/uv"] for c in calls)
+    # But no docker calls
+    assert not any(c[:1] == ["docker"] for c in calls)
 
 
 def test_install_khoj_aborts_without_confirm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Bare Enter (default N) aborts without running pip install."""
-    _force_no_uv(monkeypatch)
+    """Bare Enter (default N) aborts without running anything."""
+    _set_which(monkeypatch, uv="/fake/bin/uv", docker="/fake/bin/docker")
+    _no_sleep(monkeypatch)
+
     called = False
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+    def fake_run(cmd: list[str], **kwargs: Any) -> _FakeProc:
         nonlocal called
         called = True
-
-        class Result:
-            returncode = 0
-
-        return Result()
+        return _FakeProc(returncode=0)
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
 
@@ -2149,106 +2242,63 @@ def test_install_khoj_aborts_without_confirm(
     assert "Aborted" in out
 
 
-def test_install_khoj_non_interactive_skips_confirm(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """`--non-interactive` / `-y` runs pip install with no prompt."""
-    _force_no_uv(monkeypatch)
-    captured: dict[str, Any] = {}
-
-    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
-        captured["cmd"] = cmd
-
-        class Result:
-            returncode = 0
-
-        return Result()
-
-    monkeypatch.setattr(cli.subprocess, "run", fake_run)
-
-    result = runner.invoke(app, ["install-khoj", "-y"])
-    assert result.exit_code == 0, result.stdout
-    assert captured["cmd"][-1] == "khoj"
-
-
 def test_install_khoj_bootstraps_pip_via_ensurepip_when_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Real-world bug: `uv venv` without `--seed` produces a Python
-    interpreter with no pip. First `python -m pip install khoj` exits 1
-    ("No module named pip"); we retry via `ensurepip --upgrade` and
-    then re-run pip. This test simulates exactly that sequence and
-    asserts the three commands fire in order, exit 0 on the retry."""
-    _force_no_uv(monkeypatch)
+    interpreter with no pip. The ensurepip retry path still works
+    under the new docker-based flow — first pip install fails, we
+    bootstrap pip, and retry succeeds. Then the docker provisioning
+    runs normally."""
+    _set_which(monkeypatch, uv=None, docker="/fake/bin/docker")
+    _no_sleep(monkeypatch)
 
     calls: list[list[str]] = []
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+    def fake_run(cmd: list[str], **kwargs: Any) -> _FakeProc:
         calls.append(list(cmd))
-
-        class Result:
-            # Pip fails first, ensurepip OK, pip succeeds on retry.
-            returncode = 1 if len(calls) == 1 else 0
-
-        return Result()
-
-    monkeypatch.setattr(cli.subprocess, "run", fake_run)
-
-    result = runner.invoke(app, ["install-khoj", "-y"])
-    assert result.exit_code == 0, result.stdout
-    assert len(calls) == 3
-    # 1st: pip install (fails)
-    assert calls[0][1:] == ["-m", "pip", "install", "khoj"]
-    # 2nd: ensurepip bootstrap
-    assert calls[1][1:] == ["-m", "ensurepip", "--upgrade"]
-    # 3rd: pip install retry (succeeds)
-    assert calls[2][1:] == ["-m", "pip", "install", "khoj"]
-
-
-def test_install_khoj_warns_about_postgres_requirement_after_success(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Real-world bug: after a successful `pip install khoj`, running
-    `khoj --anonymous-mode` crashes with `database "khoj" does not
-    exist` because Khoj requires Postgres 15 + pgvector — it does NOT
-    support SQLite. The install-khoj command must surface this up
-    front so users aren't blindsided after the pip install finishes."""
-    _force_uv_at(monkeypatch, "/fake/bin/uv")
-
-    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
-        class Result:
-            returncode = 0
-
-        return Result()
+        # First pip install → fail. Ensurepip → OK. Retry pip → OK.
+        # Everything else (docker) → OK.
+        if cmd[:1] == [cli.sys.executable] and "pip" in cmd and "install" in cmd:
+            pip_install_calls = [
+                c
+                for c in calls
+                if c[:1] == [cli.sys.executable] and "pip" in c and "install" in c
+            ]
+            if len(pip_install_calls) == 1:
+                return _FakeProc(returncode=1)
+        if cmd[:2] == ["docker", "ps"]:
+            return _FakeProc(returncode=0, stdout="")  # missing container
+        return _FakeProc(returncode=0)
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
 
     result = runner.invoke(app, ["install-khoj", "-y"])
     assert result.exit_code == 0, result.stdout
-
-    out = _strip_ansi(result.stdout)
-    # The big "PostgreSQL + pgvector required" warning
-    assert "PostgreSQL" in out and "pgvector" in out
-    # The create-db recipe so users can actually finish the setup
-    assert "createdb khoj" in out
-    assert "CREATE EXTENSION IF NOT EXISTS vector" in out
-    # The specific error users will hit if they skip step 2
-    assert 'database "khoj" does not exist' in out
+    # First pip, ensurepip, retry pip — all three fired before docker.
+    pip_installs = [
+        c for c in calls if "pip" in c and "install" in c and c[-1] == "khoj"
+    ]
+    assert len(pip_installs) == 2
+    ensurepips = [c for c in calls if "ensurepip" in c]
+    assert len(ensurepips) == 1
 
 
-def test_install_khoj_surfaces_install_failure(
+def test_install_khoj_surfaces_pip_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """If install fails (and ensurepip cannot recover), the CLI exits
-    with the failing return code and prints the "Common causes" block
-    plus workaround hints."""
-    _force_no_uv(monkeypatch)
+    """If pip install keeps failing (even after ensurepip), the CLI
+    exits with the failing return code and prints workaround hints.
+    Docker setup never runs — no point provisioning Postgres if the
+    Python package did not install."""
+    _set_which(monkeypatch, uv=None, docker="/fake/bin/docker")
+    _no_sleep(monkeypatch)
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
-        class Result:
-            returncode = 1
+    calls: list[list[str]] = []
 
-        return Result()
+    def fake_run(cmd: list[str], **kwargs: Any) -> _FakeProc:
+        calls.append(list(cmd))
+        return _FakeProc(returncode=1)
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
 
@@ -2257,8 +2307,198 @@ def test_install_khoj_surfaces_install_failure(
     combined = _strip_ansi(result.stdout + (result.stderr or ""))
     assert "Install failed with exit code 1" in combined
     assert "Common causes" in combined
-    # Workaround hints: uv install, venv --seed, manual pip
-    assert "uv venv --seed" in combined
+    # Docker provisioning never fired
+    assert not any(c[:2] == ["docker", "run"] for c in calls)
+
+
+def test_install_khoj_errors_when_postgres_never_becomes_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If `pg_isready` never answers 0 within the timeout, we must
+    NOT proceed to CREATE EXTENSION (it would fail with a confusing
+    connection error). Surface a clear "did not become ready" message
+    pointing at `docker logs`."""
+    _set_which(monkeypatch, uv="/fake/bin/uv", docker="/fake/bin/docker")
+    _no_sleep(monkeypatch)
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> _FakeProc:
+        calls.append(list(cmd))
+        if cmd[:2] == ["docker", "ps"]:
+            return _FakeProc(returncode=0, stdout="running")
+        if "pg_isready" in cmd:
+            return _FakeProc(returncode=1)  # never ready
+        return _FakeProc(returncode=0)
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    # Shrink the timeout so the test does not hang
+    monkeypatch.setattr(cli.time, "monotonic", iter([0.0, 1.0, 31.0]).__next__)
+
+    result = runner.invoke(app, ["install-khoj", "-y"])
+    assert result.exit_code != 0
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
+    assert "did not become ready" in combined
+    # CREATE EXTENSION must NOT have fired
+    assert not any(
+        "CREATE EXTENSION" in " ".join(c) for c in calls if c[:2] == ["docker", "exec"]
+    )
+
+
+# --- armillary start-khoj -------------------------------------------------
+
+
+def test_start_khoj_execs_khoj_binary_with_env_vars(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Happy path: container is running, khoj binary exists, we exec
+    it with the right POSTGRES_* env vars."""
+    _set_which(monkeypatch, docker="/fake/bin/docker")
+    _no_sleep(monkeypatch)
+
+    # Fake khoj binary inside a fake venv/bin
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_khoj = fake_bin / "khoj"
+    fake_khoj.write_text("#!/bin/sh\necho fake khoj\n")
+    fake_khoj.chmod(0o755)
+    fake_python = fake_bin / "python"
+    fake_python.write_text("")
+    monkeypatch.setattr(cli.sys, "executable", str(fake_python))
+
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> _FakeProc:
+        calls.append((list(cmd), dict(kwargs)))
+        if cmd[:2] == ["docker", "ps"]:
+            return _FakeProc(returncode=0, stdout="running")
+        return _FakeProc(returncode=0)
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(app, ["start-khoj"])
+    assert result.exit_code == 0, result.stdout
+
+    # Last call is the khoj binary with --anonymous-mode and env vars
+    khoj_calls = [(c, k) for c, k in calls if str(fake_khoj) in c]
+    assert len(khoj_calls) == 1
+    cmd, kw = khoj_calls[0]
+    assert cmd == [str(fake_khoj), "--anonymous-mode"]
+    env = kw.get("env") or {}
+    assert env.get("POSTGRES_HOST") == "localhost"
+    assert env.get("POSTGRES_PORT") == "5432"
+    assert env.get("POSTGRES_DB") == "khoj"
+    assert env.get("POSTGRES_USER") == "postgres"
+    assert env.get("POSTGRES_PASSWORD") == "postgres"
+
+
+def test_start_khoj_without_docker_errors_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_which(monkeypatch, docker=None)
+
+    result = runner.invoke(app, ["start-khoj"])
+    assert result.exit_code != 0
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
+    assert "Docker not found" in combined
+
+
+def test_start_khoj_without_container_tells_user_to_install(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing container → tell user to run `install-khoj` first,
+    do NOT silently try to create one."""
+    _set_which(monkeypatch, docker="/fake/bin/docker")
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> _FakeProc:
+        if cmd[:2] == ["docker", "ps"]:
+            return _FakeProc(returncode=0, stdout="")
+        return _FakeProc(returncode=0)
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(app, ["start-khoj"])
+    assert result.exit_code != 0
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
+    assert "does not exist" in combined
+    assert "install-khoj" in combined
+
+
+def test_start_khoj_restarts_stopped_container(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A stopped container is an acceptable state — start-khoj should
+    `docker start` it and continue."""
+    _set_which(monkeypatch, docker="/fake/bin/docker")
+    _no_sleep(monkeypatch)
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_khoj = fake_bin / "khoj"
+    fake_khoj.write_text("#!/bin/sh\n")
+    fake_khoj.chmod(0o755)
+    fake_python = fake_bin / "python"
+    fake_python.write_text("")
+    monkeypatch.setattr(cli.sys, "executable", str(fake_python))
+
+    state_calls = iter(["exited", "running"])  # 2nd call after start returns running
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> _FakeProc:
+        calls.append(list(cmd))
+        if cmd[:2] == ["docker", "ps"]:
+            try:
+                return _FakeProc(returncode=0, stdout=next(state_calls))
+            except StopIteration:
+                return _FakeProc(returncode=0, stdout="running")
+        return _FakeProc(returncode=0)
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(app, ["start-khoj"])
+    assert result.exit_code == 0, result.stdout
+    assert any(c[:3] == ["docker", "start", "khoj-pg"] for c in calls)
+
+
+def test_start_khoj_errors_when_binary_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """khoj binary not in venv and not on PATH → clear error pointing
+    at `install-khoj`."""
+    _set_which(monkeypatch, docker="/fake/bin/docker")
+    _no_sleep(monkeypatch)
+
+    # Fake python in a dir that has NO khoj sibling
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_python = fake_bin / "python"
+    fake_python.write_text("")
+    monkeypatch.setattr(cli.sys, "executable", str(fake_python))
+
+    # Also pretend `khoj` is not on PATH
+    real_which = cli.shutil_which
+
+    def no_khoj(name: str) -> str | None:
+        if name == "khoj":
+            return None
+        if name == "docker":
+            return "/fake/bin/docker"
+        return real_which(name)
+
+    monkeypatch.setattr(cli, "shutil_which", no_khoj)
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> _FakeProc:
+        if cmd[:2] == ["docker", "ps"]:
+            return _FakeProc(returncode=0, stdout="running")
+        return _FakeProc(returncode=0)
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(app, ["start-khoj"])
+    assert result.exit_code != 0
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
+    assert "khoj" in combined.lower()
+    assert "install-khoj" in combined
 
 
 def test_search_khoj_disabled_errors_clearly(
