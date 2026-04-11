@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
 
 import typer
+
+from armillary.models import UmbrellaFolder
+from armillary.scanner import scan as scan_umbrellas
 
 app = typer.Typer(
     name="armillary",
@@ -24,6 +29,15 @@ def start(
     ),
 ) -> None:
     """Launch the dashboard in the browser."""
+    if importlib.util.find_spec("streamlit") is None:
+        typer.secho(
+            "streamlit is not installed — reinstall armillary "
+            "(`pip install -e .`) or run `pip install streamlit`",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2)
+
     ui_path = Path(__file__).parent / "ui" / "app.py"
     cmd = [
         sys.executable,
@@ -33,16 +47,50 @@ def start(
         str(ui_path),
         "--server.port",
         str(port),
+        # Privacy: PLAN.md §14 promises no telemetry. Streamlit defaults
+        # browser.gatherUsageStats to true, so we explicitly disable it
+        # on every launch (no need for a user-managed config file).
+        "--browser.gatherUsageStats",
+        "false",
     ]
     if no_browser:
         cmd += ["--server.headless", "true"]
-    subprocess.run(cmd, check=False)
+
+    result = subprocess.run(cmd, check=False)
+    if result.returncode != 0:
+        raise typer.Exit(result.returncode)
 
 
 @app.command()
-def scan() -> None:
-    """Re-scan umbrella folders and update the cache. (M2)"""
-    typer.secho("scan: not implemented yet (milestone M2)", fg=typer.colors.YELLOW)
+def scan(
+    umbrella: list[Path] = typer.Option(
+        ...,
+        "--umbrella",
+        "-u",
+        help="Umbrella folder to scan. Repeat for multiple.",
+    ),
+    max_depth: int = typer.Option(
+        3,
+        "--max-depth",
+        "-d",
+        min=1,
+        max=10,
+        help="Max recursion depth per umbrella.",
+    ),
+) -> None:
+    """Scan umbrella folders and print the project list as JSON.
+
+    Config-file driven umbrella folders come in M5. Until then, pass
+    them explicitly, e.g.:
+
+        armillary scan -u ~/Projects -u ~/ideas
+    """
+    umbrellas = [
+        UmbrellaFolder(path=p, max_depth=max_depth) for p in umbrella
+    ]
+    projects = scan_umbrellas(umbrellas)
+    payload = [p.model_dump(mode="json") for p in projects]
+    typer.echo(json.dumps(payload, indent=2, ensure_ascii=False))
 
 
 @app.command("list")
