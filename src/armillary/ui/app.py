@@ -388,6 +388,25 @@ def _run_search_and_store(
     Stores under `_SEARCH_STATE_KEY` so subsequent reruns (triggered by
     "Open project detail" buttons) can keep rendering the results
     without re-querying.
+
+    Two backend-specific subtleties (Codex review on PR #17):
+
+    1. **Per-call max_results cap differs by backend.** Ripgrep is
+       genuinely per-project — capping each call at the remaining
+       budget saves work and is correct. Khoj caches its GLOBAL
+       response per `(query, max_results)` and then post-filters by
+       root, so passing different `max_results` each iteration would
+       break the cache (re-querying Khoj each time) AND drop valid
+       matches from later projects (because each subsequent call
+       queries a smaller global window). For Khoj we always pass the
+       full `max_hits` and clamp the displayed slice afterwards.
+
+    2. **Per-project failures vs backend-wide failures.** A ripgrep
+       failure on one project is a per-project issue (broken file,
+       permission error) — continue to the next. A Khoj failure
+       (URL error, malformed response, KhojResponseError when no
+       fallback) is backend-wide — surface it as a search error
+       instead of pretending the search returned zero matches.
     """
     backend, backend_label, error = _build_dashboard_search_backend(cfg, use_khoj)
     if error is not None:
@@ -407,18 +426,44 @@ def _run_search_and_store(
             if total_hits >= max_hits:
                 break
             project_path = Path(row["_path"])
-            remaining = max_hits - total_hits
+
+            # Khoj: always pass the full cap so the per-query cache fires
+            # once. Ripgrep: cap to remaining budget for efficiency.
+            per_call_cap = max_hits if use_khoj else (max_hits - total_hits)
+
             try:
                 hits = backend.search(
                     query,
                     root=project_path,
-                    max_results=remaining,
+                    max_results=per_call_cap,
                 )
-            except Exception:  # noqa: BLE001 — best effort, skip broken project
+            except Exception as exc:  # noqa: BLE001 — see docstring
+                if use_khoj:
+                    # Backend-wide failure: do NOT silently keep going,
+                    # the user will think "search returned no matches"
+                    # when actually the backend never answered.
+                    st.session_state[_SEARCH_STATE_KEY] = {
+                        "query": query,
+                        "error": (
+                            f"Semantic search backend failed: {exc}. "
+                            "Check that Khoj is running on "
+                            f"{cfg.khoj.api_url if cfg else 'the configured URL'}."
+                        ),
+                    }
+                    return
+                # ripgrep per-project error — broken file / perms / etc.
+                # Skip this project and try the next.
                 continue
+
             if hits:
-                hits_by_project.append((row, hits))
-                total_hits += len(hits)
+                # Cap displayed hits to the remaining budget so we don't
+                # overshoot max_hits if a single project returns more
+                # than the cap (Khoj global → root post-filter case).
+                room = max_hits - total_hits
+                hits_to_keep = hits[:room]
+                if hits_to_keep:
+                    hits_by_project.append((row, hits_to_keep))
+                    total_hits += len(hits_to_keep)
 
     st.session_state[_SEARCH_STATE_KEY] = {
         "query": query,
