@@ -15,12 +15,15 @@ Schema history:
 - v2 — adds metadata columns: status, branch, last_commit_ts,
   last_commit_author, dirty_count (M3.2). README excerpt and ADR list
   live in `metadata_json` since they are not used in WHERE clauses.
-- v3 — adds ahead/behind, size_bytes, file_count, note_paths to
-  `metadata_json` (PR #10 / PLAN.md §5 M2 gaps). No new columns —
-  none of these are queryable filters yet, so the JSON blob is the
-  right place. The cache rebuild on schema bump means existing v2
-  rows get re-extracted on the next scan rather than partially
-  populated.
+
+Note on `metadata_json`-only additions: when PR #10 added
+`ahead`/`behind`/`size_bytes`/`file_count`/`note_paths`, those went
+into `metadata_json` without changing the column layout. The schema
+version stayed at 2 because every existing row is still perfectly
+readable — `_row_to_metadata` uses `.get()` with `None` defaults so
+old records simply have `None` for the new fields until the next
+rescan refreshes them. Bumping the schema version is reserved for
+actual table-shape changes.
 
 The cache is intentionally **not** the search engine. Filtering and
 sorting happen here in SQL so the dashboard (M4) can read directly,
@@ -42,7 +45,7 @@ from typing import Any, Self
 
 from .models import Project, ProjectMetadata, ProjectType, Status
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 2
 
 _SCHEMA_SQL = """
 CREATE TABLE projects (

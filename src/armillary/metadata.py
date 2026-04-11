@@ -285,17 +285,21 @@ _README_FILENAMES_LOWER = frozenset(name.lower() for name in _README_CANDIDATES)
 
 
 def _find_note_files(project_path: Path) -> list[Path]:
-    """List `.md` files in `./`, `notes/`, and `docs/` (excluding README).
+    """List `.md` files in `./`, `notes/`, and `docs/`.
 
     PLAN.md §5 M2 spec: "Notes detection: list `.md` files in root +
     `notes/` + `docs/`". Returns sorted, deduplicated paths so the
-    dashboard can render them in a stable order. Files inside ADR
-    directories are NOT excluded here — same `.md` may legitimately
-    show up under both `adr_paths` and `note_paths`.
+    dashboard can render them in a stable order.
+
+    The **project-root** README is excluded because it already has its
+    own dedicated `readme_excerpt` field. README files in subdirectories
+    (`docs/README.md`, `notes/README.md`) are NOT excluded — they are
+    legitimate notes / documentation indexes that nothing else surfaces.
     """
     found: set[Path] = set()
     for rel in _NOTE_DIRECTORIES:
-        note_dir = project_path / rel if rel != "." else project_path
+        is_project_root = rel == "."
+        note_dir = project_path if is_project_root else project_path / rel
         if not note_dir.is_dir():
             continue
         try:
@@ -304,7 +308,8 @@ def _find_note_files(project_path: Path) -> list[Path]:
                     continue
                 if entry.suffix.lower() != ".md":
                     continue
-                if entry.name.lower() in _README_FILENAMES_LOWER:
+                # Only the project-root README is covered elsewhere.
+                if is_project_root and entry.name.lower() in _README_FILENAMES_LOWER:
                     continue
                 found.add(entry)
         except OSError:

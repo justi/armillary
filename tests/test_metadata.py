@@ -316,6 +316,28 @@ def test_extract_note_files_returns_empty_when_no_notes(tmp_path: Path) -> None:
     assert md.note_paths == []
 
 
+def test_extract_note_files_includes_subdirectory_readmes(tmp_path: Path) -> None:
+    """Regression for Codex review on PR #10: `docs/README.md` and
+    `notes/README.md` are legitimate documentation indexes — they are
+    not covered by the project-root `readme_excerpt`, so they belong
+    in `note_paths`. Only the project-root README gets excluded.
+    """
+    repo = _mk_real_git_repo(tmp_path / "with-readmes")
+    (repo / "docs").mkdir()
+    (repo / "docs" / "README.md").write_text("docs index")
+    (repo / "notes").mkdir()
+    (repo / "notes" / "README.md").write_text("notes index")
+
+    md = metadata.extract(_git_project(repo))
+    paths_str = {str(p) for p in md.note_paths}
+
+    # Both subdirectory READMEs must be present
+    assert any(p.endswith("/docs/README.md") for p in paths_str)
+    assert any(p.endswith("/notes/README.md") for p in paths_str)
+    # The project-root README must NOT be present (covered by readme_excerpt)
+    assert not any(p.endswith("/with-readmes/README.md") for p in paths_str)
+
+
 def test_extract_dirty_count_combines_staged_unstaged_and_untracked(
     tmp_path: Path,
 ) -> None:
