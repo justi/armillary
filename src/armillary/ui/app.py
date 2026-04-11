@@ -189,12 +189,19 @@ def _render_header_caption() -> None:
     st.caption(" · ".join(parts))
 
 
+_SEARCH_STATE_KEY = "armillary_search_state"
+
+
 def _render_search_section(rows: list[dict[str, Any]]) -> None:
     """Top-level ripgrep search across all cached projects.
 
     PLAN.md §5: 'Global search bar at the top — first iteration:
     ripgrep literal search'. Form-based so the search only fires
-    on submit, not on every keystroke.
+    on submit, not on every keystroke. Results live in
+    `st.session_state` so they survive subsequent reruns triggered
+    by per-result navigation buttons (otherwise the early-return
+    after `submitted` would drop the entire results section on the
+    next click and the button events would never fire).
     """
     with st.form("search_form", clear_on_submit=False):
         col_q, col_btn = st.columns([6, 1])
@@ -207,39 +214,71 @@ def _render_search_section(rows: list[dict[str, Any]]) -> None:
         with col_btn:
             submitted = st.form_submit_button("🔍 Search", use_container_width=True)
 
-    if not submitted or not query.strip():
+    if submitted:
+        cleaned = query.strip()
+        if not cleaned:
+            # Empty submit clears any previous results — gives the user
+            # an explicit way to dismiss the section.
+            st.session_state.pop(_SEARCH_STATE_KEY, None)
+        elif not LiteralSearch.is_available():
+            st.session_state[_SEARCH_STATE_KEY] = {
+                "query": cleaned,
+                "error": (
+                    "ripgrep (`rg`) is not on PATH. Install it "
+                    "(`brew install ripgrep`) to use search."
+                ),
+            }
+        else:
+            backend = LiteralSearch()
+            hits_by_project: list[tuple[dict[str, Any], list[SearchHit]]] = []
+            with st.spinner(f"Searching {len(rows)} projects for '{cleaned}'…"):
+                for row in rows:
+                    project_path = Path(row["_path"])
+                    try:
+                        hits = backend.search(
+                            cleaned, root=project_path, max_results=20
+                        )
+                    except Exception:  # noqa: BLE001 — best effort, skip broken
+                        continue
+                    if hits:
+                        hits_by_project.append((row, hits))
+            st.session_state[_SEARCH_STATE_KEY] = {
+                "query": cleaned,
+                "results": hits_by_project,
+            }
+
+    state = st.session_state.get(_SEARCH_STATE_KEY)
+    if not state:
         return
 
-    if not LiteralSearch.is_available():
-        st.error(
-            "ripgrep (`rg`) is not on PATH. Install it "
-            "(`brew install ripgrep`) to use search."
-        )
+    saved_query = state["query"]
+
+    if "error" in state:
+        st.error(state["error"])
         return
 
-    backend = LiteralSearch()
-    hits_by_project: list[tuple[dict[str, Any], list[SearchHit]]] = []
-    with st.spinner(f"Searching {len(rows)} projects for '{query}'…"):
-        for row in rows:
-            project_path = Path(row["_path"])
-            try:
-                hits = backend.search(query, root=project_path, max_results=20)
-            except Exception:  # noqa: BLE001 — best effort, skip broken projects
-                continue
-            if hits:
-                hits_by_project.append((row, hits))
-
+    hits_by_project = state["results"]
     total_hits = sum(len(h) for _, h in hits_by_project)
     if total_hits == 0:
-        st.warning(f"No matches for '{query}'.")
+        st.warning(f"No matches for '{saved_query}'.")
         return
 
-    st.success(f"Found {total_hits} match(es) in {len(hits_by_project)} project(s).")
+    header_col, clear_col = st.columns([5, 1])
+    with header_col:
+        st.success(
+            f"Found {total_hits} match(es) for '{saved_query}' "
+            f"in {len(hits_by_project)} project(s)."
+        )
+    with clear_col:
+        if st.button("✕ Clear", use_container_width=True, key="clear_search"):
+            st.session_state.pop(_SEARCH_STATE_KEY, None)
+            st.rerun()
+
     for row, hits in hits_by_project[:10]:
         with st.expander(f"📂 {row['Name']}  ({len(hits)} match(es))"):
             if st.button(
                 "→ Open project detail",
-                key=f"open_{row['_path']}",
+                key=f"open_search_hit_{row['_path']}",
             ):
                 st.query_params["project"] = row["_path"]
                 st.rerun()
@@ -450,10 +489,16 @@ def _render_detail_captions(project: Project) -> None:
 def _render_launcher_dropdown(project: Project, cfg: Config) -> None:
     """PLAN.md §5: '"Open in…" dropdown per project — driven by yaml config'.
 
-    Each entry from `cfg.launchers` is shown with its label/icon. Entries
-    whose `command` is missing on PATH are still listed but disabled, so
-    the user can see "what could exist" without confusion. Click → calls
-    `launcher.launch()` and surfaces success/error inline.
+    Each non-terminal entry from `cfg.launchers` is shown with its
+    label/icon. Click → calls `launcher.launch()` and surfaces
+    success/error inline.
+
+    **Terminal launchers are excluded** from the dashboard. Their
+    `subprocess.run()` path inherits the parent's stdio (necessary
+    for interactive `codex` / `claude-code` sessions) which would
+    block the Streamlit server thread and commandeer the terminal
+    that hosts the dashboard process. Use them from the CLI instead
+    via `armillary open <name> -t <target>`.
     """
     if not cfg.launchers:
         st.caption("No launchers configured.")
@@ -461,11 +506,15 @@ def _render_launcher_dropdown(project: Project, cfg: Config) -> None:
 
     available_targets: list[tuple[str, str]] = []
     missing_labels: list[str] = []
+    terminal_only_labels: list[str] = []
     for target_id, launcher_cfg in cfg.launchers.items():
         label = (
             f"{launcher_cfg.icon + ' ' if launcher_cfg.icon else ''}"
             f"{launcher_cfg.label}"
         )
+        if launcher_cfg.terminal:
+            terminal_only_labels.append(launcher_cfg.label)
+            continue
         if shutil.which(launcher_cfg.command) is not None:
             available_targets.append((target_id, label))
         else:
@@ -473,11 +522,16 @@ def _render_launcher_dropdown(project: Project, cfg: Config) -> None:
 
     if not available_targets:
         st.warning(
-            "No launcher executables found on PATH. Edit "
+            "No GUI launcher executables found on PATH. Edit "
             f"`{_shorten_home(default_config_path())}` to add one."
         )
         if missing_labels:
             st.caption(f"Configured but missing: {', '.join(missing_labels)}")
+        if terminal_only_labels:
+            st.caption(
+                f"Terminal-only launchers (CLI: `armillary open <name> -t <id>`): "
+                f"{', '.join(terminal_only_labels)}"
+            )
         return
 
     col_select, col_btn = st.columns([3, 1])
@@ -505,6 +559,11 @@ def _render_launcher_dropdown(project: Project, cfg: Config) -> None:
 
     if missing_labels:
         st.caption(f"Not on PATH (skipped): {', '.join(missing_labels)}")
+    if terminal_only_labels:
+        st.caption(
+            f"Terminal-only launchers (CLI: `armillary open <name> -t <id>`): "
+            f"{', '.join(terminal_only_labels)}"
+        )
 
 
 def _render_recent_commits(repo_path: Path, limit: int = 5) -> None:
