@@ -1,12 +1,14 @@
-# workspace
+# armillary
 
 > A project observatory with AI integration — one terminal command, one browser dashboard, all your projects.
+>
+> *An armillary sphere is an ancient astronomical instrument: concentric rings modeling the celestial sphere, with a fixed center and orbits turning around it. The metaphor fits: you are the center, your projects orbit around you, and `armillary` lets you see the whole system at once.*
 
 **Status:** Planning / pre-alpha. No working code yet.
 
 ## What is this?
 
-`workspace` is a **meta layer** over the projects you already have on disk. Launched with a single terminal command, it opens a browser dashboard that:
+`armillary` is a **meta layer** over the projects you already have on disk. Launched with a single terminal command, it opens a browser dashboard that:
 
 - **Auto-discovers** every project in your umbrella folders (git repos and loose idea folders)
 - **Shows metadata** for each project: last modified, git status, README snippet, ADRs, notes
@@ -16,7 +18,7 @@
 
 ## Non-goals
 
-`workspace` is **not**:
+`armillary` is **not**:
 
 - Another git GUI — use [Sourcetree](https://www.sourcetreeapp.com/) / [Fork](https://git-fork.com/) / [gita](https://github.com/nosarthur/gita) for that
 - Another IDE — Claude Code / Cursor / Zed already cover that
@@ -42,7 +44,7 @@ Custom code (discovery, status heuristics, launcher config, AI-memory bridge) is
 
 ## Privacy
 
-`workspace` **never sends data off-device**. The project index, metadata, cache, and config all live only on the user's local disk.
+`armillary` **never sends data off-device**. The project index, metadata, cache, and config all live only on the user's local disk.
 
 - **Interactive bootstrap:** on first run, the user is asked which umbrella folders to include. The repository itself has no hardcoded paths or user-specific data.
 - **No telemetry, no analytics, no external calls** — except for the optional Khoj API (also local) and the AI/IDE launchers the user explicitly configures.
