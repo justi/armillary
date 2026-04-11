@@ -365,8 +365,6 @@ def test_start_errors_clearly_when_streamlit_missing(
     "command, milestone",
     [
         (["search", "needle"], "M4"),
-        (["open", "some-project"], "M5"),
-        (["config"], "M5"),
     ],
 )
 def test_placeholder_commands_exit_zero_with_notice(
@@ -475,6 +473,218 @@ def test_list_rejects_invalid_type() -> None:
     """The --type filter is enum-validated by Click."""
     result = runner.invoke(app, ["list", "--type", "blueprint"])
     assert result.exit_code != 0
+
+
+# --- M5: armillary open ---------------------------------------------------
+
+
+def test_open_unknown_project_errors_out(tmp_path: Path) -> None:
+    """No matching project in cache → error, no subprocess."""
+    result = runner.invoke(app, ["open", "totally-fictional-name"])
+    assert result.exit_code != 0
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
+    assert "no project" in combined.lower()
+
+
+def test_open_ambiguous_project_errors_out(tmp_path: Path) -> None:
+    _mkrepo(tmp_path / "alpha-one")
+    _mkrepo(tmp_path / "alpha-two")
+    runner.invoke(app, ["scan", "-u", str(tmp_path)])
+
+    result = runner.invoke(app, ["open", "alpha"])
+    assert result.exit_code != 0
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
+    assert "ambiguous" in combined.lower()
+    assert "alpha-one" in combined or "alpha-two" in combined
+
+
+def test_open_invokes_launcher_when_executable_present(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The CLI passes the resolved project path to the launcher."""
+    _mkrepo(tmp_path / "myrepo")
+    runner.invoke(app, ["scan", "-u", str(tmp_path)])
+
+    captured: dict[str, Any] = {}
+
+    def fake_which(name: str) -> str | None:
+        return f"/usr/bin/{name}"
+
+    def fake_popen(cmd: list[str], **kwargs: Any) -> Any:
+        captured["cmd"] = cmd
+        captured["cwd"] = kwargs.get("cwd")
+        return None
+
+    from armillary import launcher as launcher_mod
+
+    monkeypatch.setattr(launcher_mod.shutil, "which", fake_which)
+    monkeypatch.setattr(launcher_mod.subprocess, "Popen", fake_popen)
+
+    result = runner.invoke(app, ["open", "myrepo", "--target", "cursor"])
+    assert result.exit_code == 0, result.stdout
+    assert captured["cmd"][0] == "cursor"
+    assert "myrepo" in captured["cmd"][-1]
+    assert "myrepo" in captured["cwd"]
+
+
+def test_open_unknown_target_errors_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _mkrepo(tmp_path / "thing")
+    runner.invoke(app, ["scan", "-u", str(tmp_path)])
+
+    # Even if the user passes a fictional target, no subprocess fires
+    from armillary import launcher as launcher_mod
+
+    def must_not_run(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("subprocess.Popen should not be called")
+
+    monkeypatch.setattr(launcher_mod.subprocess, "Popen", must_not_run)
+
+    result = runner.invoke(app, ["open", "thing", "--target", "nope-editor"])
+    assert result.exit_code != 0
+
+
+# --- M5: armillary config -------------------------------------------------
+
+
+def test_config_path_prints_default_location(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(tmp_path / "config.yaml"))
+    result = runner.invoke(app, ["config", "--path"])
+    assert result.exit_code == 0
+    assert str(tmp_path / "config.yaml") in result.stdout
+
+
+def test_config_init_creates_starter_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config_file = tmp_path / "armillary" / "config.yaml"
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+
+    # `--init` writes the starter file then immediately tries to open
+    # `$EDITOR`. Use `true` as a no-op editor for the test.
+    monkeypatch.setenv("EDITOR", "true")
+
+    result = runner.invoke(app, ["config", "--init"])
+    assert result.exit_code == 0, result.stdout
+    assert config_file.exists()
+    assert "umbrellas" in config_file.read_text()
+
+
+def test_config_missing_file_without_init_errors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(tmp_path / "missing.yaml"))
+    monkeypatch.setenv("EDITOR", "true")
+
+    result = runner.invoke(app, ["config"])
+    assert result.exit_code != 0
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
+    assert "does not exist" in combined.lower()
+
+
+def test_config_opens_in_editor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("umbrellas: []\n")
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+    monkeypatch.setenv("EDITOR", "true")  # `true` exits 0 immediately
+
+    captured: dict[str, Any] = {}
+
+    real_run = cli.subprocess.run
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        captured["cmd"] = cmd
+        return real_run(["true"], **kwargs)
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(app, ["config"])
+    assert result.exit_code == 0, result.stdout
+    assert captured["cmd"][0] == "true"
+    assert str(config_file) in captured["cmd"][1]
+
+
+def test_config_missing_editor_errors_clearly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("umbrellas: []\n")
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+    monkeypatch.setenv("EDITOR", "no-such-editor-program-zzz")
+
+    result = runner.invoke(app, ["config"])
+    assert result.exit_code != 0
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
+    assert "editor" in combined.lower()
+
+
+def test_config_supports_editor_with_arguments(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Regression for Codex review P3: `EDITOR='code --wait'` is a
+    common shell setting and `armillary config` must split it before
+    looking up the executable on PATH.
+    """
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("umbrellas: []\n")
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+    # `true` exists on PATH; pretend it takes arguments.
+    monkeypatch.setenv("EDITOR", "true --wait --reuse-window")
+
+    captured: dict[str, Any] = {}
+
+    real_run = cli.subprocess.run
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        captured["cmd"] = cmd
+        return real_run(["true"], **kwargs)
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(app, ["config"])
+    assert result.exit_code == 0, result.stdout
+    # Editor argv was parsed: ["true", "--wait", "--reuse-window", <config>]
+    assert captured["cmd"][0] == "true"
+    assert "--wait" in captured["cmd"]
+    assert "--reuse-window" in captured["cmd"]
+    assert str(config_file) in captured["cmd"][-1]
+
+
+# --- M5: scan falls back to config umbrellas -------------------------------
+
+
+def test_scan_uses_config_umbrellas_when_no_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    _mkrepo(workspace / "from-config")
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(f"umbrellas:\n  - path: {workspace}\n    max_depth: 3\n")
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+
+    result = runner.invoke(app, ["scan"])  # no -u
+    assert result.exit_code == 0, result.stdout
+    data = json.loads(result.stdout)
+    assert any(p["name"] == "from-config" for p in data)
+
+
+def test_scan_with_no_umbrellas_anywhere_errors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """No -u and no config → friendly error, not a Python crash."""
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(tmp_path / "missing.yaml"))
+
+    result = runner.invoke(app, ["scan"])
+    assert result.exit_code != 0
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
+    assert "no umbrellas" in combined.lower()
 
 
 def test_scan_then_rescan_reflects_removed_projects_after_prune(
