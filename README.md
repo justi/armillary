@@ -4,7 +4,7 @@
 >
 > *An armillary sphere is an ancient astronomical instrument: concentric rings modeling the celestial sphere, with a fixed center and orbits turning around it. The metaphor fits: you are the center, your projects orbit around you, and `armillary` lets you see the whole system at once.*
 
-**Status:** Planning / pre-alpha. No working code yet.
+**Status:** Pre-alpha. Scanner and CLI scaffolding work; dashboard, metadata, status, launcher, and search are in progress.
 
 ## What is this?
 
@@ -50,7 +50,7 @@ Custom code (discovery, status heuristics, launcher config, AI-memory bridge) is
 - **No telemetry, no analytics, no external calls** — except for the optional Khoj API (also local) and the AI/IDE launchers the user explicitly configures.
 - All documentation uses symbolic placeholders (`<example-folder-a>`, `~/<umbrella-name>`), never real paths.
 
-See [§14 of the development plan](#) for full contributor guidelines on privacy. *(The development plan itself is kept in a private file and is not part of the public repo.)*
+The development plan with the full contributor guidelines on privacy is kept in a private file (`PLAN.md`, gitignored) and is not part of the public repo.
 
 ## Tech stack
 
@@ -64,17 +64,73 @@ See [§14 of the development plan](#) for full contributor guidelines on privacy
 
 ## Installation
 
-Not yet installable. This repo currently only contains the plan and README; code to follow.
+Not yet published to PyPI. To run from source:
+
+```bash
+git clone git@github.com:justi/armillary.git
+cd armillary
+uv sync                # creates .venv and installs runtime deps
+.venv/bin/armillary --help
+```
+
+## Quick start
+
+The auto-discovery scanner is the first piece that works end-to-end.
+Point it at one or more umbrella folders and it prints every project
+it finds as JSON:
+
+```bash
+# scan a single umbrella folder
+.venv/bin/armillary scan -u ~/Projects
+
+# scan several umbrellas at once
+.venv/bin/armillary scan -u ~/Projects -u ~/ideas
+
+# limit recursion depth (default 3, allowed 1..10)
+.venv/bin/armillary scan -u ~/Projects --max-depth 5
+
+# pipe to a file
+.venv/bin/armillary scan -u ~/Projects > projects.json
+```
+
+Each entry contains the resolved path, name, type (`git` or `idea`),
+which umbrella found it, and a best-effort `last_modified` timestamp.
+
+You can also launch the (currently placeholder) dashboard:
+
+```bash
+.venv/bin/armillary start
+# → opens http://localhost:8501
+# → telemetry is disabled by default per the privacy commitment above
+```
+
+The remaining commands (`list`, `search`, `open`, `config`) are stubs
+that print "not implemented yet" and the milestone they belong to.
+
+## Development
+
+```bash
+# install runtime + dev dependencies (pytest, ruff)
+uv sync --extra dev
+
+# run the test suite
+.venv/bin/python -m pytest
+
+# run a single file with verbose output
+.venv/bin/python -m pytest tests/test_scanner.py -v
+```
 
 ## Roadmap
 
-- **M1** — scaffolding
-- **M2** — auto-discovery scanner (shallow + deep scan, interactive bootstrap)
-- **M3** — metadata extraction and status heuristics
-- **M4** — Streamlit dashboard UI
-- **M5** — configuration and launcher integration
-- **M6** — optional Khoj integration for semantic search
-- **M7** — Claude Code auto-memory bridge
+- ✓ Project scaffolding (CLI, package layout, dashboard stub)
+- ✓ Auto-discovery scanner (`armillary scan`, JSON output)
+- → Project hardening (CI workflow, ruff config)
+- ◌ SQLite cache + `armillary list` from cache
+- ◌ Metadata extraction (git info, README, ADRs) and status heuristics
+- ◌ Streamlit dashboard reading from cache
+- ◌ Configuration file and launcher integration
+- ◌ Khoj integration for semantic search *(optional)*
+- ◌ `repos-index.md` exporter for AI tools
 
 ## License
 
@@ -82,4 +138,6 @@ MIT (see [LICENSE](LICENSE))
 
 ## Contributing
 
-The project is in the planning phase and is not yet open for contributions. Once the scaffolding is in place and the initial milestones are complete, contribution guidelines will be added here.
+The project is in early development and not yet open for external
+contributions. Once the dashboard, cache, and launcher milestones are
+in place, contribution guidelines will be added here.
