@@ -33,7 +33,7 @@ MANIFEST
 venv/
 ENV/
 env/
-.python-version
+# .python-version IS committed — pins Python version for pyenv / uv
 
 # Testing and coverage
 .pytest_cache/
@@ -53,9 +53,8 @@ coverage.xml
 .pyre/
 .ruff_cache/
 
-# Tooling / lock files
-uv.lock
-poetry.lock
+# Lock files: committed for reproducible application installs
+# (uv.lock / poetry.lock NOT ignored on purpose)
 
 # Local workspace data (generated at runtime, per-user)
 *.db
