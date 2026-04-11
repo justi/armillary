@@ -612,19 +612,28 @@ def install_khoj(
 ) -> None:
     """Install Khoj into the current Python environment.
 
-    Runs `pip install khoj` as a subprocess so the user gets a single
-    clickable path to semantic search instead of "go read the Khoj
-    docs". Khoj is a heavy dependency (~1 GB with the default ML
-    models + torch), so the command confirms once before pulling
-    anything down.
+    Picks the best available installer so it works across common setups:
 
+    1. If `uv` is on PATH, prefer `uv pip install khoj` — fastest, and
+       works on `uv venv`-created environments that do not ship pip.
+    2. Else, if `python -m pip` works in the current interpreter, use
+       that. This is the classic CPython/virtualenv happy path.
+    3. Else, try `python -m ensurepip --upgrade` to bootstrap pip, then
+       retry the pip install. Catches `uv venv` without `--seed` and
+       some minimal Debian/Homebrew venvs.
+    4. Otherwise surface a concrete error telling the user what to do
+       next (install uv, or recreate the venv with `--seed`).
+
+    Khoj is a heavy dependency (~1 GB with the default ML models +
+    torch) so the command confirms once before pulling anything down.
     On success, prints the next steps: start the Khoj server in a
     separate terminal, then rerun `armillary config --init --force`
-    (or flip the toggle in the dashboard Settings → Khoj tab) so
-    armillary picks it up.
+    (or flip the toggle in the dashboard Settings → Khoj tab).
     """
+    installer_cmd, installer_label = _pick_khoj_installer()
+
     typer.secho(
-        "This will run `pip install khoj` in the current Python environment.",
+        f"This will install Khoj via `{installer_label}`.",
         fg=typer.colors.CYAN,
     )
     typer.echo(
@@ -632,7 +641,7 @@ def install_khoj(
         "This can take several minutes."
     )
     typer.echo(f"  Python:    {sys.executable}")
-    typer.echo(f"  pip cmd:   {sys.executable} -m pip install khoj")
+    typer.echo(f"  Command:   {' '.join(installer_cmd)}")
 
     if not non_interactive and not typer.confirm(
         "\n  Proceed?",
@@ -642,19 +651,41 @@ def install_khoj(
         raise typer.Exit(1)
 
     typer.secho("\nInstalling Khoj…", fg=typer.colors.CYAN)
-    result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "khoj"],
-        check=False,
-    )
+    result = subprocess.run(installer_cmd, check=False)
+
+    # If plain `python -m pip` failed with "No module named pip", try
+    # to bootstrap pip via ensurepip and retry once. uv path already
+    # succeeded or failed for its own reasons — do not second-guess it.
+    if result.returncode != 0 and installer_cmd[:3] == [sys.executable, "-m", "pip"]:
+        typer.secho(
+            "\npip install failed. Trying to bootstrap pip via ensurepip…",
+            fg=typer.colors.YELLOW,
+        )
+        bootstrap = subprocess.run(
+            [sys.executable, "-m", "ensurepip", "--upgrade"],
+            check=False,
+        )
+        if bootstrap.returncode == 0:
+            typer.secho(
+                "  ✓ ensurepip OK — retrying pip install.",
+                fg=typer.colors.CYAN,
+            )
+            result = subprocess.run(installer_cmd, check=False)
+
     if result.returncode != 0:
         typer.secho(
-            f"\npip install khoj failed with exit code {result.returncode}.",
+            f"\nInstall failed with exit code {result.returncode}.",
             fg=typer.colors.RED,
             err=True,
         )
         typer.echo(
-            "  Common causes: network error, incompatible Python "
-            "version, conflicting dependencies in the current venv."
+            "  Common causes: network error, incompatible Python version, "
+            "conflicting dependencies, or a venv created without pip.\n"
+            "  Workarounds:\n"
+            "    - Install uv (`curl -LsSf https://astral.sh/uv/install.sh | sh`) "
+            "and rerun `armillary install-khoj`.\n"
+            "    - Recreate the venv with `uv venv --seed` or `python -m venv`.\n"
+            "    - Install Khoj manually: `pip install khoj`."
         )
         raise typer.Exit(result.returncode)
 
@@ -672,6 +703,24 @@ def install_khoj(
         "     (or enable via dashboard Settings → Khoj tab if you "
         "already have a config)"
     )
+
+
+def _pick_khoj_installer() -> tuple[list[str], str]:
+    """Return `(argv, human_label)` for the best available installer.
+
+    Prefers `uv pip install` because it works on `uv venv`-created
+    environments that do not ship pip. Falls back to `python -m pip`
+    if uv is not on PATH. A pip-less interpreter will still fail fast
+    in `install_khoj`; the `ensurepip` retry lives there, not here,
+    so callers / tests can inspect what we tried without running it.
+    """
+    uv = shutil_which("uv")
+    if uv:
+        return (
+            [uv, "pip", "install", "--python", sys.executable, "khoj"],
+            "uv pip install",
+        )
+    return ([sys.executable, "-m", "pip", "install", "khoj"], "pip install")
 
 
 @app.command()

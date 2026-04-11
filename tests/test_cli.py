@@ -2045,12 +2045,36 @@ def test_config_init_non_interactive_skips_bridge_prompt(
 # --- armillary install-khoj (follow-up to PR #19) -------------------------
 
 
-def test_install_khoj_runs_pip_install_on_confirm(
+def _force_no_uv(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pretend `uv` is not on PATH so install-khoj picks the pip branch."""
+    real_which = cli.shutil_which
+
+    def no_uv(name: str) -> str | None:
+        if name == "uv":
+            return None
+        return real_which(name)
+
+    monkeypatch.setattr(cli, "shutil_which", no_uv)
+
+
+def _force_uv_at(monkeypatch: pytest.MonkeyPatch, path: str) -> None:
+    """Pretend `uv` resolves to `path` on PATH."""
+    real_which = cli.shutil_which
+
+    def has_uv(name: str) -> str | None:
+        if name == "uv":
+            return path
+        return real_which(name)
+
+    monkeypatch.setattr(cli, "shutil_which", has_uv)
+
+
+def test_install_khoj_uses_pip_when_no_uv(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`armillary install-khoj` spawns `python -m pip install khoj` as a
-    subprocess after the user confirms. Stubs `subprocess.run` so
-    nothing is actually downloaded."""
+    """With no `uv` on PATH, install-khoj falls back to
+    `python -m pip install khoj`."""
+    _force_no_uv(monkeypatch)
     captured: dict[str, Any] = {}
 
     def fake_run(cmd: list[str], **kwargs: Any) -> Any:
@@ -2065,23 +2089,46 @@ def test_install_khoj_runs_pip_install_on_confirm(
 
     result = runner.invoke(app, ["install-khoj"], input="y\n")
     assert result.exit_code == 0, result.stdout
-
-    assert captured["cmd"][-3:] == ["-m", "pip", "install"] or captured["cmd"][-4:] == [
-        "-m",
-        "pip",
-        "install",
-        "khoj",
-    ]
-    # Next-step instructions are printed
+    assert captured["cmd"][1:] == ["-m", "pip", "install", "khoj"]
     out = _strip_ansi(result.stdout)
+    assert "pip install" in out
     assert "khoj --anonymous-mode" in out
     assert "armillary config --init --force" in out
+
+
+def test_install_khoj_prefers_uv_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When `uv` is on PATH, install-khoj uses
+    `uv pip install --python <interp> khoj` — works on uv-created venvs
+    that never shipped pip, which was the original bug report."""
+    _force_uv_at(monkeypatch, "/fake/bin/uv")
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        captured["cmd"] = cmd
+
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(app, ["install-khoj", "-y"])
+    assert result.exit_code == 0, result.stdout
+    assert captured["cmd"][0] == "/fake/bin/uv"
+    assert captured["cmd"][1:4] == ["pip", "install", "--python"]
+    assert captured["cmd"][-1] == "khoj"
+    out = _strip_ansi(result.stdout)
+    assert "uv pip install" in out
 
 
 def test_install_khoj_aborts_without_confirm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Bare Enter (default N) aborts without running pip install."""
+    _force_no_uv(monkeypatch)
     called = False
 
     def fake_run(cmd: list[str], **kwargs: Any) -> Any:
@@ -2106,6 +2153,7 @@ def test_install_khoj_non_interactive_skips_confirm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`--non-interactive` / `-y` runs pip install with no prompt."""
+    _force_no_uv(monkeypatch)
     captured: dict[str, Any] = {}
 
     def fake_run(cmd: list[str], **kwargs: Any) -> Any:
@@ -2123,11 +2171,47 @@ def test_install_khoj_non_interactive_skips_confirm(
     assert captured["cmd"][-1] == "khoj"
 
 
-def test_install_khoj_surfaces_pip_failure(
+def test_install_khoj_bootstraps_pip_via_ensurepip_when_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """If pip exits non-zero, the CLI exits with the same code and
-    prints a helpful "common causes" line instead of a silent crash."""
+    """Real-world bug: `uv venv` without `--seed` produces a Python
+    interpreter with no pip. First `python -m pip install khoj` exits 1
+    ("No module named pip"); we retry via `ensurepip --upgrade` and
+    then re-run pip. This test simulates exactly that sequence and
+    asserts the three commands fire in order, exit 0 on the retry."""
+    _force_no_uv(monkeypatch)
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        calls.append(list(cmd))
+
+        class Result:
+            # Pip fails first, ensurepip OK, pip succeeds on retry.
+            returncode = 1 if len(calls) == 1 else 0
+
+        return Result()
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(app, ["install-khoj", "-y"])
+    assert result.exit_code == 0, result.stdout
+    assert len(calls) == 3
+    # 1st: pip install (fails)
+    assert calls[0][1:] == ["-m", "pip", "install", "khoj"]
+    # 2nd: ensurepip bootstrap
+    assert calls[1][1:] == ["-m", "ensurepip", "--upgrade"]
+    # 3rd: pip install retry (succeeds)
+    assert calls[2][1:] == ["-m", "pip", "install", "khoj"]
+
+
+def test_install_khoj_surfaces_install_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If install fails (and ensurepip cannot recover), the CLI exits
+    with the failing return code and prints the "Common causes" block
+    plus workaround hints."""
+    _force_no_uv(monkeypatch)
 
     def fake_run(cmd: list[str], **kwargs: Any) -> Any:
         class Result:
@@ -2140,8 +2224,10 @@ def test_install_khoj_surfaces_pip_failure(
     result = runner.invoke(app, ["install-khoj", "-y"])
     assert result.exit_code == 1
     combined = _strip_ansi(result.stdout + (result.stderr or ""))
-    assert "pip install khoj failed" in combined
+    assert "Install failed with exit code 1" in combined
     assert "Common causes" in combined
+    # Workaround hints: uv install, venv --seed, manual pip
+    assert "uv venv --seed" in combined
 
 
 def test_search_khoj_disabled_errors_clearly(
