@@ -15,7 +15,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from armillary import exporter, launcher, metadata, status
+from armillary import bootstrap, exporter, launcher, metadata, status
 from armillary.cache import Cache
 from armillary.config import (
     Config,
@@ -502,15 +502,36 @@ def config(
     init: bool = typer.Option(
         False,
         "--init",
-        help="Create a starter config file at the default path if missing.",
+        help=(
+            "Create a config at the default path. By default scans `~/` for "
+            "umbrella folder candidates and asks you to pick which to include."
+        ),
+    ),
+    non_interactive: bool = typer.Option(
+        False,
+        "--non-interactive",
+        help="With --init, accept all detected candidates without asking.",
+    ),
+    blank: bool = typer.Option(
+        False,
+        "--blank",
+        help="With --init, write a minimal placeholder config without scanning.",
     ),
 ) -> None:
     """Open the config file in $EDITOR (or print its path / create it).
 
     With no flags, opens `~/.config/armillary/config.yaml` in the editor
     pointed to by `$EDITOR` (or `nano` as a sensible fallback). Use
-    `--path` to just print the location, or `--init` to write a starter
-    YAML before editing.
+    `--path` to just print the location, or `--init` to create the
+    file:
+
+    - `--init` (default): scans `~/` for umbrella candidates (folders
+      with multiple git repos or conventional names like `Projects`,
+      `repos`, `code`), asks you to pick, writes the selection.
+    - `--init --non-interactive`: same scan, takes all candidates.
+    - `--init --blank`: writes a minimal placeholder file without scanning.
+
+    PLAN.md §5 "Bootstrap": this is the two-phase first-run experience.
     """
     config_path = default_config_path()
 
@@ -519,9 +540,7 @@ def config(
         return
 
     if init and not config_path.exists():
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(_STARTER_CONFIG_YAML, encoding="utf-8")
-        typer.secho(f"Created {config_path}", fg=typer.colors.GREEN)
+        _init_config_file(config_path, non_interactive=non_interactive, blank=blank)
 
     if not config_path.exists():
         typer.secho(
@@ -567,10 +586,219 @@ def config(
         raise typer.Exit(result.returncode)
 
 
-_STARTER_CONFIG_YAML = """\
-# armillary config — generated starter file
-# Edit and re-run `armillary scan` (no -u flags needed) or
-# `armillary list` to use these defaults.
+def _init_config_file(
+    config_path: Path,
+    *,
+    non_interactive: bool,
+    blank: bool,
+) -> None:
+    """Discover umbrella candidates, ask the user, write the config.
+
+    The three modes (`--blank`, `--non-interactive`, default interactive)
+    differ only in how umbrellas are chosen — the YAML render is the same
+    for all of them.
+    """
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if blank:
+        config_path.write_text(_BLANK_STARTER_CONFIG_YAML, encoding="utf-8")
+        typer.secho(
+            f"Created {config_path} with a placeholder umbrella. "
+            "Edit it before running `armillary scan`.",
+            fg=typer.colors.GREEN,
+        )
+        return
+
+    typer.secho("Scanning ~ for umbrella folder candidates…", fg=typer.colors.CYAN)
+    candidates = bootstrap.discover_umbrella_candidates()
+
+    if not candidates:
+        typer.secho(
+            "No umbrella candidates found under ~. Falling back to a "
+            "blank config — edit it manually.",
+            fg=typer.colors.YELLOW,
+        )
+        config_path.write_text(_BLANK_STARTER_CONFIG_YAML, encoding="utf-8")
+        typer.secho(f"Created {config_path}", fg=typer.colors.GREEN)
+        return
+
+    typer.echo("")
+    typer.secho(
+        f"Found {len(candidates)} candidate(s):",
+        bold=True,
+    )
+    for i, candidate in enumerate(candidates, 1):
+        marker = "✓" if candidate.name_match else " "
+        line = (
+            f"  [{i:>2}] {marker} "
+            f"{_shorten_home_str(candidate.path)}  "
+            f"({candidate.git_count} git, {candidate.idea_count} idea)"
+        )
+        typer.echo(line)
+    typer.echo("")
+
+    if non_interactive:
+        chosen = candidates
+        typer.secho(
+            f"--non-interactive: taking all {len(chosen)} candidate(s).",
+            fg=typer.colors.CYAN,
+        )
+    else:
+        chosen = _ask_for_candidate_selection(candidates)
+        if not chosen:
+            typer.secho(
+                "No umbrellas selected. Aborting — config file not written.",
+                fg=typer.colors.YELLOW,
+            )
+            raise typer.Exit(1)
+
+    config_path.write_text(_render_config_yaml(chosen), encoding="utf-8")
+    typer.secho(
+        f"\n✓ Wrote {config_path} with {len(chosen)} umbrella(s):",
+        fg=typer.colors.GREEN,
+    )
+    for candidate in chosen:
+        typer.echo(
+            f"    - {_shorten_home_str(candidate.path)}  "
+            f"({candidate.git_count} git, {candidate.idea_count} idea)"
+        )
+    typer.echo("\nNext: armillary scan")
+
+
+def _ask_for_candidate_selection(
+    candidates: list[bootstrap.UmbrellaCandidate],
+) -> list[bootstrap.UmbrellaCandidate]:
+    """Prompt for a comma-separated list of candidate numbers.
+
+    Accepts: `1,3,5`, `1-3`, `all`, empty (= cancel). Loops on invalid
+    input until the user gives something parseable.
+
+    The empty default is intentional — `typer.prompt(default="all")`
+    would silently substitute `"all"` for a blank Enter and the
+    "empty to cancel" affordance would never fire.
+    """
+    while True:
+        raw = typer.prompt(
+            "Which to include? (e.g. `1,3` or `1-3` or `all`, empty to cancel)",
+            default="",
+            show_default=False,
+        ).strip()
+        if not raw:
+            return []
+        if raw.lower() == "all":
+            return list(candidates)
+        try:
+            picks = _parse_selection(raw, len(candidates))
+        except ValueError as exc:
+            typer.secho(f"  {exc}", fg=typer.colors.RED)
+            continue
+        return [candidates[i - 1] for i in sorted(picks)]
+
+
+def _parse_selection(raw: str, total: int) -> set[int]:
+    """Parse a `1,3,5-7` style selection into a set of 1-based indices.
+
+    Raises ValueError on any out-of-range or non-numeric token.
+    """
+    out: set[int] = set()
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if "-" in token:
+            lo_str, hi_str = token.split("-", 1)
+            try:
+                lo = int(lo_str)
+                hi = int(hi_str)
+            except ValueError as exc:
+                raise ValueError(f"Invalid range '{token}'") from exc
+            if lo < 1 or hi > total or lo > hi:
+                raise ValueError(f"Range '{token}' is out of bounds (1..{total})")
+            out.update(range(lo, hi + 1))
+        else:
+            try:
+                n = int(token)
+            except ValueError as exc:
+                raise ValueError(f"Not a number: '{token}'") from exc
+            if n < 1 or n > total:
+                raise ValueError(f"Number '{n}' is out of bounds (1..{total})")
+            out.add(n)
+    if not out:
+        raise ValueError("Empty selection")
+    return out
+
+
+def _render_config_yaml(
+    candidates: list[bootstrap.UmbrellaCandidate],
+) -> str:
+    """Render a `Config`-shaped YAML document for the chosen umbrellas.
+
+    Goes through `yaml.safe_dump()` so any folder name with YAML
+    metacharacters (`:`, `#`, `-`, leading whitespace, ...) is properly
+    quoted. Hand-crafted f-strings would silently truncate or break
+    on names like `~/Work #old` or `~/Foo: Bar`.
+    """
+    import yaml as _yaml
+
+    payload = {
+        "umbrellas": [
+            {
+                "path": _shorten_home_str(candidate.path),
+                "label": candidate.path.name,
+                "max_depth": 3,
+            }
+            for candidate in candidates
+        ],
+    }
+
+    header = (
+        "# armillary config — generated by `armillary config --init`\n"
+        "# Re-run `armillary config` to edit, or `armillary config --init`\n"
+        "# to regenerate from a fresh ~/ scan.\n\n"
+    )
+    body = _yaml.safe_dump(
+        payload,
+        sort_keys=False,
+        default_flow_style=False,
+        allow_unicode=True,
+    )
+    footer = (
+        "\n"
+        "# Custom launchers can be added here. Built-in entries (claude-code,\n"
+        "# codex, cursor, zed, vscode, terminal, finder) are always available\n"
+        "# even if you do not list them — they only need overriding if you\n"
+        "# want to change the command or args.\n"
+        "#\n"
+        "# Example:\n"
+        "#\n"
+        "# launchers:\n"
+        "#   nvim:\n"
+        "#     label: Neovim\n"
+        "#     command: nvim\n"
+        '#     args: ["{path}"]\n'
+        '#     icon: "✏️"\n'
+        "\n"
+        "# Khoj semantic search (optional, opt-in):\n"
+        "#\n"
+        "# khoj:\n"
+        "#   enabled: true\n"
+        "#   api_url: http://localhost:42110\n"
+    )
+    return header + body + footer
+
+
+def _shorten_home_str(path: Path) -> str:
+    """Return a string with `~` substituted for `$HOME` if applicable."""
+    home = str(Path.home())
+    s = str(path)
+    if s.startswith(home):
+        return "~" + s[len(home) :]
+    return s
+
+
+_BLANK_STARTER_CONFIG_YAML = """\
+# armillary config — generated placeholder
+# Edit the umbrellas list and re-run `armillary scan`.
 
 umbrellas:
   - path: ~/Projects
