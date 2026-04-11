@@ -83,10 +83,15 @@ class ProjectMetadata(BaseModel):
     last_commit_ts: datetime | None = None
     last_commit_author: str | None = None
     dirty_count: int | None = None
+    ahead: int | None = None
+    behind: int | None = None
 
     # Universal fields.
+    size_bytes: int | None = None
+    file_count: int | None = None
     readme_excerpt: str | None = None
     adr_paths: list[Path] = Field(default_factory=list)
+    note_paths: list[Path] = Field(default_factory=list)
 
     # Computed by `status.compute_status()` after extract; lives here so
     # the cache and dashboard can both read it as part of `ProjectMetadata`.
