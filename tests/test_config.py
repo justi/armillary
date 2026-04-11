@@ -125,6 +125,40 @@ def test_load_config_user_can_override_builtin_launcher(tmp_path: Path) -> None:
     assert cfg.launchers["cursor"].args == ["--workspace", "{path}"]
 
 
+def test_load_config_partial_override_keeps_builtin_fields(tmp_path: Path) -> None:
+    """Regression for Codex review P2: a config that overrides only one
+    field of a built-in launcher must inherit the rest, not wipe them."""
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text("launchers:\n  cursor:\n    command: my-wrapper\n")
+    cfg = load_config(cfg_file)
+    assert cfg.launchers["cursor"].command == "my-wrapper"
+    # `label`, `args`, `icon` come from the built-in entry
+    assert cfg.launchers["cursor"].label == "Cursor"
+    assert cfg.launchers["cursor"].args == ["{path}"]
+    assert cfg.launchers["cursor"].icon == "📝"
+
+
+def test_builtin_terminal_launchers_are_marked_terminal() -> None:
+    """Codex / Claude Code are interactive terminal apps and must not
+    be detached. Regression for Codex review P1.
+    """
+    builtins = Config.builtin_launchers()
+    assert builtins["claude-code"].terminal is True
+    assert builtins["codex"].terminal is True
+    # GUI launchers stay non-terminal
+    assert builtins["cursor"].terminal is False
+    assert builtins["vscode"].terminal is False
+    assert builtins["finder"].terminal is False
+
+
+def test_builtin_codex_claude_dont_pass_path_as_positional() -> None:
+    """Regression for Codex review P2: passing `{path}` to `codex` /
+    `claude` makes them treat the project path as an initial prompt."""
+    builtins = Config.builtin_launchers()
+    assert builtins["claude-code"].args == []
+    assert builtins["codex"].args == []
+
+
 # --- load_config: errors --------------------------------------------------
 
 
@@ -133,6 +167,17 @@ def test_load_config_malformed_yaml_raises_friendly_error(tmp_path: Path) -> Non
     cfg_file.write_text("umbrellas:\n  - this: [ unclosed")
     with pytest.raises(ConfigError, match="Could not parse"):
         load_config(cfg_file)
+
+
+def test_load_config_unreadable_path_raises_friendly_error(tmp_path: Path) -> None:
+    """Regression for Codex review P3: an unreadable path (e.g. a
+    directory at the config location) must surface as ConfigError, not
+    a Python traceback in `armillary scan` / `open`.
+    """
+    not_a_file = tmp_path / "config.yaml"
+    not_a_file.mkdir()  # exists() is True but read_text raises IsADirectoryError
+    with pytest.raises(ConfigError, match="Could not read"):
+        load_config(not_a_file)
 
 
 def test_load_config_root_must_be_mapping(tmp_path: Path) -> None:

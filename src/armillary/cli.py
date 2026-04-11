@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shlex
 import subprocess
 import sys
 from datetime import datetime
@@ -348,17 +349,38 @@ def config(
         )
         raise typer.Exit(1)
 
-    editor = os.environ.get("EDITOR", "nano")
-    if shutil_which(editor) is None:
+    # `$EDITOR` is allowed to carry arguments (e.g. `code --wait`,
+    # `vim -f`). Split it like a shell would so the executable name
+    # can be looked up on PATH and the rest get passed straight through.
+    editor_value = os.environ.get("EDITOR", "nano")
+    try:
+        editor_argv = shlex.split(editor_value)
+    except ValueError as exc:
         typer.secho(
-            f"$EDITOR ({editor!r}) is not on PATH. "
+            f"$EDITOR ({editor_value!r}) is not a valid shell-quoted "
+            f"command: {exc}. Set $EDITOR or edit {config_path} manually.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2) from exc
+    if not editor_argv:
+        typer.secho(
+            f"$EDITOR is empty. Set $EDITOR or edit {config_path} manually.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    if shutil_which(editor_argv[0]) is None:
+        typer.secho(
+            f"$EDITOR ({editor_argv[0]!r}) is not on PATH. "
             f"Set $EDITOR or edit {config_path} manually.",
             fg=typer.colors.RED,
             err=True,
         )
         raise typer.Exit(2)
 
-    result = subprocess.run([editor, str(config_path)], check=False)
+    result = subprocess.run([*editor_argv, str(config_path)], check=False)
     if result.returncode != 0:
         raise typer.Exit(result.returncode)
 

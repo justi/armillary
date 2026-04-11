@@ -80,17 +80,30 @@ def launch(
     cmd = _build_command(config, project.path)
 
     try:
-        # Detach from the parent so closing the terminal does not kill
-        # the editor. We don't capture stdout/stderr — most launchers
-        # are GUIs that don't print anything useful anyway.
-        subprocess.Popen(  # noqa: S603 — args list, no shell, command from trusted catalogue
-            cmd,
-            cwd=str(project.path),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        if config.terminal:
+            # Interactive terminal apps (codex, claude-code, vim, ...)
+            # need the parent's stdio inherited so the user can actually
+            # talk to them. We use `subprocess.run` (which waits for the
+            # child) rather than detaching, because spawning an
+            # interactive TTY app in the background just leaves it
+            # invisible.
+            subprocess.run(  # noqa: S603 — args list, no shell, trusted catalogue
+                cmd,
+                cwd=str(project.path),
+                check=False,
+            )
+        else:
+            # GUI launchers: detach completely so closing the terminal
+            # does not kill the editor, and silence stdio (no GUI cares
+            # about it).
+            subprocess.Popen(  # noqa: S603 — args list, no shell, trusted catalogue
+                cmd,
+                cwd=str(project.path),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
     except (OSError, ValueError) as exc:
         return LaunchResult(
             ok=False,

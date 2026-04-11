@@ -39,8 +39,15 @@ class UmbrellaConfig(BaseModel):
 class LauncherConfig(BaseModel):
     """How to invoke one launcher target.
 
-    `command` is the executable, `args` is the list of arguments where
-    `{path}` is substituted with the project path at launch time.
+    `command` is the executable. `args` is the list of arguments where
+    `{path}` is substituted with the project path at launch time. The
+    project path is also passed via `cwd=...` so most editors do not
+    need `{path}` in their args at all.
+
+    `terminal=True` marks this launcher as an interactive terminal app
+    (e.g. `codex`, `claude-code`, `vim`). The launcher then keeps the
+    parent's stdio so the user can actually interact with it, instead
+    of detaching into a background process with /dev/null on stdin.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -49,23 +56,31 @@ class LauncherConfig(BaseModel):
     command: str
     args: list[str] = Field(default_factory=list)
     icon: str | None = None
+    terminal: bool = False
 
 
 # Built-in launcher catalogue. Users can override or extend it via the
 # `launchers:` block in their config.yaml. Keep entries minimal and
 # cross-platform-friendly where possible.
 _BUILTIN_LAUNCHERS: dict[str, LauncherConfig] = {
+    # `claude` and `codex` are interactive terminal apps. They take their
+    # working directory from `cwd=...` so we deliberately do NOT pass
+    # `{path}` as a positional argument — both CLIs would treat that as
+    # an initial prompt, not a target directory. `terminal=True` keeps
+    # the parent's stdio attached so the user actually sees the prompt.
     "claude-code": LauncherConfig(
         label="Claude Code",
         command="claude",
-        args=["{path}"],
+        args=[],
         icon="🤖",
+        terminal=True,
     ),
     "codex": LauncherConfig(
         label="Codex",
         command="codex",
-        args=["{path}"],
+        args=[],
         icon="⚡",
+        terminal=True,
     ),
     "cursor": LauncherConfig(
         label="Cursor",
@@ -128,16 +143,22 @@ def load_config(path: Path | None = None) -> Config:
     """Load the YAML config from `path` (or `default_config_path()`).
 
     A missing file returns an empty `Config` with the built-in launcher
-    catalogue. A malformed file raises `ConfigError` with the original
-    Pydantic / YAML message attached, so the CLI can print a friendly
-    error rather than dumping a stack trace.
+    catalogue. A malformed file or one we cannot read (permission error,
+    accidental directory at the same path, etc.) raises `ConfigError`
+    with a friendly message attached so the CLI does not show a Python
+    traceback.
     """
     config_path = path or default_config_path()
     if not config_path.exists():
         return Config()
 
     try:
-        raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        text = config_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ConfigError(f"Could not read {config_path}: {exc}") from exc
+
+    try:
+        raw = yaml.safe_load(text)
     except yaml.YAMLError as exc:
         raise ConfigError(f"Could not parse {config_path}: {exc}") from exc
 
@@ -148,20 +169,37 @@ def load_config(path: Path | None = None) -> Config:
             f"Config root must be a mapping, got {type(raw).__name__} in {config_path}"
         )
 
-    # Merge user launchers on top of the built-in catalogue so users can
-    # override one entry without having to copy-paste the whole list.
-    user_launchers = raw.get("launchers") or {}
-    merged_launchers: dict[str, object] = {
-        key: launcher.model_dump() for key, launcher in _BUILTIN_LAUNCHERS.items()
-    }
-    if isinstance(user_launchers, dict):
-        merged_launchers.update(user_launchers)
-    raw["launchers"] = merged_launchers
+    raw["launchers"] = _merge_launchers(raw.get("launchers") or {})
 
     try:
         return Config.model_validate(raw)
     except ValidationError as exc:
         raise ConfigError(f"Invalid config in {config_path}:\n{exc}") from exc
+
+
+def _merge_launchers(user_launchers: object) -> dict[str, dict[str, object]]:
+    """Merge user-declared launchers with the built-in catalogue per-key.
+
+    A user entry like ``cursor: {command: my-wrapper}`` keeps the
+    built-in `label` / `args` / `icon` for the `cursor` launcher and
+    only overrides `command`. This matches the starter-file guidance
+    that "you only need to override the command or args".
+
+    Whole new entries (e.g. ``nvim: {label: ..., command: ...}``) flow
+    through unchanged.
+    """
+    base: dict[str, dict[str, object]] = {
+        key: launcher.model_dump() for key, launcher in _BUILTIN_LAUNCHERS.items()
+    }
+    if not isinstance(user_launchers, dict):
+        return base
+
+    for key, override in user_launchers.items():
+        if key in base and isinstance(override, dict):
+            base[key] = {**base[key], **override}
+        else:
+            base[key] = override
+    return base
 
 
 class ConfigError(Exception):

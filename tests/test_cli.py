@@ -624,6 +624,38 @@ def test_config_missing_editor_errors_clearly(
     assert "editor" in combined.lower()
 
 
+def test_config_supports_editor_with_arguments(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Regression for Codex review P3: `EDITOR='code --wait'` is a
+    common shell setting and `armillary config` must split it before
+    looking up the executable on PATH.
+    """
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("umbrellas: []\n")
+    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
+    # `true` exists on PATH; pretend it takes arguments.
+    monkeypatch.setenv("EDITOR", "true --wait --reuse-window")
+
+    captured: dict[str, Any] = {}
+
+    real_run = cli.subprocess.run
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        captured["cmd"] = cmd
+        return real_run(["true"], **kwargs)
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(app, ["config"])
+    assert result.exit_code == 0, result.stdout
+    # Editor argv was parsed: ["true", "--wait", "--reuse-window", <config>]
+    assert captured["cmd"][0] == "true"
+    assert "--wait" in captured["cmd"]
+    assert "--reuse-window" in captured["cmd"]
+    assert str(config_file) in captured["cmd"][-1]
+
+
 # --- M5: scan falls back to config umbrellas -------------------------------
 
 
