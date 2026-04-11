@@ -6,10 +6,22 @@ Rules (per PLAN.md §5 M1 Phase 3):
     stop descending (a repo is one project, not many).
 2.  A directory containing at least one `.md` or `.ipynb` file directly
     and no `.git`  → `ProjectType.IDEA`; stop descending.
-3.  Otherwise recurse into subdirectories until `umbrella.max_depth`.
+3.  A directory whose only "doc-bearing" subfolder is a single `docs/` /
+    `notes/` / `research/`-style folder containing `.md` / `.ipynb`
+    (and which has no git subfolder)  → `ProjectType.IDEA`; stop
+    descending. This catches `myproject/docs/README.md` → `myproject`
+    instead of marking `docs` as the project. A folder with multiple
+    doc-bearing siblings still recurses, so `research/{p1,p2}` produces
+    `p1` and `p2` as separate projects.
+4.  Otherwise recurse into subdirectories until `umbrella.max_depth`.
 
 The umbrella root itself is never emitted as a project (we start at
 depth 1, not 0). Hidden dirs and entries in `DEFAULT_IGNORES` are skipped.
+Symlinked directories are **not** followed — this avoids cycles and
+prevents the same project from appearing twice via aliases.
+
+Suffix matching is case-insensitive (so `README.MD` and `Notebook.IPYNB`
+on macOS APFS are detected the same as the lowercase forms).
 
 No git reads, no README parsing, no status heuristics here — that lives
 in `metadata.py` / `status.py` (M3).
@@ -52,10 +64,12 @@ def scan(
 ) -> list[Project]:
     """Scan multiple umbrella folders and return a merged, deduped project list.
 
-    Projects are keyed by their resolved `Path`, so overlapping umbrellas
-    (e.g. ``-u ~/Projects -u ~/Projects/work``) or repeated `-u` flags do
-    not produce duplicate entries. The first umbrella to discover a given
-    project wins — its `umbrella` field is preserved.
+    Projects are keyed by `Project.path`, which `_make_project` canonicalizes
+    via `Path.resolve()`. Overlapping umbrellas (e.g. ``-u ~/Projects -u
+    ~/Projects/work``), repeated `-u` flags, and umbrella arguments containing
+    `..` therefore all collapse to a single entry per project. The first
+    umbrella to discover a given project wins — its `umbrella` field is
+    preserved.
     """
     seen: dict[Path, Project] = {}
     for umbrella in umbrellas:
@@ -109,13 +123,20 @@ def _walk(
         if _is_git_project(current):
             out.append(_make_project(current, umbrella_root, ProjectType.GIT))
             return
-        if _is_idea_project(entries):
+        if _has_direct_idea_files(entries):
+            out.append(_make_project(current, umbrella_root, ProjectType.IDEA))
+            return
+        if _is_single_doc_folder_parent(entries, ignores):
             out.append(_make_project(current, umbrella_root, ProjectType.IDEA))
             return
 
     # Otherwise descend into subdirectories.
     for entry in entries:
         if not entry.is_dir():
+            continue
+        if entry.is_symlink():
+            # Don't follow directory symlinks: avoids cycles and prevents
+            # the same project being indexed twice via an alias.
             continue
         if _should_skip(entry, ignores):
             continue
@@ -133,8 +154,57 @@ def _is_git_project(path: Path) -> bool:
     return (path / ".git").exists()
 
 
-def _is_idea_project(entries: list[Path]) -> bool:
-    return any(e.is_file() and e.suffix in IDEA_FILE_SUFFIXES for e in entries)
+def _has_direct_idea_files(entries: list[Path]) -> bool:
+    """True if any direct child is a `.md` / `.ipynb` file (case-insensitive)."""
+    return any(
+        e.is_file() and e.suffix.lower() in IDEA_FILE_SUFFIXES for e in entries
+    )
+
+
+def _is_single_doc_folder_parent(
+    entries: list[Path], ignores: frozenset[str]
+) -> bool:
+    """True if the current folder looks like a project whose notes/docs live
+    one level deep — exactly one direct subfolder contains `.md` / `.ipynb`
+    files directly, and no direct subfolder is a git repo.
+
+    This catches the common layouts:
+
+        myproject/docs/README.md      → myproject is idea
+        myproject/notes/2024-01.md    → myproject is idea
+        research/notebook.ipynb       → research is idea (if research has
+                                        no other doc-bearing siblings)
+
+    A folder with **multiple** doc-bearing direct subfolders is treated as
+    a container of projects and recurses normally, so:
+
+        research-area/project1/README.md
+        research-area/project2/notes.md
+
+    yields `project1` and `project2` separately, not `research-area`.
+    """
+    doc_bearing = 0
+    for entry in entries:
+        if not entry.is_dir() or entry.is_symlink():
+            continue
+        if _should_skip(entry, ignores):
+            continue
+        # A git subfolder means this isn't a "doc folder parent" — it's a
+        # container of real projects. Let the recursion handle it.
+        if (entry / ".git").exists():
+            return False
+        try:
+            children = list(entry.iterdir())
+        except (PermissionError, OSError):
+            continue
+        if any(
+            c.is_file() and c.suffix.lower() in IDEA_FILE_SUFFIXES
+            for c in children
+        ):
+            doc_bearing += 1
+            if doc_bearing > 1:
+                return False
+    return doc_bearing == 1
 
 
 def _should_skip(path: Path, ignores: frozenset[str]) -> bool:
@@ -149,12 +219,17 @@ def _should_skip(path: Path, ignores: frozenset[str]) -> bool:
 
 
 def _make_project(path: Path, umbrella_root: Path, type_: ProjectType) -> Project:
+    # Canonicalize before storing so that downstream dedup keys, cache rows,
+    # and launcher invocations all see the same normalized path. With the
+    # symlink skip in `_walk` this is mostly belt-and-suspenders, but it also
+    # collapses any `..` segments introduced by an oddly-shaped umbrella arg.
+    resolved = path.resolve()
     return Project(
-        path=path,
-        name=path.name,
+        path=resolved,
+        name=resolved.name,
         type=type_,
         umbrella=umbrella_root,
-        last_modified=_compute_last_modified(path),
+        last_modified=_compute_last_modified(resolved),
     )
 
 

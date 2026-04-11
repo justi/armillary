@@ -245,6 +245,85 @@ def test_start_no_browser_flag_sets_headless(monkeypatch: pytest.MonkeyPatch) ->
     assert cmd[idx + 1] == "true"
 
 
+# --- Codex round 2: C (Streamlit telemetry off by default) -----------------
+
+
+def test_start_disables_streamlit_telemetry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PLAN.md §14 promises no telemetry. Streamlit defaults
+    `browser.gatherUsageStats` to true, so `start` must override it."""
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        captured["cmd"] = cmd
+
+        class _R:
+            returncode = 0
+
+        return _R()
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(app, ["start"])
+
+    assert result.exit_code == 0, result.stdout
+    cmd = captured["cmd"]
+    assert "--browser.gatherUsageStats" in cmd
+    idx = cmd.index("--browser.gatherUsageStats")
+    assert cmd[idx + 1].lower() == "false"
+
+
+# --- Codex round 2: D (start error handling) --------------------------------
+
+
+def test_start_propagates_streamlit_exit_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If Streamlit dies (port in use, crash, ...), CLI must surface it."""
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        class _R:
+            returncode = 7
+
+        return _R()
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(app, ["start"])
+
+    assert result.exit_code == 7
+
+
+def test_start_errors_clearly_when_streamlit_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing streamlit module gives a Typer error, not an obscure
+    `python -m streamlit` failure."""
+    real_find_spec = cli.importlib.util.find_spec
+
+    def fake_find_spec(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "streamlit":
+            return None
+        return real_find_spec(name, *args, **kwargs)
+
+    monkeypatch.setattr(cli.importlib.util, "find_spec", fake_find_spec)
+
+    # subprocess.run must NOT be called — guard with a sentinel that fails
+    # the test if reached.
+    def must_not_run(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("subprocess.run called despite missing streamlit")
+
+    monkeypatch.setattr(cli.subprocess, "run", must_not_run)
+
+    result = runner.invoke(app, ["start"])
+
+    assert result.exit_code == 2
+    combined = result.stdout + (result.stderr or "")
+    assert "streamlit" in combined.lower()
+    assert "not installed" in combined.lower()
+
+
 # --- placeholder commands (M3-M5) -------------------------------------------
 
 

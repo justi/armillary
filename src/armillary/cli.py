@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
@@ -28,6 +29,15 @@ def start(
     ),
 ) -> None:
     """Launch the dashboard in the browser."""
+    if importlib.util.find_spec("streamlit") is None:
+        typer.secho(
+            "streamlit is not installed — reinstall armillary "
+            "(`pip install -e .`) or run `pip install streamlit`",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2)
+
     ui_path = Path(__file__).parent / "ui" / "app.py"
     cmd = [
         sys.executable,
@@ -37,10 +47,18 @@ def start(
         str(ui_path),
         "--server.port",
         str(port),
+        # Privacy: PLAN.md §14 promises no telemetry. Streamlit defaults
+        # browser.gatherUsageStats to true, so we explicitly disable it
+        # on every launch (no need for a user-managed config file).
+        "--browser.gatherUsageStats",
+        "false",
     ]
     if no_browser:
         cmd += ["--server.headless", "true"]
-    subprocess.run(cmd, check=False)
+
+    result = subprocess.run(cmd, check=False)
+    if result.returncode != 0:
+        raise typer.Exit(result.returncode)
 
 
 @app.command()

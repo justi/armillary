@@ -252,3 +252,143 @@ def test_scan_dedupe_preserves_first_umbrella(tmp_path: Path) -> None:
     # inner first → owns "shared"
     [project] = scan([_umbrella(inner), _umbrella(outer)])
     assert project.umbrella == inner.resolve()
+
+
+# --- Codex round 2: A (idea promoted from single doc subfolder) ------------
+
+
+def test_idea_promoted_from_single_docs_subfolder(tmp_path: Path) -> None:
+    """myproject/docs/README.md → myproject is the idea, not docs."""
+    project = tmp_path / "myproject"
+    docs = project / "docs"
+    docs.mkdir(parents=True)
+    (docs / "README.md").write_text("docs")
+
+    projects = scan_umbrella(_umbrella(tmp_path))
+
+    assert len(projects) == 1
+    assert projects[0].name == "myproject"
+    assert projects[0].type is ProjectType.IDEA
+
+
+def test_idea_promoted_from_single_notes_subfolder(tmp_path: Path) -> None:
+    """myproject/notes/2024-01.md → myproject is the idea, not notes."""
+    project = tmp_path / "myproject"
+    notes = project / "notes"
+    notes.mkdir(parents=True)
+    (notes / "2024-01.md").write_text("entry")
+
+    projects = scan_umbrella(_umbrella(tmp_path))
+
+    assert len(projects) == 1
+    assert projects[0].name == "myproject"
+    assert projects[0].type is ProjectType.IDEA
+
+
+def test_multi_doc_subfolders_yield_individual_projects(tmp_path: Path) -> None:
+    """Two sibling sub-folders with .md → each is its own idea, parent is not.
+
+    Distinguishes the "single docs/notes folder" case from the "container of
+    real sub-projects" case so we don't accidentally promote a research-area
+    container into one giant project.
+    """
+    research = tmp_path / "research-area"
+    research.mkdir()
+    (research / "project1").mkdir()
+    (research / "project1" / "README.md").write_text("p1")
+    (research / "project2").mkdir()
+    (research / "project2" / "notes.md").write_text("p2")
+
+    projects = scan_umbrella(_umbrella(tmp_path))
+
+    assert {p.name for p in projects} == {"project1", "project2"}
+    assert all(p.type is ProjectType.IDEA for p in projects)
+
+
+def test_doc_subfolder_promotion_skips_container_with_git_sibling(
+    tmp_path: Path,
+) -> None:
+    """If one direct subfolder is a git repo, the parent is a container,
+    not an idea — recurse normally so the git repo is reported."""
+    container = tmp_path / "work"
+    container.mkdir()
+    _mkrepo(container / "alpha")  # has .git AND README.md
+    (container / "docs").mkdir()
+    (container / "docs" / "guide.md").write_text("guide")
+
+    projects = scan_umbrella(_umbrella(tmp_path))
+
+    # work itself must NOT be promoted; we expect alpha (git) and the docs
+    # leaf as a fallback idea since alpha is a git sibling.
+    names = {p.name for p in projects}
+    assert "work" not in names
+    assert "alpha" in names
+    types = {p.name: p.type for p in projects}
+    assert types["alpha"] is ProjectType.GIT
+
+
+# --- Codex round 2: B (symlink policy + path resolution) -------------------
+
+
+def test_symlinked_directories_are_not_followed(tmp_path: Path) -> None:
+    """A directory symlink must be skipped, not walked."""
+    real_repo = _mkrepo(tmp_path / "outside" / "real-repo")
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "linked").symlink_to(real_repo, target_is_directory=True)
+
+    projects = scan_umbrella(_umbrella(workspace))
+
+    assert projects == []
+
+
+def test_symlink_alias_does_not_double_count_real_project(tmp_path: Path) -> None:
+    """Even across umbrellas, a symlink alias must not duplicate a project."""
+    real_workspace = tmp_path / "real"
+    real_workspace.mkdir()
+    _mkrepo(real_workspace / "shared")
+
+    alias_workspace = tmp_path / "alias-area"
+    alias_workspace.mkdir()
+    (alias_workspace / "alias").symlink_to(
+        real_workspace / "shared", target_is_directory=True
+    )
+
+    # Skipping symlinks alone is enough here — the alias is never visited.
+    projects = scan([_umbrella(real_workspace), _umbrella(alias_workspace)])
+
+    assert len(projects) == 1
+    assert projects[0].name == "shared"
+
+
+def test_project_path_is_resolved(tmp_path: Path) -> None:
+    """Project.path is canonicalized so downstream dedup keys are stable."""
+    _mkrepo(tmp_path / "subdir" / "repo")
+
+    # Pass an umbrella with a `..` in it — Project.path should still be the
+    # canonical absolute path.
+    weird_umbrella = tmp_path / "subdir" / ".." / "subdir"
+    project = scan_umbrella(_umbrella(weird_umbrella))[0]
+
+    assert project.path.is_absolute()
+    assert project.path == project.path.resolve()
+    assert ".." not in project.path.parts
+
+
+# --- Codex round 2: E (case-insensitive idea suffix) -----------------------
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ["README.MD", "Notebook.IPYNB", "ReadMe.Md", "Notes.iPyNb"],
+)
+def test_idea_detection_is_case_insensitive(tmp_path: Path, filename: str) -> None:
+    folder = tmp_path / "thing"
+    folder.mkdir()
+    (folder / filename).write_text("x")
+
+    projects = scan_umbrella(_umbrella(tmp_path))
+
+    assert len(projects) == 1
+    assert projects[0].type is ProjectType.IDEA
