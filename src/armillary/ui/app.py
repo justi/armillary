@@ -72,12 +72,18 @@ def _project_to_row(p: Project) -> dict[str, Any]:
         if status_value
         else "—"
     )
+    # `dirty_count` stays None when metadata was never extracted (e.g.
+    # `armillary scan --no-metadata` or a repo whose extraction failed).
+    # Coercing it to 0 would lie — the dashboard would claim the working
+    # tree is clean even though it never looked. Let Streamlit's
+    # NumberColumn render the absence as an empty cell instead.
+    dirty_value = md.dirty_count if md and md.dirty_count is not None else None
     return {
         "Status": status_label,
         "Type": p.type.value,
         "Name": p.name,
         "Branch": (md.branch if md else None) or "—",
-        "Dirty": (md.dirty_count if md and md.dirty_count is not None else 0),
+        "Dirty": dirty_value,
         "Umbrella": _shorten_home(p.umbrella),
         "Last modified": p.last_modified,
         # Hidden columns used by the row-click handler.
@@ -152,7 +158,11 @@ def _render_sidebar(rows: list[dict[str, Any]]) -> dict[str, list[str]]:
         st.divider()
         st.caption(f"{len(rows)} projects in cache")
         if st.button("🔄 Refresh from cache", use_container_width=True):
+            # Both data caches need to be invalidated — otherwise reopening
+            # a project detail page after a scan would still show the old
+            # branch / status / README for up to a minute.
             _load_overview_rows.clear()
+            _load_project.clear()
             st.rerun()
 
     return {
