@@ -2449,6 +2449,9 @@ def test_start_khoj_execs_khoj_binary_with_env_vars(
     assert env.get("KHOJ_ADMIN_EMAIL") == "admin@armillary.local"
     assert env.get("KHOJ_ADMIN_PASSWORD")  # random string, non-empty
     assert len(env["KHOJ_ADMIN_PASSWORD"]) >= 16
+    # PLAN.md §14: no telemetry. start-khoj hard-disables Khoj's
+    # upload_telemetry() so nothing leaves the user's machine.
+    assert env.get("KHOJ_TELEMETRY_DISABLE") == "true"
 
     # File persisted on disk with the same password start-khoj used
     admin_env_path = tmp_path / "armillary" / "khoj-admin.env"

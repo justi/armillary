@@ -1197,6 +1197,14 @@ def start_khoj() -> None:
             "POSTGRES_DB": _KHOJ_DB_NAME,
             "POSTGRES_USER": _KHOJ_DB_USER,
             "POSTGRES_PASSWORD": _KHOJ_DB_PASSWORD,
+            # PLAN.md §14: armillary promises "no telemetry, no
+            # analytics, no external calls". Khoj defaults to sending
+            # usage stats to khoj.dev — `KHOJ_TELEMETRY_DISABLE=true`
+            # short-circuits `upload_telemetry()` via
+            # `khoj.utils.state.telemetry_disabled`, so nothing
+            # leaves the user's machine. Users who want to contribute
+            # telemetry to the Khoj project can unset this manually.
+            "KHOJ_TELEMETRY_DISABLE": "true",
         }
     )
     # Inject auto-generated admin credentials so Khoj does NOT drop
