@@ -279,6 +279,21 @@ class Cache:
         self.conn.commit()
         return cur.rowcount
 
+    def clear_projects(self) -> int:
+        """Delete every row in the `projects` table.
+
+        Used by `armillary config --init` to make sure a fresh setup
+        leaves the cache containing exactly what the new config covers,
+        not stale rows from a previous umbrella selection. The age-based
+        `prune_stale()` is too lenient for this case — recent rows from
+        a removed umbrella would persist for up to the prune cutoff.
+
+        Returns the number of rows deleted.
+        """
+        cur = self.conn.execute("DELETE FROM projects")
+        self.conn.commit()
+        return cur.rowcount
+
     # ----- queries ----------------------------------------------------------
 
     def list_projects(
