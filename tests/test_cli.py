@@ -2434,7 +2434,10 @@ def test_start_khoj_execs_khoj_binary_with_env_vars(
     khoj_calls = [(c, k) for c, k in calls if str(fake_khoj) in c]
     assert len(khoj_calls) == 1
     cmd, kw = khoj_calls[0]
-    assert cmd == [str(fake_khoj), "--anonymous-mode"]
+    # `--non-interactive` is mandatory so Khoj's init step skips its
+    # chat-model questionnaire ("Add OpenAI chat models? (y/n): …").
+    # Armillary only needs Khoj for semantic search, not chat.
+    assert cmd == [str(fake_khoj), "--anonymous-mode", "--non-interactive"]
     env = kw.get("env") or {}
     assert env.get("POSTGRES_HOST") == "localhost"
     # Non-5432 on purpose — dodges brew postgresql@* port conflicts.

@@ -1220,8 +1220,15 @@ def start_khoj() -> None:
     typer.echo("")
 
     # Foreground exec so the user sees logs and Ctrl-C Just Works.
+    # `--non-interactive` flips Khoj's `initialization()` into a mode
+    # that (a) requires KHOJ_ADMIN_EMAIL / KHOJ_ADMIN_PASSWORD env
+    # vars (which we export above), and (b) skips the chat-model
+    # questionnaire entirely ("Add OpenAI chat models? (y/n):", etc).
+    # Armillary uses Khoj for semantic SEARCH, not chat, so "no chat
+    # models" is the correct default. Users who want chat can still
+    # configure it later at /server/admin.
     result = subprocess.run(
-        [str(khoj_bin), "--anonymous-mode"],
+        [str(khoj_bin), "--anonymous-mode", "--non-interactive"],
         env=env,
         check=False,
     )
