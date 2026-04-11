@@ -154,14 +154,32 @@ class KhojConfig:
     timeout_seconds: float = 5.0
 
 
-class KhojSearch:
-    """Khoj REST API client with automatic ripgrep fallback.
+class KhojResponseError(Exception):
+    """Raised when Khoj returns a payload we cannot interpret as a result list.
 
-    Khoj exposes a `/api/search?q=...` endpoint that returns JSON. We
-    POST nothing, just GET with query params. If anything goes wrong
-    (network error, non-2xx, malformed JSON, missing fields), we fall
-    back to `LiteralSearch` for the same query so the dashboard always
-    has *something* to show.
+    Examples: an `{"error": ...}` wrapper, an empty `null`, a string,
+    or a different API version's nested envelope. Caught by
+    `KhojSearch.search()` and treated the same as a network failure
+    so the fallback fires instead of silently dropping all results.
+    """
+
+
+class KhojSearch:
+    """Khoj REST API client with optional ripgrep fallback and per-query caching.
+
+    Khoj exposes a `/api/search?q=...` endpoint that returns JSON. The
+    response is **global** — there is no per-project filter — so this
+    backend caches the global result per `(query, max_results)` and
+    post-filters each `search(root=...)` call to the hits whose path
+    is under that root. Without this, scanning N projects would query
+    Khoj N times and print the same global hits under every project.
+
+    Fallback semantics:
+    - If `fallback` is set (e.g. `LiteralSearch()`), any Khoj failure
+      transparently delegates to the fallback for the SAME query.
+    - If `fallback` is `None`, Khoj failures raise an exception so the
+      caller can surface the error. Use this when ripgrep is not
+      available — we never want a "no matches" silent fallthrough.
     """
 
     name = "khoj"
@@ -173,7 +191,12 @@ class KhojSearch:
         fallback: SearchBackend | None = None,
     ) -> None:
         self.config = config or KhojConfig()
-        self.fallback = fallback or LiteralSearch()
+        self.fallback = fallback
+        # Per-instance cache keyed by (query, max_results). Each entry is
+        # either a list of hits (success) or the sentinel "fallback" so
+        # we re-use the fallback decision across iterations rather than
+        # re-hitting Khoj N times for the same broken query.
+        self._cache: dict[tuple[str, int], list[SearchHit] | str] = {}
 
     def search(
         self,
@@ -184,11 +207,39 @@ class KhojSearch:
     ) -> list[SearchHit]:
         if not query.strip():
             return []
-        try:
-            return self._search_khoj(query, max_results=max_results)
-        except (HTTPError, URLError, json.JSONDecodeError, TimeoutError, OSError):
-            # Khoj is unreachable / broken; degrade gracefully.
+
+        cache_key = (query, max_results)
+        cached = self._cache.get(cache_key)
+
+        if cached is None:
+            try:
+                hits = self._search_khoj(query, max_results=max_results)
+            except (
+                HTTPError,
+                URLError,
+                json.JSONDecodeError,
+                TimeoutError,
+                OSError,
+                KhojResponseError,
+            ):
+                if self.fallback is None:
+                    # No fallback configured — bubble up so the CLI can
+                    # tell the user that Khoj is broken AND ripgrep is
+                    # missing, instead of silently returning [].
+                    raise
+                self._cache[cache_key] = "fallback"
+                cached = "fallback"
+            else:
+                self._cache[cache_key] = hits
+                cached = hits
+
+        if cached == "fallback":
+            assert self.fallback is not None
             return self.fallback.search(query, root=root, max_results=max_results)
+
+        # Successful Khoj cache — post-filter to the hits under `root`
+        # so each project iteration gets only its own results.
+        return [h for h in cached if _is_under(h.path, root)][:max_results]
 
     def _search_khoj(self, query: str, *, max_results: int) -> list[SearchHit]:
         params = urlencode({"q": query, "n": max_results})
@@ -202,14 +253,29 @@ class KhojSearch:
         return _parse_khoj_response(payload, max_results=max_results)
 
 
+def _is_under(path: Path, root: Path) -> bool:
+    """True if `path` is `root` itself or any descendant of `root`."""
+    try:
+        path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return False
+    return True
+
+
 def _parse_khoj_response(payload: object, *, max_results: int) -> list[SearchHit]:
-    """Khoj returns a list of result objects with at least `entry` and
-    `additional.file` fields. We are tolerant about the exact shape
-    because Khoj has changed its API a few times — anything we cannot
-    parse is just skipped.
+    """Parse Khoj's `/api/search` response into a list of hits.
+
+    Khoj has changed its API shape a few times, so we are tolerant about
+    the *contents* of each item and skip ones we cannot decode. But the
+    top-level shape MUST be a list — anything else (an error wrapper, a
+    nested envelope from a future API version, ...) raises
+    `KhojResponseError` so the caller can fall back to ripgrep instead
+    of silently dropping every result.
     """
     if not isinstance(payload, list):
-        return []
+        raise KhojResponseError(
+            f"Expected a JSON list from Khoj, got {type(payload).__name__}"
+        )
     hits: list[SearchHit] = []
     for item in payload:
         if not isinstance(item, dict):

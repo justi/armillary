@@ -162,14 +162,15 @@ def _fake_urlopen(payload: object) -> Any:
 def test_khoj_search_constructs_url_and_parses_response(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    # Paths must be under `root` (tmp_path) so the post-filter keeps them.
     payload = [
         {
             "entry": "Some semantic snippet",
-            "additional": {"file": "/tmp/notes/idea.md"},
+            "additional": {"file": str(tmp_path / "notes" / "idea.md")},
         },
         {
             "entry": "Another match",
-            "additional": {"file": "/tmp/notes/other.md"},
+            "additional": {"file": str(tmp_path / "notes" / "other.md")},
         },
     ]
     opener = _fake_urlopen(payload)
@@ -179,7 +180,7 @@ def test_khoj_search_constructs_url_and_parses_response(
     hits = backend.search("idea", root=tmp_path)
 
     assert len(hits) == 2
-    assert hits[0].path == Path("/tmp/notes/idea.md")
+    assert hits[0].path.name == "idea.md"
     assert hits[0].backend == "khoj"
     assert hits[0].line is None
     assert "snippet" in hits[0].preview.lower()
@@ -266,6 +267,119 @@ def test_parse_khoj_response_skips_invalid_items() -> None:
     assert {h.path.name for h in hits} == {"a.md", "c.md"}
 
 
-def test_parse_khoj_response_handles_non_list_payload() -> None:
-    assert _parse_khoj_response({"unexpected": "shape"}, max_results=10) == []
-    assert _parse_khoj_response(None, max_results=10) == []
+def test_parse_khoj_response_raises_on_non_list_payload() -> None:
+    """Regression for Codex review P2: a JSON object with the wrong
+    top-level shape (auth wrapper, error envelope, future API version)
+    must raise so the caller can fall back instead of silently
+    returning [] which looks like "no matches".
+    """
+    from armillary.search import KhojResponseError
+
+    with pytest.raises(KhojResponseError):
+        _parse_khoj_response({"unexpected": "shape"}, max_results=10)
+    with pytest.raises(KhojResponseError):
+        _parse_khoj_response(None, max_results=10)
+    with pytest.raises(KhojResponseError):
+        _parse_khoj_response("just a string", max_results=10)
+
+
+# --- Codex round 2 regressions --------------------------------------------
+
+
+def test_khoj_search_post_filters_by_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Regression for Codex review P1: Khoj returns global hits, the
+    backend must restrict each `search(root=...)` call to its own root."""
+    project_a = tmp_path / "alpha"
+    project_b = tmp_path / "beta"
+    project_a.mkdir()
+    project_b.mkdir()
+
+    payload = [
+        {
+            "entry": "match in alpha",
+            "additional": {"file": str(project_a / "x.md")},
+        },
+        {
+            "entry": "match in beta",
+            "additional": {"file": str(project_b / "y.md")},
+        },
+        {
+            "entry": "outside any project",
+            "additional": {"file": str(tmp_path / "loose.md")},
+        },
+    ]
+    opener = _fake_urlopen(payload)
+    monkeypatch.setattr(search, "urlopen", opener)
+
+    backend = KhojSearch(KhojConfig(api_url="http://x"))
+
+    a_hits = backend.search("match", root=project_a)
+    b_hits = backend.search("match", root=project_b)
+
+    assert {h.path.name for h in a_hits} == {"x.md"}
+    assert {h.path.name for h in b_hits} == {"y.md"}
+
+
+def test_khoj_search_caches_global_query_across_iterations(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Successive `search()` calls for the same query+max_results re-use
+    the cached global response so we hit Khoj once, not N times."""
+    payload = [
+        {"entry": "x", "additional": {"file": str(tmp_path / "a.md")}},
+    ]
+    call_count = {"n": 0}
+
+    def counting_opener(request: Any, **kwargs: Any) -> Any:
+        call_count["n"] += 1
+        return _fake_urlopen(payload)(request, **kwargs)
+
+    monkeypatch.setattr(search, "urlopen", counting_opener)
+
+    backend = KhojSearch(KhojConfig(api_url="http://x"))
+    backend.search("query", root=tmp_path)
+    backend.search("query", root=tmp_path)
+    backend.search("query", root=tmp_path)
+
+    assert call_count["n"] == 1
+
+
+def test_khoj_search_falls_back_on_unexpected_payload_shape(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Regression for Codex review P2: an `{"error": ...}` wrapper or
+    nested envelope must trigger the ripgrep fallback rather than
+    looking like a successful no-hit search."""
+    opener = _fake_urlopen({"error": "auth required"})
+    monkeypatch.setattr(search, "urlopen", opener)
+
+    fallback = MagicMock()
+    fallback.search.return_value = [
+        SearchHit(path=Path("/tmp/x"), line=1, preview="found", backend="ripgrep")
+    ]
+
+    backend = KhojSearch(fallback=fallback)
+    hits = backend.search("query", root=tmp_path)
+
+    assert len(hits) == 1
+    assert hits[0].backend == "ripgrep"
+    fallback.search.assert_called_once()
+
+
+def test_khoj_search_without_fallback_raises_on_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Regression for Codex review P3: with no fallback configured (e.g.
+    on a machine without ripgrep), Khoj failures must propagate so the
+    CLI can show a clear error instead of returning [] silently."""
+
+    def boom(*args: Any, **kwargs: Any) -> Any:
+        raise URLError("connection refused")
+
+    monkeypatch.setattr(search, "urlopen", boom)
+
+    backend = KhojSearch(fallback=None)
+    with pytest.raises(URLError):
+        backend.search("query", root=tmp_path)

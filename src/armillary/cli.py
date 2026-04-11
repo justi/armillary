@@ -303,7 +303,17 @@ def search(
     console = Console()
     total_hits = 0
     for project in projects:
-        hits = backend.search(query, root=project.path, max_results=max_results)
+        try:
+            hits = backend.search(query, root=project.path, max_results=max_results)
+        except Exception as exc:  # noqa: BLE001 — KhojResponseError, URLError, etc.
+            typer.secho(
+                f"Search backend ({backend.name}) failed: {exc}. "
+                "Install ripgrep (`brew install ripgrep`) for an automatic "
+                "fallback, or check that the Khoj server is reachable.",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(2) from exc
         if not hits:
             continue
         console.print(
@@ -349,12 +359,22 @@ def _build_search_backend(
         )
         return None
 
+    # When ripgrep is also available we wire it in as the fallback so any
+    # transient Khoj failure degrades to literal search instead of "no
+    # matches". With no ripgrep on PATH we deliberately leave fallback as
+    # None — KhojSearch will then raise on errors and the CLI surfaces a
+    # clear "Khoj is broken AND there is no fallback" message rather than
+    # silently returning empty.
+    fallback: LiteralSearch | None = (
+        LiteralSearch() if LiteralSearch.is_available() else None
+    )
     return KhojSearch(
         config=KhojConfig(
             api_url=cfg.khoj.api_url,
             api_key=cfg.khoj.api_key,
             timeout_seconds=cfg.khoj.timeout_seconds,
         ),
+        fallback=fallback,
     )
 
 
