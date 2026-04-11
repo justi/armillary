@@ -9,10 +9,17 @@ clicked a filter.
 
 The two views (overview table and per-project detail) live in the same
 script and route via `st.query_params["project"]`.
+
+The dashboard does call `git log` (subprocess) on the detail view to
+show recent commits, and `ripgrep` (via `armillary.search.LiteralSearch`)
+when the user submits a search. Both are user-triggered and bounded —
+not in the per-rerun hot path.
 """
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -29,8 +36,16 @@ if str(_PKG_ROOT) not in sys.path:
 import streamlit as st  # noqa: E402
 
 from armillary import __version__  # noqa: E402
-from armillary.cache import Cache  # noqa: E402
+from armillary import launcher as launcher_mod  # noqa: E402
+from armillary.cache import Cache, default_db_path  # noqa: E402
+from armillary.config import (  # noqa: E402
+    Config,
+    ConfigError,
+    default_config_path,
+    load_config,
+)
 from armillary.models import Project  # noqa: E402
+from armillary.search import LiteralSearch, SearchHit  # noqa: E402
 
 st.set_page_config(
     page_title="armillary",
@@ -115,7 +130,7 @@ def main() -> None:
 
 def _render_overview() -> None:
     st.title("🔭 armillary")
-    st.caption(f"v{__version__} · project observatory")
+    _render_header_caption()
 
     rows = _load_overview_rows()
     if not rows:
@@ -125,14 +140,15 @@ def _render_overview() -> None:
         )
         return
 
-    filters = _render_sidebar(rows)
-    search = st.text_input(
-        "🔍 Search by name",
-        placeholder="Type to filter…",
-        label_visibility="collapsed",
-    )
+    cfg = _safe_load_config()
 
-    filtered = _apply_filters(rows, filters=filters, search=search)
+    filters = _render_sidebar(rows)
+    name_filter = filters.pop("name_substring", "")
+
+    # Top-level search bar — runs ripgrep across cached projects on demand.
+    _render_search_section(rows)
+
+    filtered = _apply_filters(rows, filters=filters, search=name_filter)
     _render_summary_metrics(filtered)
     st.divider()
 
@@ -141,9 +157,105 @@ def _render_overview() -> None:
         return
 
     _render_table(filtered)
+    # cfg may be None if config is malformed; the table doesn't need it
+    # but we keep the variable around so future overview-level launcher
+    # affordances have a single place to plug in.
+    del cfg
 
 
-def _render_sidebar(rows: list[dict[str, Any]]) -> dict[str, list[str]]:
+def _render_header_caption() -> None:
+    """Sub-title line with version, last scan time, and a config link."""
+    parts = [f"v{__version__}"]
+
+    # Last scan time = max(last_scanned_at) across all rows. Cheap query.
+    try:
+        with Cache() as cache:
+            row = cache.conn.execute(
+                "SELECT MAX(last_scanned_at) FROM projects"
+            ).fetchone()
+        last_scanned_ts = row[0] if row else None
+    except Exception:  # noqa: BLE001 — never let a header crash the page
+        last_scanned_ts = None
+
+    if last_scanned_ts:
+        from datetime import datetime as _dt
+
+        when = _dt.fromtimestamp(last_scanned_ts).strftime("%Y-%m-%d %H:%M")
+        parts.append(f"last scan: {when}")
+
+    parts.append(f"config: `{_shorten_home(default_config_path())}`")
+    parts.append(f"cache: `{_shorten_home(default_db_path())}`")
+
+    st.caption(" · ".join(parts))
+
+
+def _render_search_section(rows: list[dict[str, Any]]) -> None:
+    """Top-level ripgrep search across all cached projects.
+
+    PLAN.md §5: 'Global search bar at the top — first iteration:
+    ripgrep literal search'. Form-based so the search only fires
+    on submit, not on every keystroke.
+    """
+    with st.form("search_form", clear_on_submit=False):
+        col_q, col_btn = st.columns([6, 1])
+        with col_q:
+            query = st.text_input(
+                "Search across project files (ripgrep)",
+                placeholder="Type a query and press Search…",
+                label_visibility="collapsed",
+            )
+        with col_btn:
+            submitted = st.form_submit_button("🔍 Search", use_container_width=True)
+
+    if not submitted or not query.strip():
+        return
+
+    if not LiteralSearch.is_available():
+        st.error(
+            "ripgrep (`rg`) is not on PATH. Install it "
+            "(`brew install ripgrep`) to use search."
+        )
+        return
+
+    backend = LiteralSearch()
+    hits_by_project: list[tuple[dict[str, Any], list[SearchHit]]] = []
+    with st.spinner(f"Searching {len(rows)} projects for '{query}'…"):
+        for row in rows:
+            project_path = Path(row["_path"])
+            try:
+                hits = backend.search(query, root=project_path, max_results=20)
+            except Exception:  # noqa: BLE001 — best effort, skip broken projects
+                continue
+            if hits:
+                hits_by_project.append((row, hits))
+
+    total_hits = sum(len(h) for _, h in hits_by_project)
+    if total_hits == 0:
+        st.warning(f"No matches for '{query}'.")
+        return
+
+    st.success(f"Found {total_hits} match(es) in {len(hits_by_project)} project(s).")
+    for row, hits in hits_by_project[:10]:
+        with st.expander(f"📂 {row['Name']}  ({len(hits)} match(es))"):
+            if st.button(
+                "→ Open project detail",
+                key=f"open_{row['_path']}",
+            ):
+                st.query_params["project"] = row["_path"]
+                st.rerun()
+            for hit in hits[:10]:
+                location = (
+                    f"{hit.path}:{hit.line}" if hit.line is not None else str(hit.path)
+                )
+                st.markdown(f"**`{location}`**")
+                st.code(hit.preview, language="text")
+    if len(hits_by_project) > 10:
+        st.caption(f"…showing top 10 of {len(hits_by_project)} matching projects.")
+
+    st.divider()
+
+
+def _render_sidebar(rows: list[dict[str, Any]]) -> dict[str, Any]:
     with st.sidebar:
         st.header("Filters")
 
@@ -154,6 +266,10 @@ def _render_sidebar(rows: list[dict[str, Any]]) -> dict[str, list[str]]:
         status_pick = st.multiselect("Status", statuses)
         type_pick = st.multiselect("Type", types)
         umbrella_pick = st.multiselect("Umbrella", umbrellas)
+        name_substring = st.text_input(
+            "Name contains",
+            placeholder="quick filter…",
+        )
 
         st.divider()
         st.caption(f"{len(rows)} projects in cache")
@@ -169,6 +285,7 @@ def _render_sidebar(rows: list[dict[str, Any]]) -> dict[str, list[str]]:
         "status": status_pick,
         "type": type_pick,
         "umbrella": umbrella_pick,
+        "name_substring": name_substring,
     }
 
 
@@ -251,18 +368,73 @@ def _render_project_detail(project_path: str) -> None:
 
     st.title(project.name)
 
+    _render_detail_metric_tiles(project)
+
+    st.divider()
+    _render_detail_captions(project)
+
+    # PLAN.md §5: "Open in…" dropdown wired to launcher catalogue.
+    cfg = _safe_load_config()
+    if cfg is not None:
+        st.divider()
+        st.subheader("Open in…")
+        _render_launcher_dropdown(project, cfg)
+
+    if md and md.readme_excerpt:
+        st.divider()
+        st.subheader("README")
+        st.info(md.readme_excerpt)
+
+    if project.type.value == "git":
+        st.divider()
+        st.subheader("Recent commits")
+        _render_recent_commits(project.path)
+
+    if md and md.note_paths:
+        st.divider()
+        st.subheader(f"Notes ({len(md.note_paths)})")
+        for note in md.note_paths:
+            st.markdown(f"- `{note.name}` — `{note}`")
+
+    if md and md.adr_paths:
+        st.divider()
+        st.subheader(f"Architecture Decision Records ({len(md.adr_paths)})")
+        for adr in md.adr_paths:
+            st.markdown(f"- `{adr.name}` — `{adr}`")
+
+
+def _render_detail_metric_tiles(project: Project) -> None:
+    md = project.metadata
     metric_cols = st.columns(4)
+
     if md and md.status:
         emoji = _STATUS_EMOJI.get(md.status.value, "·")
         metric_cols[0].metric("Status", f"{emoji} {md.status.value}")
+    else:
+        metric_cols[0].metric("Status", "—")
     metric_cols[1].metric("Type", project.type.value)
     if md and md.branch:
         metric_cols[2].metric("Branch", md.branch)
     if md and md.dirty_count is not None:
         metric_cols[3].metric("Dirty files", md.dirty_count)
 
-    st.divider()
+    # Second row: ahead / behind / size / file count from PR #10.
+    if md and any(
+        x is not None for x in (md.ahead, md.behind, md.size_bytes, md.file_count)
+    ):
+        row2 = st.columns(4)
+        if md.ahead is not None:
+            row2[0].metric("Ahead", md.ahead)
+        if md.behind is not None:
+            row2[1].metric("Behind", md.behind)
+        if md.size_bytes is not None:
+            row2[2].metric("Size", _format_bytes(md.size_bytes))
+        if md.file_count is not None:
+            row2[3].metric("Files", md.file_count)
 
+
+def _render_detail_captions(project: Project) -> None:
+    md = project.metadata
     st.caption(f"📁 `{project.path}`")
     st.caption(f"📦 Umbrella: `{_shorten_home(project.umbrella)}`")
     st.caption(f"🕐 Last modified: {project.last_modified.strftime('%Y-%m-%d %H:%M')}")
@@ -274,20 +446,142 @@ def _render_project_detail(project_path: str) -> None:
             commit_line += f" ({md.last_commit_sha[:8]})"
         st.caption(commit_line)
 
-    if md and md.readme_excerpt:
-        st.divider()
-        st.subheader("README")
-        st.info(md.readme_excerpt)
 
-    if md and md.adr_paths:
-        st.divider()
-        st.subheader(f"Architecture Decision Records ({len(md.adr_paths)})")
-        for adr in md.adr_paths:
-            st.markdown(f"- `{adr.name}` — `{adr}`")
+def _render_launcher_dropdown(project: Project, cfg: Config) -> None:
+    """PLAN.md §5: '"Open in…" dropdown per project — driven by yaml config'.
 
-    st.divider()
-    st.subheader("Open in…")
-    st.caption("Launcher integration arrives in M5.")
+    Each entry from `cfg.launchers` is shown with its label/icon. Entries
+    whose `command` is missing on PATH are still listed but disabled, so
+    the user can see "what could exist" without confusion. Click → calls
+    `launcher.launch()` and surfaces success/error inline.
+    """
+    if not cfg.launchers:
+        st.caption("No launchers configured.")
+        return
+
+    available_targets: list[tuple[str, str]] = []
+    missing_labels: list[str] = []
+    for target_id, launcher_cfg in cfg.launchers.items():
+        label = (
+            f"{launcher_cfg.icon + ' ' if launcher_cfg.icon else ''}"
+            f"{launcher_cfg.label}"
+        )
+        if shutil.which(launcher_cfg.command) is not None:
+            available_targets.append((target_id, label))
+        else:
+            missing_labels.append(label)
+
+    if not available_targets:
+        st.warning(
+            "No launcher executables found on PATH. Edit "
+            f"`{_shorten_home(default_config_path())}` to add one."
+        )
+        if missing_labels:
+            st.caption(f"Configured but missing: {', '.join(missing_labels)}")
+        return
+
+    col_select, col_btn = st.columns([3, 1])
+    with col_select:
+        target_id = st.selectbox(
+            "Launcher",
+            options=[t[0] for t in available_targets],
+            format_func=lambda tid: dict(available_targets)[tid],
+            label_visibility="collapsed",
+            key=f"launcher_pick_{project.path}",
+        )
+    with col_btn:
+        clicked = st.button(
+            "🚀 Open",
+            use_container_width=True,
+            key=f"launcher_open_{project.path}",
+        )
+
+    if clicked:
+        result = launcher_mod.launch(project, target_id, launchers=cfg.launchers)
+        if result.ok:
+            st.success(f"Opened in `{target_id}`.")
+        else:
+            st.error(result.error or "Launch failed.")
+
+    if missing_labels:
+        st.caption(f"Not on PATH (skipped): {', '.join(missing_labels)}")
+
+
+def _render_recent_commits(repo_path: Path, limit: int = 5) -> None:
+    """Show the last `limit` commits as a markdown list.
+
+    Calls `git log` directly via subprocess — much cheaper than going
+    through GitPython for a one-off display, and we already have a
+    timeout pattern from `LiteralSearch`.
+    """
+    commits = _git_log_recent(repo_path, limit=limit)
+    if not commits:
+        st.caption("_No commit history available._")
+        return
+
+    for commit in commits:
+        st.markdown(
+            f"- **`{commit['sha']}`** — {commit['message']}  \n"
+            f"  _{commit['date']} · {commit['author']}_"
+        )
+
+
+def _git_log_recent(repo_path: Path, *, limit: int = 5) -> list[dict[str, str]]:
+    try:
+        proc = subprocess.run(
+            [
+                "git",
+                "log",
+                f"-{limit}",
+                "--no-merges",
+                "--format=%h\x1f%s\x1f%ci\x1f%an",
+            ],
+            cwd=str(repo_path),
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if proc.returncode != 0:
+        return []
+
+    commits: list[dict[str, str]] = []
+    for line in proc.stdout.strip().splitlines():
+        parts = line.split("\x1f")
+        if len(parts) != 4:
+            continue
+        commits.append(
+            {
+                "sha": parts[0],
+                "message": parts[1],
+                "date": parts[2],
+                "author": parts[3],
+            }
+        )
+    return commits
+
+
+def _format_bytes(n: int) -> str:
+    """Format `n` bytes as KB / MB / GB with one decimal place."""
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    if n < 1024 * 1024 * 1024:
+        return f"{n / (1024 * 1024):.1f} MB"
+    return f"{n / (1024 * 1024 * 1024):.1f} GB"
+
+
+def _safe_load_config() -> Config | None:
+    """Load the config file, swallowing errors so the dashboard can still
+    render the table even if config is broken (CLI features that need
+    config — launcher dropdown — degrade gracefully)."""
+    try:
+        return load_config()
+    except ConfigError:
+        return None
 
 
 @st.cache_data(ttl=60, show_spinner=False)
