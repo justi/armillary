@@ -206,12 +206,16 @@ def _render_overview() -> None:
     cfg = _safe_load_config()
     rows = _load_overview_rows()
 
+    # Render the sidebar BEFORE branching on empty cache so the user can
+    # always reach the Settings / Reload / Scan-now affordances, even on
+    # a brand-new install with zero indexed projects. The sidebar
+    # gracefully handles empty rows by skipping the filter widgets.
+    filters = _render_sidebar(rows, cfg)
+    name_filter = filters.pop("name_substring", "")
+
     if not rows:
         _render_empty_cache_state(cfg)
         return
-
-    filters = _render_sidebar(rows, cfg)
-    name_filter = filters.pop("name_substring", "")
 
     # Top-level search bar — runs ripgrep across cached projects on demand.
     _render_search_section(rows, cfg)
@@ -579,23 +583,35 @@ def _render_search_results() -> None:
 
 
 def _render_sidebar(rows: list[dict[str, Any]], cfg: Config | None) -> dict[str, Any]:
+    status_pick: list[str] = []
+    type_pick: list[str] = []
+    umbrella_pick: list[str] = []
+    name_substring = ""
+
     with st.sidebar:
-        st.header("Filters")
+        # Filter widgets are only useful when there is something to filter.
+        # On the empty-cache state we still render the sidebar (so the user
+        # can reach Settings / Reload / Scan-now), just without the filter
+        # multiselects pointing at empty option lists.
+        if rows:
+            st.header("Filters")
+            statuses = sorted({r["_status_raw"] for r in rows if r["_status_raw"]})
+            types = sorted({r["Type"] for r in rows})
+            umbrellas = sorted({r["Umbrella"] for r in rows})
 
-        statuses = sorted({r["_status_raw"] for r in rows if r["_status_raw"]})
-        types = sorted({r["Type"] for r in rows})
-        umbrellas = sorted({r["Umbrella"] for r in rows})
+            status_pick = st.multiselect("Status", statuses)
+            type_pick = st.multiselect("Type", types)
+            umbrella_pick = st.multiselect("Umbrella", umbrellas)
+            name_substring = st.text_input(
+                "Name contains",
+                placeholder="quick filter…",
+            )
 
-        status_pick = st.multiselect("Status", statuses)
-        type_pick = st.multiselect("Type", types)
-        umbrella_pick = st.multiselect("Umbrella", umbrellas)
-        name_substring = st.text_input(
-            "Name contains",
-            placeholder="quick filter…",
-        )
-
-        st.divider()
-        st.caption(f"{len(rows)} projects in cache")
+            st.divider()
+            st.caption(f"{len(rows)} projects in cache")
+        else:
+            st.header("armillary")
+            st.caption("Cache is empty — scan filesystem to populate.")
 
         # Two distinct refresh paths:
         #   "Reload from cache" — cheap, just rereads SQLite (clears the
@@ -1030,6 +1046,7 @@ def _render_settings_umbrellas(cfg: Config) -> None:
     )
 
     edited: list[UmbrellaConfig] = []
+    removed_any = False
 
     if not cfg.umbrellas:
         st.info(
@@ -1071,7 +1088,13 @@ def _render_settings_umbrellas(cfg: Config) -> None:
                 key=f"umbrella_remove_{idx}",
                 help="Remove this umbrella",
             )
-        if not remove:
+        if remove:
+            # `st.button` is True only on the rerun triggered by this click.
+            # We must persist immediately — if we merely skip the row and
+            # wait for the Save button, the next rerun sees `remove=False`
+            # again and the row comes back.
+            removed_any = True
+        else:
             edited.append(
                 UmbrellaConfig(
                     path=Path(new_path),
@@ -1079,6 +1102,11 @@ def _render_settings_umbrellas(cfg: Config) -> None:
                     max_depth=int(new_depth),
                 )
             )
+
+    if removed_any:
+        cfg.umbrellas = edited
+        _save_settings(cfg)
+        return
 
     st.divider()
     st.markdown("**Add umbrella**")
@@ -1144,6 +1172,7 @@ def _render_settings_launchers(cfg: Config) -> None:
     )
 
     edited: dict[str, LauncherConfig] = {}
+    removed_any = False
 
     for target_id in sorted(cfg.launchers.keys()):
         launcher = cfg.launchers[target_id]
@@ -1210,7 +1239,11 @@ def _render_settings_launchers(cfg: Config) -> None:
                         "fix the command above."
                     )
 
-            if not remove_clicked:
+            if remove_clicked:
+                # Same button-state problem as umbrellas: we must persist
+                # the deletion immediately, not on a later Save click.
+                removed_any = True
+            else:
                 try:
                     parsed_args = shlex.split(new_args) if new_args.strip() else []
                 except ValueError as exc:
@@ -1223,6 +1256,11 @@ def _render_settings_launchers(cfg: Config) -> None:
                     icon=new_icon or None,
                     terminal=new_terminal,
                 )
+
+    if removed_any:
+        cfg.launchers = edited
+        _save_settings(cfg)
+        return
 
     st.divider()
     st.markdown("**Add custom launcher**")
