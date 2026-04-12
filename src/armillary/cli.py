@@ -1225,6 +1225,11 @@ def start_khoj() -> None:
         "Admin credentials for http://localhost:42110/server/admin are "
         f"in {_khoj_admin_env_path()}."
     )
+    typer.echo(
+        'Note: "uvicorn.error" in the logs below is a logger NAME, not '
+        "an error. Khoj is running when you see "
+        '"Uvicorn running on http://...".'
+    )
     typer.echo("")
 
     # Foreground exec so the user sees logs and Ctrl-C Just Works.
