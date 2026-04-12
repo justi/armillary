@@ -97,9 +97,10 @@ def _render_project_detail(project_path: str) -> None:
         project_name = Path(project_path).name
         st.error(
             f"**{project_name}** not found in cache.\n\n"
-            "The cache may be stale. Click **🔄 Reload from cache** in "
+            "The cache may be stale. Click **Reload from cache** in "
             "the sidebar, or run `armillary scan` from your terminal to "
-            "re-index."
+            "re-index.",
+            icon=":material/error:",
         )
         return
 
@@ -108,85 +109,87 @@ def _render_project_detail(project_path: str) -> None:
     st.title(project.name)
 
     _render_detail_metric_tiles(project)
-
-    st.divider()
     _render_detail_captions(project)
 
     # PLAN.md S5: "Open in…" dropdown wired to launcher catalogue.
     cfg = _safe_load_config()
     if cfg is not None:
-        st.divider()
-        st.subheader("Open in…")
+        st.subheader("Open in\u2026", anchor=False)
         _render_launcher_dropdown(project, cfg)
 
     if md and md.readme_excerpt:
-        st.divider()
-        st.subheader("README")
-        st.info(md.readme_excerpt)
+        with st.expander("README", icon=":material/description:", expanded=True):
+            st.markdown(md.readme_excerpt)
 
     if project.type.value == "git":
-        st.divider()
-        st.subheader("Recent commits")
+        st.subheader("Recent commits", anchor=False)
         _render_recent_commits(project.path)
 
     if md and md.note_paths:
-        st.divider()
-        st.subheader(f"Notes ({len(md.note_paths)})")
-        for note in md.note_paths:
-            st.markdown(f"- `{note.name}` — `{note}`")
+        with st.expander(f"Notes ({len(md.note_paths)})", icon=":material/note:"):
+            for note in md.note_paths:
+                st.markdown(f"- `{note.name}` \u2014 `{note}`")
 
     if md and md.adr_paths:
-        st.divider()
-        st.subheader(f"Architecture Decision Records ({len(md.adr_paths)})")
-        for adr in md.adr_paths:
-            st.markdown(f"- `{adr.name}` — `{adr}`")
+        with st.expander(
+            f"Architecture decision records ({len(md.adr_paths)})",
+            icon=":material/architecture:",
+        ):
+            for adr in md.adr_paths:
+                st.markdown(f"- `{adr.name}` \u2014 `{adr}`")
 
 
 def _render_detail_metric_tiles(project: Project) -> None:
     md = project.metadata
-    metric_cols = st.columns(4)
 
-    if md and md.status:
-        emoji = _STATUS_EMOJI.get(md.status.value, "·")
-        metric_cols[0].metric("Status", f"{emoji} {md.status.value}")
-    else:
-        metric_cols[0].metric("Status", "—")
-    metric_cols[1].metric("Type", project.type.value)
-    if md and md.branch:
-        metric_cols[2].metric("Branch", md.branch)
-    if md and md.dirty_count is not None:
-        metric_cols[3].metric("Dirty files", md.dirty_count)
+    with st.container(horizontal=True):
+        if md and md.status:
+            emoji = _STATUS_EMOJI.get(md.status.value, "\u00b7")
+            st.metric("Status", f"{emoji} {md.status.value}", border=True)
+        else:
+            st.metric("Status", "\u2014", border=True)
+        st.metric("Type", project.type.value, border=True)
+        if md and md.branch:
+            st.metric("Branch", md.branch, border=True)
+        if md and md.dirty_count is not None:
+            st.metric("Dirty files", md.dirty_count, border=True)
 
     # Second row: commits, work hours, ahead, behind.
     if md and any(
         x is not None for x in (md.commit_count, md.work_hours, md.ahead, md.behind)
     ):
-        row2 = st.columns(4)
-        if md.commit_count is not None:
-            row2[0].metric("Commits", md.commit_count)
-        if md.work_hours is not None:
-            row2[1].metric("Work h", f"{md.work_hours:.1f}")
-        if md.ahead is not None:
-            row2[2].metric("Ahead", md.ahead)
-        if md.behind is not None:
-            row2[3].metric("Behind", md.behind)
+        with st.container(horizontal=True):
+            if md.commit_count is not None:
+                st.metric("Commits", md.commit_count, border=True)
+            if md.work_hours is not None:
+                st.metric("Work h", f"{md.work_hours:.1f}", border=True)
+            if md.ahead is not None:
+                st.metric("Ahead", md.ahead, border=True)
+            if md.behind is not None:
+                st.metric("Behind", md.behind, border=True)
 
     # Third row: size / file count.
     if md and any(x is not None for x in (md.size_bytes, md.file_count)):
-        row3 = st.columns(4)
-        if md.size_bytes is not None:
-            row3[0].metric("Size", _format_bytes(md.size_bytes))
-        if md.file_count is not None:
-            row3[1].metric("Files", md.file_count)
+        with st.container(horizontal=True):
+            if md.size_bytes is not None:
+                st.metric("Size", _format_bytes(md.size_bytes), border=True)
+            if md.file_count is not None:
+                st.metric("Files", md.file_count, border=True)
 
 
 def _render_detail_captions(project: Project) -> None:
     md = project.metadata
-    st.caption(f"📁 `{project.path}`")
-    st.caption(f"📦 Umbrella: `{_shorten_home(project.umbrella)}`")
-    st.caption(f"🕐 Last modified: {project.last_modified.strftime('%Y-%m-%d %H:%M')}")
+    st.caption(f":material/folder: `{project.path}`")
+    st.caption(f":material/inventory_2: Umbrella: `{_shorten_home(project.umbrella)}`")
+    st.caption(
+        f":material/schedule: Last modified: "
+        f"{project.last_modified.strftime('%Y-%m-%d %H:%M')}"
+    )
     if md and md.last_commit_ts:
-        commit_line = f"📝 Last commit: {md.last_commit_ts.strftime('%Y-%m-%d %H:%M')}"
+        commit_line = (
+            f":material/commit: Last commit: "
+            f"{md.last_commit_ts.strftime('%Y-%m-%d %H:%M')}"
+        )
         if md.last_commit_author:
             commit_line += f" by {md.last_commit_author}"
         if md.last_commit_sha:
@@ -219,9 +222,9 @@ def _render_launcher_dropdown(project: Project, cfg: Config) -> None:
     # P2.8: Surface terminal-only info ABOVE the dropdown so it is not
     # buried below the fold.
     if terminal_only_labels:
-        st.info(
+        st.caption(
             f"Terminal-only launchers ({', '.join(terminal_only_labels)}) "
-            "are interactive — use `armillary open <name> -t <id>` "
+            "are interactive \u2014 use `armillary open <name> -t <id>` "
             "from your terminal."
         )
 
@@ -246,8 +249,9 @@ def _render_launcher_dropdown(project: Project, cfg: Config) -> None:
         )
     with col_btn:
         clicked = st.button(
-            "🚀 Open",
-            use_container_width=True,
+            "Open",
+            icon=":material/launch:",
+            width="stretch",
             key=f"launcher_open_{project.path}",
         )
 

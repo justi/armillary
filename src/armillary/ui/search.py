@@ -72,7 +72,11 @@ def _render_search_section(rows: list[OverviewRow], cfg: Config | None) -> None:
                 label_visibility="collapsed",
             )
         with col_btn:
-            submitted = st.form_submit_button("🔍 Search", use_container_width=True)
+            submitted = st.form_submit_button(
+                "Search",
+                icon=":material/search:",
+                width="stretch",
+            )
 
         # Row 2: filters / options
         opt_cols = st.columns([3, 2, 2])
@@ -301,17 +305,27 @@ def _render_search_results() -> None:
     with header_col:
         st.success(
             f"Found {total_hits} match(es) for '{saved_query}' "
-            f"in {len(hits_by_project)} project(s) ({backend_label})."
+            f"in {len(hits_by_project)} project(s) ({backend_label}).",
+            icon=":material/check_circle:",
         )
     with clear_col:
-        if st.button("✕ Clear", use_container_width=True, key="clear_search"):
+        if st.button(
+            "Clear",
+            icon=":material/close:",
+            width="stretch",
+            key="clear_search",
+        ):
             st.session_state.pop(_SEARCH_STATE_KEY, None)
             st.rerun()
 
     for row, hits in hits_by_project[:10]:
-        with st.expander(f"📂 {row.name}  ({len(hits)} match(es))"):
+        with st.expander(
+            f"{row.name}  ({len(hits)} match(es))",
+            icon=":material/folder:",
+        ):
             if st.button(
-                "→ Open project detail",
+                "Open project detail",
+                icon=":material/arrow_forward:",
                 key=f"open_search_hit_{row.path}",
             ):
                 st.query_params["project"] = row.path
@@ -323,6 +337,4 @@ def _render_search_results() -> None:
                 st.markdown(f"**`{location}`**")
                 st.code(hit.preview, language="text")
     if len(hits_by_project) > 10:
-        st.caption(f"…showing top 10 of {len(hits_by_project)} matching projects.")
-
-    st.divider()
+        st.caption(f"\u2026showing top 10 of {len(hits_by_project)} matching projects.")

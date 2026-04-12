@@ -36,19 +36,28 @@ def _render_sidebar(
             types = sorted({r.type for r in rows})
             umbrellas = sorted({r.umbrella for r in rows})
 
-            status_pick = st.multiselect("Status", statuses)
-            type_pick = st.multiselect("Type", types)
+            status_pick = st.pills(
+                "Status",
+                statuses,
+                selection_mode="multi",
+                default=None,
+            )
+            type_pick = st.pills(
+                "Type",
+                types,
+                selection_mode="multi",
+                default=None,
+            )
             umbrella_pick = st.multiselect("Umbrella", umbrellas)
             name_substring = st.text_input(
                 "Name contains",
-                placeholder="quick filter…",
+                placeholder="quick filter\u2026",
             )
 
-            st.divider()
             st.caption(f"{len(rows)} projects in cache")
         else:
             st.header("armillary")
-            st.caption("Cache is empty — scan filesystem to populate.")
+            st.caption("Cache is empty \u2014 scan filesystem to populate.")
 
         _render_sidebar_actions(cfg)
 
@@ -70,8 +79,9 @@ def _render_nav_sidebar() -> None:
     with st.sidebar:
         st.header("armillary")
         if st.button(
-            "🔭 Overview",
-            use_container_width=True,
+            "Overview",
+            icon=":material/explore:",
+            width="stretch",
             key="sidebar_back_overview",
         ):
             go_to_overview()
@@ -81,8 +91,9 @@ def _render_nav_sidebar() -> None:
 def _render_sidebar_actions(cfg: Config | None) -> None:
     """Shared action buttons rendered in every sidebar variant."""
     if st.button(
-        "🔄 Reload from cache",
-        use_container_width=True,
+        "Reload from cache",
+        icon=":material/refresh:",
+        width="stretch",
         key="sidebar_reload",
     ):
         refresh_cache()
@@ -92,18 +103,19 @@ def _render_sidebar_actions(cfg: Config | None) -> None:
     if scan_disabled:
         scan_help = "No umbrellas in config. Run `armillary config --init`."
     if st.button(
-        "🔁 Scan filesystem now",
-        use_container_width=True,
+        "Scan filesystem now",
+        icon=":material/sync:",
+        width="stretch",
         disabled=scan_disabled,
         help=scan_help,
         key="sidebar_scan",
     ):
         run_scan_with_feedback(cfg)
 
-    st.divider()
     if st.button(
-        "⚙️ Settings",
-        use_container_width=True,
+        "Settings",
+        icon=":material/settings:",
+        width="stretch",
         key="sidebar_settings",
     ):
         go_to_settings()

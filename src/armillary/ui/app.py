@@ -29,7 +29,7 @@ import streamlit as st  # noqa: E402
 
 st.set_page_config(
     page_title="armillary",
-    page_icon="🔭",
+    page_icon=":material/explore:",
     layout="wide",
 )
 

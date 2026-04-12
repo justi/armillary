@@ -22,7 +22,7 @@ from armillary.ui.sidebar import _render_sidebar
 def _render_overview() -> None:
     title_col, export_col = st.columns([5, 2])
     with title_col:
-        st.title("🔭 armillary")
+        st.title(":material/explore: armillary")
     with export_col:
         _render_export_for_ai_button()
     _render_header_caption()
@@ -46,7 +46,6 @@ def _render_overview() -> None:
 
     filtered = _apply_filters(rows, filters=filters, search=name_filter)
     _render_summary_metrics(filtered, total=len(rows))
-    st.divider()
 
     if not filtered:
         st.warning("No projects match the current filters.")
@@ -61,7 +60,7 @@ def _render_empty_cache_state(cfg: Config | None) -> None:
     Replaces the old text hint that told the user to "go to the terminal" —
     that violated the rule "what you can't click in the UI doesn't exist".
     """
-    st.subheader("🪐 Cache is empty")
+    st.subheader("Cache is empty", anchor=False)
     st.write(
         "armillary needs to walk the filesystem at least once to discover "
         "your projects. Click the button below to run a scan against the "
@@ -73,8 +72,9 @@ def _render_empty_cache_state(cfg: Config | None) -> None:
     col_btn, col_help = st.columns([1, 2])
     with col_btn:
         if st.button(
-            "🔁 Scan filesystem now",
-            use_container_width=True,
+            "Scan filesystem now",
+            icon=":material/sync:",
+            width="stretch",
             disabled=not can_scan,
             key="empty_state_scan",
         ):
@@ -124,18 +124,19 @@ def _render_export_for_ai_button() -> None:
 
     markdown = exporter_mod.render_repos_index(projects)
     st.download_button(
-        label="📥 Download for AI",
+        label="Download for AI",
+        icon=":material/download:",
         data=markdown,
         file_name="repos-index.md",
         mime="text/markdown",
         help=(
             "Downloads a markdown snapshot of the current cache. "
-            "For Claude Code auto-load, use Settings -> Integrations."
+            "For Claude Code auto-load, use Settings \u2192 Integrations."
         ),
-        use_container_width=True,
+        width="stretch",
         disabled=not projects,
     )
-    st.caption("Claude Code auto-load: Settings -> Integrations")
+    st.caption("Claude Code auto-load: Settings \u2192 Integrations")
 
 
 def _apply_filters(
@@ -161,19 +162,20 @@ def _render_summary_metrics(rows: list[OverviewRow], *, total: int) -> None:
     counts: dict[str, int] = {}
     for r in rows:
         counts[r.status_raw] = counts.get(r.status_raw, 0) + 1
-    cols = st.columns(5)
     showing = len(rows)
-    if showing < total:
-        cols[0].metric("Showing", f"{showing} of {total}")
-    else:
-        cols[0].metric("Total", total)
-    cols[1].metric("Active", counts.get("ACTIVE", 0))
-    cols[2].metric("Paused", counts.get("PAUSED", 0))
-    cols[3].metric("Dormant", counts.get("DORMANT", 0))
-    cols[4].metric(
-        "Ideas",
-        counts.get("IDEA", 0) + counts.get("IN_PROGRESS", 0),
-    )
+    with st.container(horizontal=True):
+        if showing < total:
+            st.metric("Showing", f"{showing} of {total}", border=True)
+        else:
+            st.metric("Total", total, border=True)
+        st.metric("Active", counts.get("ACTIVE", 0), border=True)
+        st.metric("Paused", counts.get("PAUSED", 0), border=True)
+        st.metric("Dormant", counts.get("DORMANT", 0), border=True)
+        st.metric(
+            "Ideas",
+            counts.get("IDEA", 0) + counts.get("IN_PROGRESS", 0),
+            border=True,
+        )
 
 
 def _render_table(rows: list[OverviewRow]) -> None:
@@ -185,6 +187,7 @@ def _render_table(rows: list[OverviewRow]) -> None:
         on_select="rerun",
         selection_mode="single-row",
         column_config={
+            "Name": st.column_config.TextColumn("Name", pinned=True),
             "Last modified": st.column_config.DatetimeColumn(
                 "Last modified",
                 format="YYYY-MM-DD HH:mm",

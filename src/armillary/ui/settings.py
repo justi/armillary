@@ -56,7 +56,7 @@ def _render_settings_page() -> None:
     if toast_msg:
         st.toast(toast_msg)
 
-    st.title("⚙️ Settings")
+    st.title(":material/settings: Settings")
     st.caption(f"Editing `{_shorten_home(default_config_path())}`")
 
     try:
@@ -74,11 +74,18 @@ def _render_settings_page() -> None:
             "Fix the YAML by hand (`armillary config` from a terminal), "
             "then click Reload below."
         )
-        if st.button("🔄 Reload config"):
+        if st.button("Reload config", icon=":material/refresh:"):
             st.rerun()
         return
 
-    tabs = st.tabs(["Umbrellas", "Launchers", "Khoj", "Integrations"])
+    tabs = st.tabs(
+        [
+            ":material/folder_open: Umbrellas",
+            ":material/launch: Launchers",
+            ":material/psychology: Khoj",
+            ":material/extension: Integrations",
+        ]
+    )
     with tabs[0]:
         _render_settings_umbrellas(cfg)
     with tabs[1]:
@@ -178,7 +185,8 @@ def _render_settings_umbrellas(cfg: Config) -> None:
             if idx == 0:
                 st.write("")
             remove = st.button(
-                "✕",
+                "",
+                icon=":material/close:",
                 key=f"umbrella_remove_{idx}",
                 help="Remove this umbrella",
             )
@@ -203,7 +211,6 @@ def _render_settings_umbrellas(cfg: Config) -> None:
         save_config_and_refresh(cfg)
         return
 
-    st.divider()
     st.markdown("**Add umbrella**")
     add_cols = st.columns([4, 2, 1, 1])
     with add_cols[0]:
@@ -250,8 +257,12 @@ def _render_settings_umbrellas(cfg: Config) -> None:
             save_config_and_refresh(cfg)
             return
 
-    st.divider()
-    if st.button("💾 Save changes", key="umbrellas_save", type="primary"):
+    if st.button(
+        "Save changes",
+        icon=":material/save:",
+        key="umbrellas_save",
+        type="primary",
+    ):
         cfg.umbrellas = edited
         save_config_and_refresh(cfg)
 
@@ -274,14 +285,21 @@ def _render_settings_launchers(cfg: Config) -> None:
         launcher = cfg.launchers[target_id]
         availability = _detect_launcher_compat(launcher)
         if availability.mode == "path":
-            status = "🟢 CLI on PATH"
+            status_label = "CLI on PATH"
         elif availability.mode == "macos-app":
-            status = "🟢 macOS app detected"
+            status_label = "macOS app"
         else:
-            status = "🔴 not detected"
-        badge = " (built-in)" if target_id in builtin_ids else ""
+            status_label = "not detected"
+        badge_text = " (built-in)" if target_id in builtin_ids else ""
+        status_icon = (
+            ":material/check_circle:" if availability.available else ":material/error:"
+        )
 
-        with st.expander(f"{launcher.icon or '·'} {target_id}{badge} — {status}"):
+        icon_char = launcher.icon or "\u00b7"
+        with st.expander(
+            f"{icon_char} {target_id}{badge_text} \u2014 {status_label}",
+            icon=status_icon,
+        ):
             cols_top = st.columns([3, 3, 1, 1])
             with cols_top[0]:
                 new_label = st.text_input(
@@ -321,13 +339,15 @@ def _render_settings_launchers(cfg: Config) -> None:
             cols_bottom = st.columns([1, 1, 4])
             with cols_bottom[0]:
                 test_clicked = st.button(
-                    "🧪 Test",
+                    "Test",
+                    icon=":material/science:",
                     key=f"launcher_test_{target_id}",
                     help="Check whether the command is on PATH (no spawn)",
                 )
             with cols_bottom[1]:
                 remove_clicked = st.button(
-                    "✕ Remove",
+                    "Remove",
+                    icon=":material/delete:",
                     key=f"launcher_remove_{target_id}",
                 )
 
@@ -388,7 +408,6 @@ def _render_settings_launchers(cfg: Config) -> None:
         save_config_and_refresh(cfg)
         return
 
-    st.divider()
     st.markdown("**Add custom launcher**")
     with st.form("launcher_add_form", clear_on_submit=True):
         a_cols = st.columns([2, 3, 3])
@@ -434,8 +453,12 @@ def _render_settings_launchers(cfg: Config) -> None:
             save_config_and_refresh(cfg)
             return
 
-    st.divider()
-    if st.button("💾 Save changes", key="launchers_save", type="primary"):
+    if st.button(
+        "Save changes",
+        icon=":material/save:",
+        key="launchers_save",
+        type="primary",
+    ):
         cfg.launchers = edited
         save_config_and_refresh(cfg)
 
@@ -455,7 +478,8 @@ def _render_settings_khoj(cfg: Config) -> None:
     # block is expanded by default in the disabled state and collapses
     # once the user flips the checkbox — still one click away.
     with st.expander(
-        "📦 How to install Khoj",
+        "How to install Khoj",
+        icon=":material/package_2:",
         expanded=not cfg.khoj.enabled,
     ):
         st.markdown(
@@ -511,9 +535,18 @@ def _render_settings_khoj(cfg: Config) -> None:
 
     cols = st.columns([1, 1, 4])
     with cols[0]:
-        test_clicked = st.button("🧪 Test connection", key="khoj_test")
+        test_clicked = st.button(
+            "Test connection",
+            icon=":material/science:",
+            key="khoj_test",
+        )
     with cols[1]:
-        save_clicked = st.button("💾 Save changes", key="khoj_save", type="primary")
+        save_clicked = st.button(
+            "Save changes",
+            icon=":material/save:",
+            key="khoj_save",
+            type="primary",
+        )
 
     if test_clicked:
         _test_khoj_connection(api_url, api_key, timeout_seconds)
@@ -555,7 +588,6 @@ def _render_khoj_admin_credentials() -> None:
     if env is None:
         return
 
-    st.divider()
     st.markdown("**Khoj admin panel credentials**")
     st.caption(
         "Auto-generated by `armillary install-khoj`. Use these to log "
@@ -602,7 +634,11 @@ def _render_claude_code_integration() -> None:
         "automatically."
     )
 
-    with st.expander("How this works", expanded=not status.bridge_installed):
+    with st.expander(
+        "How this works",
+        icon=":material/info:",
+        expanded=not status.bridge_installed,
+    ):
         st.markdown(
             "1. `Install / Update` writes a markdown snapshot from the current cache.\n"
             "2. If CLAUDE.md wiring is enabled, armillary adds the import line once.\n"
@@ -614,20 +650,19 @@ def _render_claude_code_integration() -> None:
             "`@armillary/repos-index.md` import."
         )
 
-    status_cols = st.columns(2)
-    with status_cols[0]:
+    with st.container(horizontal=True):
         st.metric(
             "Bridge file",
             "Installed" if status.bridge_installed else "Not installed",
+            border=True,
         )
-    with status_cols[1]:
         if status.claude_md_wired:
             wiring_status = "Active"
         elif status.claude_md_exists:
             wiring_status = "Not wired"
         else:
             wiring_status = "Missing"
-        st.metric("CLAUDE.md wiring", wiring_status)
+        st.metric("CLAUDE.md wiring", wiring_status, border=True)
 
     st.caption(f"Bridge path: `{status.bridge_path}`")
     st.caption(f"CLAUDE.md: `{status.claude_md_path}`")
@@ -649,7 +684,7 @@ def _render_claude_code_integration() -> None:
         action_label,
         key="claude_bridge_install",
         type="primary",
-        use_container_width=True,
+        width="stretch",
     ):
         try:
             bridge_path, written, appended = exporter_mod.install_claude_bridge(
