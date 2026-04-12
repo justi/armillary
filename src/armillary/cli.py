@@ -516,40 +516,6 @@ def open_project(
     )
 
 
-@app.command("export-index")
-def export_index(
-    output: Path = typer.Argument(
-        Path("repos-index.md"),
-        help="Where to write the markdown index (default: ./repos-index.md).",
-    ),
-    title: str = typer.Option(
-        "armillary — projects index",
-        "--title",
-        help="Heading for the generated document.",
-    ),
-) -> None:
-    """Export every cached project as a markdown table for AI tools.
-
-    The output is a self-contained `.md` file: heading, generation
-    timestamp, project count, and one row per project with name,
-    type, status, branch, dirty count, last commit date, last
-    modified, path, and README excerpt. Drop it into a Claude Code
-    session, a Codex prompt, or any other tool that can read markdown.
-
-    This is the safe half of PLAN.md M7. Auto-writing into AI tool
-    memory directories is deferred until we have an explicit contract
-    for those paths.
-    """
-    written = exporter.write_repos_index(output, title=title)
-    if written == 0:
-        typer.secho(
-            f"Wrote {output} but the cache is empty. Run `armillary scan` first.",
-            fg=typer.colors.YELLOW,
-        )
-        return
-    typer.secho(f"Wrote {written} project(s) to {output}", fg=typer.colors.GREEN)
-
-
 @app.command("install-claude-bridge")
 def install_claude_bridge(
     with_claude_md: bool = typer.Option(

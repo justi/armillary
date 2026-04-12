@@ -1760,47 +1760,6 @@ def test_search_no_matches_prints_friendly_message(
     assert "no matches" in out.lower()
 
 
-# --- M7a: armillary export-index ------------------------------------------
-
-
-def test_export_index_writes_markdown_with_cached_projects(tmp_path: Path) -> None:
-    _mkrepo(tmp_path / "alpha")
-    _mkrepo(tmp_path / "beta")
-    runner.invoke(app, ["scan", "-u", str(tmp_path)])
-
-    output = tmp_path / "repos-index.md"
-    result = runner.invoke(app, ["export-index", str(output)])
-
-    assert result.exit_code == 0, result.stdout
-    assert output.exists()
-    text = output.read_text()
-    assert "alpha" in text
-    assert "beta" in text
-    assert "**2** project(s)" in text
-
-
-def test_export_index_with_empty_cache_warns(tmp_path: Path) -> None:
-    output = tmp_path / "out.md"
-    result = runner.invoke(app, ["export-index", str(output)])
-    assert result.exit_code == 0
-    combined = _strip_ansi(result.stdout + (result.stderr or ""))
-    assert "cache is empty" in combined.lower()
-    assert output.exists()
-    assert "Cache is empty" in output.read_text()
-
-
-def test_export_index_custom_title(tmp_path: Path) -> None:
-    _mkrepo(tmp_path / "thing")
-    runner.invoke(app, ["scan", "-u", str(tmp_path)])
-
-    output = tmp_path / "out.md"
-    result = runner.invoke(
-        app, ["export-index", str(output), "--title", "My Custom Title"]
-    )
-    assert result.exit_code == 0
-    assert "# My Custom Title" in output.read_text()
-
-
 # --- M7b / PR #19: armillary install-claude-bridge -------------------------
 
 
