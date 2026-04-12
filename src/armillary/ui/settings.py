@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import shlex
 import shutil
 from pathlib import Path
@@ -17,13 +16,9 @@ from armillary.config import (
     UmbrellaConfig,
     default_config_path,
     load_config,
-    write_config,
 )
-from armillary.ui.helpers import (
-    _load_overview_rows,
-    _load_project,
-    _shorten_home,
-)
+from armillary.ui.actions import go_to_overview, save_config_and_refresh
+from armillary.ui.helpers import _shorten_home
 
 
 def _render_settings_page() -> None:
@@ -39,9 +34,7 @@ def _render_settings_page() -> None:
     happen on explicit "Save" button clicks.
     """
     if st.button("← Back to overview", key="settings_back"):
-        with contextlib.suppress(KeyError):
-            del st.query_params["page"]
-        st.rerun()
+        go_to_overview()
 
     st.title("⚙️ Settings")
     st.caption(f"Editing `{_shorten_home(default_config_path())}`")
@@ -137,7 +130,7 @@ def _render_settings_umbrellas(cfg: Config) -> None:
 
     if removed_any:
         cfg.umbrellas = edited
-        _save_settings(cfg)
+        save_config_and_refresh(cfg)
         return
 
     st.divider()
@@ -183,13 +176,13 @@ def _render_settings_umbrellas(cfg: Config) -> None:
                 )
             )
             cfg.umbrellas = edited
-            _save_settings(cfg)
+            save_config_and_refresh(cfg)
             return
 
     st.divider()
     if st.button("💾 Save changes", key="umbrellas_save", type="primary"):
         cfg.umbrellas = edited
-        _save_settings(cfg)
+        save_config_and_refresh(cfg)
 
 
 # ----- Launchers tab -------------------------------------------------------
@@ -291,7 +284,7 @@ def _render_settings_launchers(cfg: Config) -> None:
 
     if removed_any:
         cfg.launchers = edited
-        _save_settings(cfg)
+        save_config_and_refresh(cfg)
         return
 
     st.divider()
@@ -337,13 +330,13 @@ def _render_settings_launchers(cfg: Config) -> None:
                 terminal=new_terminal,
             )
             cfg.launchers = edited
-            _save_settings(cfg)
+            save_config_and_refresh(cfg)
             return
 
     st.divider()
     if st.button("💾 Save changes", key="launchers_save", type="primary"):
         cfg.launchers = edited
-        _save_settings(cfg)
+        save_config_and_refresh(cfg)
 
 
 # ----- Khoj tab ------------------------------------------------------------
@@ -431,7 +424,7 @@ def _render_settings_khoj(cfg: Config) -> None:
             api_key=api_key or None,
             timeout_seconds=timeout_seconds,
         )
-        _save_settings(cfg)
+        save_config_and_refresh(cfg)
 
     # Admin panel credentials — visible only when `armillary install-khoj`
     # has already generated the `khoj-admin.env` file. These auto-log the
@@ -448,9 +441,9 @@ def _render_khoj_admin_credentials() -> None:
     booting with. Password is masked behind an expander so casual
     onlookers do not see it over the user's shoulder.
     """
-    from armillary.cli import _khoj_admin_env_path, _load_khoj_admin_env
+    from armillary.khoj_service import khoj_admin_env_path, load_khoj_admin_env
 
-    env = _load_khoj_admin_env()
+    env = load_khoj_admin_env()
     if env is None:
         return
 
@@ -474,7 +467,7 @@ def _render_khoj_admin_credentials() -> None:
         )
     with cred_cols[1], st.expander("Show password"):
         st.code(password, language=None)
-    st.caption(f"Stored at `{_khoj_admin_env_path()}`")
+    st.caption(f"Stored at `{khoj_admin_env_path()}`")
 
 
 def _test_khoj_connection(api_url: str, api_key: str, timeout: float) -> None:
@@ -504,23 +497,3 @@ def _test_khoj_connection(api_url: str, api_key: str, timeout: float) -> None:
         st.error(f"Khoj unreachable at {api_url}: {exc}")
     except Exception as exc:  # noqa: BLE001 — surface anything weird
         st.error(f"Khoj test failed: {exc}")
-
-
-# ----- save helper ---------------------------------------------------------
-
-
-def _save_settings(cfg: Config) -> None:
-    """Persist `cfg` to YAML, clear data caches, rerun.
-
-    Called by every "💾 Save changes" button. Streamlit reruns from the
-    top after `st.rerun()`, so the user lands on the freshly-saved view.
-    """
-    try:
-        write_config(cfg)
-    except OSError as exc:
-        st.error(f"Could not write config: {exc}")
-        return
-    _load_overview_rows.clear()
-    _load_project.clear()
-    st.success("Saved.")
-    st.rerun()

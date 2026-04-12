@@ -10,8 +10,10 @@ import streamlit as st
 
 from armillary import scan_service
 from armillary.cache import Cache
-from armillary.config import Config, ConfigError, load_config
+from armillary.config import Config
 from armillary.models import Project, UmbrellaFolder
+from armillary.utils import safe_load_config as _safe_load_config_impl
+from armillary.utils import shorten_home as _shorten_home_impl
 
 _STATUS_EMOJI = {
     "ACTIVE": "🟢",
@@ -104,9 +106,7 @@ def _project_to_row(p: Project) -> OverviewRow:
 
 
 def _shorten_home(path: Path) -> str:
-    home = str(Path.home())
-    s = str(path)
-    return "~" + s[len(home) :] if s.startswith(home) else s
+    return _shorten_home_impl(path)
 
 
 # --- shared scan operation -------------------------------------------------
@@ -156,10 +156,7 @@ def _safe_load_config() -> Config | None:
     """Load the config file, swallowing errors so the dashboard can still
     render the table even if config is broken (CLI features that need
     config — launcher dropdown — degrade gracefully)."""
-    try:
-        return load_config()
-    except ConfigError:
-        return None
+    return _safe_load_config_impl()
 
 
 @st.cache_data(ttl=60, show_spinner=False)

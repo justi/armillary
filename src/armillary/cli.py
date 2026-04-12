@@ -28,6 +28,7 @@ from armillary.config import (
 from armillary.models import ProjectType, Status, UmbrellaFolder
 from armillary.scanner import scan as scan_umbrellas
 from armillary.search import KhojConfig, KhojSearch, LiteralSearch
+from armillary.utils import shorten_home as _shorten_home_from_utils
 
 # Khoj health probe used by `config --init` to offer auto-enable.
 # 1-second timeout — Khoj either runs locally and answers immediately,
@@ -319,9 +320,7 @@ def list_projects(
 
 def _shorten_home(path: Path) -> str:
     """Replace the user's home prefix with `~` for display."""
-    home = str(Path.home())
-    s = str(path)
-    return "~" + s[len(home) :] if s.startswith(home) else s
+    return _shorten_home_from_utils(path)
 
 
 def _humanize_relative_time(when: datetime) -> str:
@@ -1722,11 +1721,7 @@ def _render_config_yaml(
 
 def _shorten_home_str(path: Path) -> str:
     """Return a string with `~` substituted for `$HOME` if applicable."""
-    home = str(Path.home())
-    s = str(path)
-    if s.startswith(home):
-        return "~" + s[len(home) :]
-    return s
+    return _shorten_home_from_utils(path)
 
 
 _BLANK_STARTER_CONFIG_YAML = """\

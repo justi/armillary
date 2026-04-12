@@ -5,12 +5,8 @@ from __future__ import annotations
 import streamlit as st
 
 from armillary.config import Config
-from armillary.ui.helpers import (
-    OverviewRow,
-    _load_overview_rows,
-    _load_project,
-    _run_dashboard_scan,
-)
+from armillary.ui.actions import go_to_settings, refresh_cache, run_scan_with_feedback
+from armillary.ui.helpers import OverviewRow
 
 
 def _render_sidebar(
@@ -53,9 +49,7 @@ def _render_sidebar(
             use_container_width=True,
             key="sidebar_reload",
         ):
-            _load_overview_rows.clear()
-            _load_project.clear()
-            st.rerun()
+            refresh_cache()
 
         scan_disabled = cfg is None or not cfg.umbrellas
         scan_help = None
@@ -68,13 +62,7 @@ def _render_sidebar(
             help=scan_help,
             key="sidebar_scan",
         ):
-            with st.spinner("Scanning…"):
-                ok, message = _run_dashboard_scan(cfg)
-            if ok:
-                st.success(message)
-                st.rerun()
-            else:
-                st.error(message)
+            run_scan_with_feedback(cfg)
 
         st.divider()
         if st.button(
@@ -82,8 +70,7 @@ def _render_sidebar(
             use_container_width=True,
             key="sidebar_settings",
         ):
-            st.query_params["page"] = "settings"
-            st.rerun()
+            go_to_settings()
 
     return {
         "status": status_pick,

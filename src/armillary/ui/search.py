@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,26 @@ from armillary.search import (
 from armillary.ui.helpers import OverviewRow
 
 _SEARCH_STATE_KEY = "armillary_search_state"
+
+
+@dataclass
+class SearchResults:
+    """Typed container for a successful search stored in session state."""
+
+    query: str
+    backend_label: str
+    hits_by_project: list[tuple[OverviewRow, list[SearchHit]]] = field(
+        default_factory=list,
+    )
+    total_hits: int = 0
+
+
+@dataclass
+class SearchError:
+    """Typed container for a failed search stored in session state."""
+
+    query: str
+    error: str
 
 
 def _render_search_section(rows: list[OverviewRow], cfg: Config | None) -> None:
@@ -54,7 +75,7 @@ def _render_search_section(rows: list[OverviewRow], cfg: Config | None) -> None:
             submitted = st.form_submit_button("🔍 Search", use_container_width=True)
 
         # Row 2: filters / options
-        opt_cols = st.columns([3, 2, 2] if khoj_available else [3, 2, 2])
+        opt_cols = st.columns([3, 2, 2])
         with opt_cols[0]:
             project_pick = st.selectbox(
                 "Restrict to project",
@@ -140,7 +161,7 @@ def _run_search_and_store(
     """
     backend, backend_label, error = _build_dashboard_search_backend(cfg, use_khoj)
     if error is not None:
-        st.session_state[_SEARCH_STATE_KEY] = {"query": query, "error": error}
+        st.session_state[_SEARCH_STATE_KEY] = SearchError(query=query, error=error)
         return
 
     # Restrict the projects we iterate to either the selected one or all.
@@ -172,14 +193,14 @@ def _run_search_and_store(
                     # Backend-wide failure: do NOT silently keep going,
                     # the user will think "search returned no matches"
                     # when actually the backend never answered.
-                    st.session_state[_SEARCH_STATE_KEY] = {
-                        "query": query,
-                        "error": (
+                    st.session_state[_SEARCH_STATE_KEY] = SearchError(
+                        query=query,
+                        error=(
                             f"Semantic search backend failed: {exc}. "
                             "Check that Khoj is running on "
                             f"{cfg.khoj.api_url if cfg else 'the configured URL'}."
                         ),
-                    }
+                    )
                     return
                 # ripgrep per-project error — broken file / perms / etc.
                 # Skip this project and try the next.
@@ -195,12 +216,12 @@ def _run_search_and_store(
                     hits_by_project.append((row, hits_to_keep))
                     total_hits += len(hits_to_keep)
 
-    st.session_state[_SEARCH_STATE_KEY] = {
-        "query": query,
-        "results": hits_by_project,
-        "backend": backend_label,
-        "max_hits": max_hits,
-    }
+    st.session_state[_SEARCH_STATE_KEY] = SearchResults(
+        query=query,
+        backend_label=backend_label,
+        hits_by_project=hits_by_project,
+        total_hits=total_hits,
+    )
 
 
 def _build_dashboard_search_backend(
@@ -252,17 +273,17 @@ def _render_search_results() -> None:
     for "results disappear when you click a per-result button".
     """
     state = st.session_state.get(_SEARCH_STATE_KEY)
-    if not state:
+    if state is None:
         return
 
-    saved_query = state["query"]
-
-    if "error" in state:
-        st.error(state["error"])
+    if isinstance(state, SearchError):
+        st.error(state.error)
         return
 
-    hits_by_project = state["results"]
-    backend_label = state.get("backend", "ripgrep")
+    assert isinstance(state, SearchResults)
+    saved_query = state.query
+    hits_by_project = state.hits_by_project
+    backend_label = state.backend_label
     total_hits = sum(len(h) for _, h in hits_by_project)
     if total_hits == 0:
         st.warning(f"No matches for '{saved_query}' ({backend_label}).")

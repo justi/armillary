@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 import streamlit as st
 
 from armillary import launcher as launcher_mod
-from armillary.config import Config, default_config_path
+from armillary.config import Config, LauncherConfig, default_config_path
 from armillary.models import Project
+from armillary.ui.actions import go_to_overview
 from armillary.ui.helpers import (
     _STATUS_EMOJI,
     _load_project,
@@ -19,20 +21,53 @@ from armillary.ui.helpers import (
 )
 
 
+@dataclass(frozen=True)
+class LauncherOption:
+    """View-model for one entry in the launcher dropdown."""
+
+    target_id: str
+    label: str
+    on_path: bool
+
+
+def build_launcher_options(
+    launchers: dict[str, LauncherConfig],
+) -> tuple[list[LauncherOption], list[str], list[str]]:
+    """Filter terminal launchers, check PATH, build display options.
+
+    Returns ``(available, missing_labels, terminal_only_labels)``.
+    """
+    available: list[LauncherOption] = []
+    missing_labels: list[str] = []
+    terminal_only_labels: list[str] = []
+    for target_id, launcher_cfg in launchers.items():
+        label = (
+            f"{launcher_cfg.icon + ' ' if launcher_cfg.icon else ''}"
+            f"{launcher_cfg.label}"
+        )
+        if launcher_cfg.terminal:
+            terminal_only_labels.append(launcher_cfg.label)
+            continue
+        on_path = shutil.which(launcher_cfg.command) is not None
+        if on_path:
+            available.append(LauncherOption(target_id, label, on_path=True))
+        else:
+            missing_labels.append(label)
+    return available, missing_labels, terminal_only_labels
+
+
 def _render_project_detail(project_path: str) -> None:
     project = _load_project(project_path)
     if project is None:
         st.error(f"Project not found in cache: `{project_path}`")
         if st.button("← Back to overview"):
-            st.query_params.clear()
-            st.rerun()
+            go_to_overview()
         return
 
     md = project.metadata
 
     if st.button("← Back to overview"):
-        st.query_params.clear()
-        st.rerun()
+        go_to_overview()
 
     st.title(project.name)
 
@@ -133,23 +168,11 @@ def _render_launcher_dropdown(project: Project, cfg: Config) -> None:
         st.caption("No launchers configured.")
         return
 
-    available_targets: list[tuple[str, str]] = []
-    missing_labels: list[str] = []
-    terminal_only_labels: list[str] = []
-    for target_id, launcher_cfg in cfg.launchers.items():
-        label = (
-            f"{launcher_cfg.icon + ' ' if launcher_cfg.icon else ''}"
-            f"{launcher_cfg.label}"
-        )
-        if launcher_cfg.terminal:
-            terminal_only_labels.append(launcher_cfg.label)
-            continue
-        if shutil.which(launcher_cfg.command) is not None:
-            available_targets.append((target_id, label))
-        else:
-            missing_labels.append(label)
+    available, missing_labels, terminal_only_labels = build_launcher_options(
+        cfg.launchers,
+    )
 
-    if not available_targets:
+    if not available:
         st.warning(
             "No GUI launcher executables found on PATH. Edit "
             f"`{_shorten_home(default_config_path())}` to add one."
@@ -163,12 +186,13 @@ def _render_launcher_dropdown(project: Project, cfg: Config) -> None:
             )
         return
 
+    options_map = {opt.target_id: opt.label for opt in available}
     col_select, col_btn = st.columns([3, 1])
     with col_select:
         target_id = st.selectbox(
             "Launcher",
-            options=[t[0] for t in available_targets],
-            format_func=lambda tid: dict(available_targets)[tid],
+            options=list(options_map),
+            format_func=lambda tid: options_map[tid],
             label_visibility="collapsed",
             key=f"launcher_pick_{project.path}",
         )

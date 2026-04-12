@@ -8,10 +8,10 @@ from armillary import __version__
 from armillary import exporter as exporter_mod
 from armillary.cache import Cache, default_db_path
 from armillary.config import Config, default_config_path
+from armillary.ui.actions import run_scan_with_feedback
 from armillary.ui.helpers import (
     OverviewRow,
     _load_overview_rows,
-    _run_dashboard_scan,
     _safe_load_config,
     _shorten_home,
 )
@@ -78,13 +78,7 @@ def _render_empty_cache_state(cfg: Config | None) -> None:
             disabled=not can_scan,
             key="empty_state_scan",
         ):
-            with st.spinner("Scanning…"):
-                ok, message = _run_dashboard_scan(cfg)
-            if ok:
-                st.success(message)
-                st.rerun()
-            else:
-                st.error(message)
+            run_scan_with_feedback(cfg)
     with col_help:
         if can_scan:
             st.caption(
