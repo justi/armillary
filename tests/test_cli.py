@@ -25,6 +25,7 @@ from armillary import (
 )
 from armillary.cache import Cache
 from armillary.cli import app
+from armillary.config import LauncherConfig
 
 runner = CliRunner()
 
@@ -671,6 +672,39 @@ def test_open_invokes_launcher_when_executable_present(
     assert "myrepo" in captured["cwd"]
 
 
+def test_open_uses_macos_app_fallback_when_cli_shim_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CLI open should still work when Cursor exists only as `/Applications/*.app`."""
+    _mkrepo(tmp_path / "myrepo")
+    runner.invoke(app, ["scan", "-u", str(tmp_path)])
+
+    captured: dict[str, Any] = {}
+    from armillary import launcher as launcher_mod
+
+    monkeypatch.setattr(launcher_mod.shutil, "which", lambda name: None)
+    monkeypatch.setattr(launcher_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        launcher_mod,
+        "_find_macos_app_bundle",
+        lambda name: Path(f"/Applications/{name}.app"),
+    )
+
+    def fake_popen(cmd: list[str], **kwargs: Any) -> Any:
+        captured["cmd"] = cmd
+        captured["cwd"] = kwargs.get("cwd")
+        return None
+
+    monkeypatch.setattr(launcher_mod.subprocess, "Popen", fake_popen)
+
+    result = runner.invoke(app, ["open", "myrepo", "--target", "cursor"])
+    assert result.exit_code == 0, result.stdout
+    assert captured["cmd"][0:3] == ["open", "-a", "Cursor"]
+    assert "myrepo" in captured["cmd"][-1]
+    assert "myrepo" in captured["cwd"]
+
+
 def test_open_unknown_target_errors_out(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1130,24 +1164,36 @@ def test_config_init_launcher_detection_lists_available_and_missing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Setup ceremony step 3: cross-checks `cfg.launchers` against
-    `shutil.which` and prints which are reachable on PATH."""
+    launcher detection and print a deterministic availability summary."""
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     _mkrepo(fake_home / "Projects" / "thing")
 
     monkeypatch.setattr(Path, "home", lambda: fake_home)
 
-    # Pretend `cursor` and `code` are on PATH but `zed` and `claude` are not.
-    real_which = cli_helpers.shutil_which
+    from armillary.launcher import LauncherAvailability
 
-    def fake_which(name: str) -> str | None:
-        if name in {"cursor", "code", "open"}:
-            return f"/usr/bin/{name}"
-        return None
+    def fake_detect_launcher(config: LauncherConfig) -> LauncherAvailability:
+        if config.command == "cursor":
+            return LauncherAvailability(
+                available=True,
+                mode="macos-app",
+                detail="/Applications/Cursor.app",
+                app_name="Cursor",
+            )
+        if config.command in {"code", "open"}:
+            return LauncherAvailability(
+                available=True,
+                mode="path",
+                detail=f"/usr/bin/{config.command}",
+            )
+        return LauncherAvailability(available=False, mode="missing")
 
-    import shutil as _shutil
-
-    monkeypatch.setattr(_shutil, "which", fake_which)
+    monkeypatch.setattr(
+        cli_config_ceremony.launcher,
+        "detect_launcher",
+        fake_detect_launcher,
+    )
 
     config_file = tmp_path / "armillary" / "config.yaml"
     monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
@@ -1166,10 +1212,11 @@ def test_config_init_launcher_detection_lists_available_and_missing(
 
     out = _strip_ansi(result.stdout)
     assert "available" in out.lower()
-    assert "cursor" in out
+    assert "cursor (cursor) via macOS app" in out
+    assert "code (vscode)" in out
     assert "missing" in out.lower()
-    assert "zed" in out or "claude" in out
-    del real_which  # silence linter
+    assert "zed (zed)" in out
+    assert "claude (claude-code)" in out
 
 
 def test_config_init_khoj_detection_auto_enables_when_health_responds(
