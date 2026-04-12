@@ -240,6 +240,10 @@ def install_mcp_config(claude_dir: Path) -> None:
             pass
 
     # Claude Code expects {"mcpServers": {"name": {...}}} wrapper.
+    # Migrate legacy format where armillary was at the top level.
+    if "armillary" in existing and "mcpServers" not in existing:
+        existing.setdefault("mcpServers", {})["armillary"] = existing.pop("armillary")
+
     servers = existing.setdefault("mcpServers", {})
     if not isinstance(servers, dict):
         servers = {}

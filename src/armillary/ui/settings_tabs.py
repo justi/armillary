@@ -1,6 +1,7 @@
-"""Settings tabs for Khoj and Integrations.
+"""Settings UI tabs for Khoj and Integrations.
 
 Extracted from settings.py to keep modules under 400 lines.
+This is a UI module (imports streamlit), not a service layer module.
 """
 
 from __future__ import annotations

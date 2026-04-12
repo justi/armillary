@@ -20,7 +20,7 @@ from armillary.config import (
 )
 from armillary.ui.actions import save_config_and_refresh
 from armillary.ui.helpers import _shorten_home
-from armillary.ui.settings_services import (
+from armillary.ui.settings_tabs import (
     render_settings_integrations,
     render_settings_khoj,
 )

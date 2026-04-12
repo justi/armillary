@@ -2151,9 +2151,12 @@ def test_install_khoj_provisions_docker_container_happy_path(
     out = _strip_ansi(result.stdout)
     assert "armillary start-khoj" in out
     assert "armillary config --init --force" in out
-    admin_env = Path(
-        os.environ["ARMILLARY_CONFIG"]  # set by the autouse isolation fixture
-    ).parent / "khoj-admin.env"
+    admin_env = (
+        Path(
+            os.environ["ARMILLARY_CONFIG"]  # set by the autouse isolation fixture
+        ).parent
+        / "khoj-admin.env"
+    )
     assert admin_env.exists()
     admin_text = admin_env.read_text()
     assert "KHOJ_ADMIN_EMAIL=admin@armillary.local" in admin_text

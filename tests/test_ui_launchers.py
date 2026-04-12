@@ -26,7 +26,9 @@ def test_settings_launcher_compat_falls_back_to_path_when_symbol_is_missing(
     assert availability.detail == "/usr/bin/cursor"
 
 
-def test_detail_build_launcher_options_survives_old_launcher_module(monkeypatch) -> None:
+def test_detail_build_launcher_options_survives_old_launcher_module(
+    monkeypatch,
+) -> None:
     monkeypatch.delattr(detail.launcher_mod, "detect_launcher", raising=False)
     monkeypatch.setattr(detail.shutil, "which", lambda name: "/usr/bin/cursor")
 

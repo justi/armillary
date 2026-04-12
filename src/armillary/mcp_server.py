@@ -67,19 +67,27 @@ def _hit_to_dict(hit: SearchHit, project_meta: dict[str, object]) -> dict[str, o
     }
 
 
+def _serialize(items: list[dict[str, object]], dropped: int) -> str:
+    """Serialize items + optional truncation marker to compact JSON."""
+    payload: list[dict[str, object] | dict[str, int]] = list(items)
+    if dropped > 0:
+        payload.append({"_truncated": dropped})
+    return json.dumps(payload, separators=(",", ":"), default=str)
+
+
 def _safe_json(results: list[dict[str, object]], total: int, shown: int) -> str:
     """Serialize results to compact JSON, truncating if over char limit."""
-    output = json.dumps(results, separators=(",", ":"), default=str)
+    dropped = total - shown if shown < total else 0
+    output = _serialize(results, dropped)
     if len(output) <= _RESPONSE_MAX_CHARS:
-        if shown < total:
-            return output[:-1] + f',{{"_truncated":{total - shown}}}]'
         return output
-    # Over limit — trim results until we fit.
-    while results and len(output) > _RESPONSE_MAX_CHARS:
+    while results:
         results.pop()
-        output = json.dumps(results, separators=(",", ":"), default=str)
-    dropped = total - len(results)
-    return output[:-1] + f',{{"_truncated":{dropped}}}]'
+        dropped = total - len(results)
+        output = _serialize(results, dropped)
+        if len(output) <= _RESPONSE_MAX_CHARS:
+            return output
+    return _serialize(results, total)
 
 
 def _get_project_roots() -> list[tuple[str, Path]]:
