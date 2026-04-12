@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
@@ -588,6 +589,58 @@ def _detect_claude_code_and_offer_bridge(
                 f"  · {claude_md} already imports armillary — left untouched.",
                 fg=typer.colors.CYAN,
             )
+
+    # Auto-configure MCP server so Claude Code can query armillary
+    # programmatically (search code, list projects, semantic queries).
+    _install_mcp_config(claude_dir)
+
+
+def _install_mcp_config(claude_dir: Path) -> None:
+    """Write armillary MCP server config to ~/.claude/mcp.json.
+
+    Idempotent: if the "armillary" key already exists, leave it alone.
+    Creates the file if it doesn't exist. Merges into existing config
+    if it does (preserves other MCP servers the user may have).
+    """
+    import json as _json
+
+    mcp_json_path = claude_dir / "mcp.json"
+
+    # Find the armillary binary — same venv that's running right now.
+    armillary_bin = str(Path(sys.executable).parent / "armillary")
+
+    existing: dict[str, object] = {}
+    if mcp_json_path.is_file():
+        try:
+            existing = _json.loads(mcp_json_path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            existing = {}
+
+    if "armillary" in existing:
+        typer.secho(
+            f"  · {mcp_json_path} already has armillary MCP — left untouched.",
+            fg=typer.colors.CYAN,
+        )
+        return
+
+    existing["armillary"] = {
+        "command": armillary_bin,
+        "args": ["mcp-serve"],
+    }
+
+    mcp_json_path.parent.mkdir(parents=True, exist_ok=True)
+    mcp_json_path.write_text(
+        _json.dumps(existing, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    typer.secho(
+        f"  ✓ Configured MCP server in {mcp_json_path}",
+        fg=typer.colors.GREEN,
+    )
+    typer.echo(
+        "    Claude Code can now call armillary_search, "
+        "armillary_semantic, and armillary_projects."
+    )
 
 
 def _ask_for_candidate_selection(
