@@ -2393,21 +2393,62 @@ def test_install_khoj_errors_when_postgres_never_becomes_ready(
 # --- armillary start-khoj -------------------------------------------------
 
 
-def test_start_khoj_execs_khoj_binary_with_env_vars(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Happy path: container is running, khoj binary exists, we exec
-    it with both POSTGRES_* and KHOJ_ADMIN_* env vars. The latter
-    prevents Khoj from dropping into an interactive Email/Password
-    prompt on first run (real bug — user hit this end-to-end)."""
+class _FakePopen:
+    """Fake for subprocess.Popen that `start-khoj` uses.
+
+    Records the command + kwargs, `poll()` returns 0 immediately
+    (process "exited" cleanly), and `wait()` / `terminate()` are
+    no-ops. This simulates a Khoj process that starts and exits
+    normally, which is the happy path for the test — the health
+    check fires before `proc.poll()` returns non-None.
+    """
+
+    def __init__(self, cmd: list[str], **kwargs: Any) -> None:
+        self.cmd = list(cmd)
+        self.kwargs = dict(kwargs)
+        self.returncode = 0
+        self._poll_count = 0
+
+    def poll(self) -> int | None:
+        self._poll_count += 1
+        # First poll: "still running" so health check gets a chance.
+        if self._poll_count <= 1:
+            return None
+        return 0
+
+    def wait(self, timeout: float | None = None) -> int:
+        return self.returncode
+
+    def terminate(self) -> None:
+        pass
+
+    def kill(self) -> None:
+        pass
+
+
+def _setup_start_khoj_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    pre_seed_admin: dict[str, str] | None = None,
+) -> tuple[Path, list[_FakePopen]]:
+    """Shared setup for start-khoj tests.
+
+    Returns (fake_khoj_path, popen_captures) so tests can assert
+    on the captured Popen calls + env vars.
+    """
     _set_which(monkeypatch, docker="/fake/bin/docker")
     _no_sleep(monkeypatch)
 
-    # Redirect ARMILLARY_CONFIG so _khoj_admin_env_path() writes into
-    # tmp_path, not the developer's real ~/.config/armillary.
     monkeypatch.setenv("ARMILLARY_CONFIG", str(tmp_path / "armillary" / "config.yaml"))
 
-    # Fake khoj binary inside a fake venv/bin
+    if pre_seed_admin:
+        admin_dir = tmp_path / "armillary"
+        admin_dir.mkdir(parents=True, exist_ok=True)
+        (admin_dir / "khoj-admin.env").write_text(
+            "\n".join(f"{k}={v}" for k, v in pre_seed_admin.items()) + "\n"
+        )
+
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_khoj = fake_bin / "khoj"
@@ -2417,43 +2458,72 @@ def test_start_khoj_execs_khoj_binary_with_env_vars(
     fake_python.write_text("")
     monkeypatch.setattr(cli.sys, "executable", str(fake_python))
 
-    calls: list[tuple[list[str], dict[str, Any]]] = []
+    # Mock subprocess.run (docker calls) + subprocess.Popen (khoj).
+    popen_captures: list[_FakePopen] = []
 
     def fake_run(cmd: list[str], **kwargs: Any) -> _FakeProc:
-        calls.append((list(cmd), dict(kwargs)))
         if cmd[:2] == ["docker", "ps"]:
             return _FakeProc(returncode=0, stdout="running")
         return _FakeProc(returncode=0)
 
+    def fake_popen(cmd: list[str], **kwargs: Any) -> _FakePopen:
+        fp = _FakePopen(cmd, **kwargs)
+        popen_captures.append(fp)
+        return fp
+
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli.subprocess, "Popen", fake_popen)
+
+    # Mock the health-check urlopen inside _wait_for_khoj_or_die.
+    # It does `from urllib.request import urlopen as _urlopen` locally,
+    # so we patch the module.
+    import urllib.request
+
+    class _FakeHealthResponse:
+        status = 200
+
+        def __enter__(self) -> _FakeHealthResponse:
+            return self
+
+        def __exit__(self, *exc: Any) -> None:
+            pass
+
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda *a, **kw: _FakeHealthResponse(),
+    )
+
+    return fake_khoj, popen_captures
+
+
+def test_start_khoj_execs_khoj_binary_with_env_vars(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Happy path: container is running, khoj binary exists, we exec
+    it with both POSTGRES_* and KHOJ_ADMIN_* env vars. The latter
+    prevents Khoj from dropping into an interactive Email/Password
+    prompt on first run (real bug — user hit this end-to-end)."""
+    fake_khoj, popen_captures = _setup_start_khoj_env(monkeypatch, tmp_path)
 
     result = runner.invoke(app, ["start-khoj"])
     assert result.exit_code == 0, result.stdout
 
-    # Last call is the khoj binary with --anonymous-mode and env vars
-    khoj_calls = [(c, k) for c, k in calls if str(fake_khoj) in c]
-    assert len(khoj_calls) == 1
-    cmd, kw = khoj_calls[0]
-    # `--non-interactive` is mandatory so Khoj's init step skips its
-    # chat-model questionnaire ("Add OpenAI chat models? (y/n): …").
-    # Armillary only needs Khoj for semantic search, not chat.
-    assert cmd == [str(fake_khoj), "--anonymous-mode", "--non-interactive"]
-    env = kw.get("env") or {}
+    assert len(popen_captures) == 1
+    p = popen_captures[0]
+    assert p.cmd == [str(fake_khoj), "--anonymous-mode", "--non-interactive"]
+
+    env = p.kwargs.get("env") or {}
     assert env.get("POSTGRES_HOST") == "localhost"
-    # Non-5432 on purpose — dodges brew postgresql@* port conflicts.
     assert env.get("POSTGRES_PORT") == "54322"
     assert env.get("POSTGRES_DB") == "khoj"
     assert env.get("POSTGRES_USER") == "postgres"
     assert env.get("POSTGRES_PASSWORD") == "postgres"
-    # Admin credentials auto-generated + injected so Khoj never prompts
     assert env.get("KHOJ_ADMIN_EMAIL") == "admin@armillary.local"
-    assert env.get("KHOJ_ADMIN_PASSWORD")  # random string, non-empty
+    assert env.get("KHOJ_ADMIN_PASSWORD")
     assert len(env["KHOJ_ADMIN_PASSWORD"]) >= 16
-    # PLAN.md §14: no telemetry. start-khoj hard-disables Khoj's
-    # upload_telemetry() so nothing leaves the user's machine.
     assert env.get("KHOJ_TELEMETRY_DISABLE") == "true"
 
-    # File persisted on disk with the same password start-khoj used
     admin_env_path = tmp_path / "armillary" / "khoj-admin.env"
     assert admin_env_path.is_file()
     file_contents = admin_env_path.read_text()
@@ -2467,43 +2537,20 @@ def test_start_khoj_reuses_existing_admin_env(
     """Second run must NOT re-roll the password — otherwise the admin
     account persisted in Postgres would drift from the env and Khoj
     would hit "authentication failed" on every subsequent restart."""
-    _set_which(monkeypatch, docker="/fake/bin/docker")
-    _no_sleep(monkeypatch)
-
-    config_dir = tmp_path / "armillary"
-    config_dir.mkdir()
-    monkeypatch.setenv("ARMILLARY_CONFIG", str(config_dir / "config.yaml"))
-    # Pre-seed the env file with a known password
-    (config_dir / "khoj-admin.env").write_text(
-        "KHOJ_ADMIN_EMAIL=existing@localhost\n"
-        "KHOJ_ADMIN_PASSWORD=sticky-password-12345\n"
+    fake_khoj, popen_captures = _setup_start_khoj_env(
+        monkeypatch,
+        tmp_path,
+        pre_seed_admin={
+            "KHOJ_ADMIN_EMAIL": "existing@localhost",
+            "KHOJ_ADMIN_PASSWORD": "sticky-password-12345",
+        },
     )
-
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    fake_khoj = fake_bin / "khoj"
-    fake_khoj.write_text("#!/bin/sh\n")
-    fake_khoj.chmod(0o755)
-    fake_python = fake_bin / "python"
-    fake_python.write_text("")
-    monkeypatch.setattr(cli.sys, "executable", str(fake_python))
-
-    calls: list[tuple[list[str], dict[str, Any]]] = []
-
-    def fake_run(cmd: list[str], **kwargs: Any) -> _FakeProc:
-        calls.append((list(cmd), dict(kwargs)))
-        if cmd[:2] == ["docker", "ps"]:
-            return _FakeProc(returncode=0, stdout="running")
-        return _FakeProc(returncode=0)
-
-    monkeypatch.setattr(cli.subprocess, "run", fake_run)
 
     result = runner.invoke(app, ["start-khoj"])
     assert result.exit_code == 0, result.stdout
 
-    khoj_calls = [(c, k) for c, k in calls if str(fake_khoj) in c]
-    assert len(khoj_calls) == 1
-    env = khoj_calls[0][1].get("env") or {}
+    assert len(popen_captures) == 1
+    env = popen_captures[0].kwargs.get("env") or {}
     assert env.get("KHOJ_ADMIN_EMAIL") == "existing@localhost"
     assert env.get("KHOJ_ADMIN_PASSWORD") == "sticky-password-12345"
 
@@ -2545,19 +2592,10 @@ def test_start_khoj_restarts_stopped_container(
 ) -> None:
     """A stopped container is an acceptable state — start-khoj should
     `docker start` it and continue."""
-    _set_which(monkeypatch, docker="/fake/bin/docker")
-    _no_sleep(monkeypatch)
+    fake_khoj, popen_captures = _setup_start_khoj_env(monkeypatch, tmp_path)
 
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    fake_khoj = fake_bin / "khoj"
-    fake_khoj.write_text("#!/bin/sh\n")
-    fake_khoj.chmod(0o755)
-    fake_python = fake_bin / "python"
-    fake_python.write_text("")
-    monkeypatch.setattr(cli.sys, "executable", str(fake_python))
-
-    state_calls = iter(["exited", "running"])  # 2nd call after start returns running
+    # Override fake_run to simulate stopped→running state transition
+    state_calls = iter(["exited", "running"])
     calls: list[list[str]] = []
 
     def fake_run(cmd: list[str], **kwargs: Any) -> _FakeProc:

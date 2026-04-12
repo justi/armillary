@@ -1213,39 +1213,116 @@ def start_khoj() -> None:
     # call, subsequent calls just load the existing file.
     env.update(_ensure_khoj_admin_env())
 
-    typer.secho(
-        f"Starting Khoj server ({khoj_bin}) — Ctrl-C to stop.",
-        fg=typer.colors.CYAN,
-    )
-    typer.echo(
-        "First start downloads the default sentence-transformers model "
-        "(~500 MB). Subsequent starts reuse the cache."
-    )
-    typer.echo(
-        "Admin credentials for http://localhost:42110/server/admin are "
-        f"in {_khoj_admin_env_path()}."
-    )
-    typer.echo(
-        'Note: "uvicorn.error" in the logs below is a logger NAME, not '
-        "an error. Khoj is running when you see "
-        '"Uvicorn running on http://...".'
-    )
-    typer.echo("")
+    # Redirect Khoj's stdout/stderr to a log file instead of the
+    # terminal. Khoj's startup logs are noisy and confusing —
+    # `uvicorn.error` is a logger NAME but reads like a crash to
+    # anyone who doesn't know uvicorn internals. We poll the health
+    # endpoint instead and show a clean ✓/✗ status.
+    log_path = default_config_path().parent / "khoj-server.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Foreground exec so the user sees logs and Ctrl-C Just Works.
-    # `--non-interactive` flips Khoj's `initialization()` into a mode
-    # that (a) requires KHOJ_ADMIN_EMAIL / KHOJ_ADMIN_PASSWORD env
-    # vars (which we export above), and (b) skips the chat-model
-    # questionnaire entirely ("Add OpenAI chat models? (y/n):", etc).
-    # Armillary uses Khoj for semantic SEARCH, not chat, so "no chat
-    # models" is the correct default. Users who want chat can still
-    # configure it later at /server/admin.
-    result = subprocess.run(
-        [str(khoj_bin), "--anonymous-mode", "--non-interactive"],
-        env=env,
-        check=False,
+    typer.secho("Starting Khoj server…", fg=typer.colors.CYAN)
+    typer.echo(
+        "  First start downloads sentence-transformers models (~200 MB).\n"
+        "  Subsequent starts reuse the cache and take a few seconds."
     )
-    raise typer.Exit(result.returncode)
+    typer.echo(f"  Logs:   {log_path}")
+    typer.echo(f"  Admin:  {_khoj_admin_env_path()}")
+
+    with open(log_path, "w", encoding="utf-8") as log_fh:
+        # `--non-interactive` flips Khoj's `initialization()` into a
+        # mode that (a) requires KHOJ_ADMIN_EMAIL / KHOJ_ADMIN_PASSWORD
+        # env vars (which we export above), and (b) skips the chat-
+        # model questionnaire entirely. Armillary uses Khoj for
+        # semantic SEARCH, not chat, so "no chat models" is correct.
+        proc = subprocess.Popen(
+            [str(khoj_bin), "--anonymous-mode", "--non-interactive"],
+            env=env,
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
+        )
+        _wait_for_khoj_or_die(proc, log_path)
+
+        typer.secho(
+            "✓ Khoj running at http://localhost:42110 — Ctrl-C to stop.",
+            fg=typer.colors.GREEN,
+            bold=True,
+        )
+        try:
+            proc.wait()
+        except KeyboardInterrupt:
+            typer.echo("")
+            typer.secho("Stopping Khoj…", fg=typer.colors.CYAN)
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            typer.secho("✓ Khoj stopped.", fg=typer.colors.GREEN)
+        raise typer.Exit(proc.returncode or 0)
+
+
+def _wait_for_khoj_or_die(
+    proc: subprocess.Popen[bytes],
+    log_path: Path,
+    *,
+    timeout_s: int = 120,
+) -> None:
+    """Poll Khoj's /api/health until it responds 200 or the process dies.
+
+    First start can take 30–60 s (model downloads + Django migrations),
+    so 120 s is generous. On timeout we do NOT kill the server — it may
+    still be downloading — but we warn the user and point them at the
+    log file for diagnosis.
+    """
+    from urllib.request import urlopen as _urlopen
+
+    health_url = "http://127.0.0.1:42110/api/health"
+    deadline = time.monotonic() + timeout_s
+
+    while time.monotonic() < deadline:
+        # Check if the process crashed before becoming ready.
+        if proc.poll() is not None:
+            typer.secho(
+                "\n✗ Khoj exited before becoming ready.",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            _show_log_tail(log_path)
+            raise typer.Exit(proc.returncode or 2)
+
+        try:
+            with _urlopen(health_url, timeout=1) as resp:
+                if resp.status == 200:
+                    return
+        except Exception:  # noqa: BLE001 — any failure = not ready yet
+            pass
+        time.sleep(1)
+
+    # Timeout — server still running but health not answering.
+    typer.secho(
+        f"\n⚠ Khoj did not respond to health check within {timeout_s}s.",
+        fg=typer.colors.YELLOW,
+    )
+    typer.echo(
+        "  The server is still running (may be downloading models).\n"
+        "  Wait for it or check the log:"
+    )
+    _show_log_tail(log_path)
+
+
+def _show_log_tail(log_path: Path, lines: int = 8) -> None:
+    """Print the last N lines of a log file to help the user debug."""
+    try:
+        all_lines = log_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    tail = all_lines[-lines:] if len(all_lines) > lines else all_lines
+    if tail:
+        typer.echo(f"  Last {len(tail)} lines of {log_path}:")
+        for line in tail:
+            typer.echo(f"    {line}")
 
 
 def _pick_khoj_installer() -> tuple[list[str], str]:
