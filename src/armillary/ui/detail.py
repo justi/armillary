@@ -111,7 +111,7 @@ def _render_project_detail(project_path: str) -> None:
     _render_detail_metric_tiles(project)
     _render_detail_captions(project)
 
-    # PLAN.md S5: "Open in…" dropdown wired to launcher catalogue.
+    # "Open in..." dropdown wired to the launcher catalogue.
     cfg = _safe_load_config()
     if cfg is not None:
         st.subheader("Open in\u2026", anchor=False)
@@ -198,7 +198,7 @@ def _render_detail_captions(project: Project) -> None:
 
 
 def _render_launcher_dropdown(project: Project, cfg: Config) -> None:
-    """PLAN.md S5: '"Open in…" dropdown per project — driven by yaml config'.
+    """'Open in...' dropdown per project, driven by yaml config.
 
     Each non-terminal entry from `cfg.launchers` is shown with its
     label/icon. Click -> calls `launcher.launch()` and surfaces

@@ -28,7 +28,7 @@ class ProjectType(StrEnum):
 class Status(StrEnum):
     """Where a project stands right now, derived from metadata + filesystem.
 
-    The labels come from PLAN.md §5 status heuristics. They are computed
+    The labels come from the project status heuristics. They are computed
     by `armillary.status.compute_status()` from `ProjectMetadata` plus
     the project's last filesystem modification time.
     """

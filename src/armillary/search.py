@@ -13,8 +13,8 @@ every call site:
   (connection refused, timeout, non-2xx response), the search falls
   back to `LiteralSearch` so the dashboard never shows a broken state.
 
-Per PLAN.md §11: "Khoj reliability — if Khoj is unreachable, fall
-back to literal search (`ripgrep`)." That fallback is implemented
+Khoj reliability: if Khoj is unreachable, fall back to literal search
+(`ripgrep`). That fallback is implemented
 inside `KhojSearch.search()` itself, so callers do not need to know
 which backend they got.
 

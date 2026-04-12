@@ -1,6 +1,6 @@
 """Status heuristics — turn metadata + filesystem signals into a label.
 
-The labels match PLAN.md §5 ("where does this project stand?"):
+The labels answer "where does this project stand?":
 
 - ACTIVE       — recent commit OR recent file edit (default ≤ 7 days)
 - PAUSED       — dirty working tree, last commit between 7 and 30 days

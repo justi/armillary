@@ -344,8 +344,8 @@ _README_FILENAMES_LOWER = frozenset(name.lower() for name in _README_CANDIDATES)
 def _find_note_files(project_path: Path) -> list[Path]:
     """List `.md` files in `./`, `notes/`, and `docs/`.
 
-    PLAN.md §5 M2 spec: "Notes detection: list `.md` files in root +
-    `notes/` + `docs/`". Returns sorted, deduplicated paths so the
+    Notes detection: list `.md` files in root + `notes/` + `docs/`.
+    Returns sorted, deduplicated paths so the
     dashboard can render them in a stable order.
 
     The **project-root** README is excluded because it already has its

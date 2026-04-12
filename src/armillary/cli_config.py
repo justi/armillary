@@ -108,7 +108,7 @@ def config(
     Each numbered step has a `--skip-*` flag for scripted setups.
     `--blank` writes the YAML and exits without running the ceremony.
 
-    PLAN.md §5 "Bootstrap": this is the two-phase first-run experience.
+    This is the two-phase first-run experience (discover umbrellas, then save config).
     """
     config_path = default_config_path()
 

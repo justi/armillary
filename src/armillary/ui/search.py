@@ -43,8 +43,8 @@ class SearchError:
 def _render_search_section(rows: list[OverviewRow], cfg: Config | None) -> None:
     """Top-level search across all cached projects.
 
-    PLAN.md S5: 'Global search bar at the top — first iteration:
-    ripgrep literal search; second iteration: Khoj semantic search'.
+    Global search bar at the top: literal search (ripgrep) with
+    optional Khoj semantic search when configured.
     Form-based so the search only fires on submit, not on every
     keystroke. Results live in `st.session_state` so they survive
     subsequent reruns triggered by per-result navigation buttons

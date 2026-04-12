@@ -314,7 +314,7 @@ def start_khoj() -> None:
             "POSTGRES_DB": khoj_service.KHOJ_DB_NAME,
             "POSTGRES_USER": khoj_service.KHOJ_DB_USER,
             "POSTGRES_PASSWORD": khoj_service.KHOJ_DB_PASSWORD,
-            # PLAN.md §14: armillary promises "no telemetry, no
+            # armillary promises "no telemetry, no
             # analytics, no external calls". Khoj defaults to sending
             # usage stats to khoj.dev — `KHOJ_TELEMETRY_DISABLE=true`
             # short-circuits `upload_telemetry()` via
