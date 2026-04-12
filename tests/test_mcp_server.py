@@ -12,7 +12,14 @@ from datetime import datetime
 from pathlib import Path
 
 from armillary.cache import Cache
-from armillary.mcp_server import _hit_to_dict, _project_context, armillary_projects
+from armillary.mcp_server import (
+    _PREVIEW_MAX_LEN,
+    _RESPONSE_MAX_CHARS,
+    _hit_to_dict,
+    _project_context,
+    _safe_json,
+    armillary_projects,
+)
 from armillary.models import Project, ProjectMetadata, ProjectType, Status
 from armillary.search import SearchHit
 
@@ -173,3 +180,67 @@ def test_armillary_projects_empty_cache(tmp_path: Path, monkeypatch: object) -> 
 
     result = json.loads(armillary_projects())
     assert result == []
+
+
+# --- _hit_to_dict truncation -----------------------------------------------
+
+
+def test_hit_to_dict_truncates_long_preview() -> None:
+    long_preview = "x" * 300
+    meta = {"path": "/tmp/foo", "status": "ACTIVE", "description": None}
+    hit = SearchHit(
+        path=Path("/tmp/foo/bar.py"),
+        line=1,
+        preview=long_preview,
+        backend="ripgrep",
+    )
+    result = _hit_to_dict(hit, meta)
+    assert len(result["preview"]) == _PREVIEW_MAX_LEN + 1  # +1 for "…"
+    assert result["preview"].endswith("…")
+
+
+def test_hit_to_dict_keeps_short_preview() -> None:
+    meta = {"path": "/tmp/foo", "status": "ACTIVE", "description": None}
+    hit = SearchHit(
+        path=Path("/tmp/foo/bar.py"),
+        line=1,
+        preview="short",
+        backend="ripgrep",
+    )
+    result = _hit_to_dict(hit, meta)
+    assert result["preview"] == "short"
+
+
+# --- _safe_json truncation --------------------------------------------------
+
+
+def test_safe_json_returns_compact_json() -> None:
+    results = [{"a": 1}, {"a": 2}]
+    output = _safe_json(results, 2, 2)
+    assert " " not in output  # no indent
+    parsed = json.loads(output)
+    assert len(parsed) == 2
+
+
+def test_safe_json_adds_truncated_marker_when_shown_less_than_total() -> None:
+    results = [{"a": 1}]
+    output = _safe_json(results, 5, 1)
+    parsed = json.loads(output)
+    assert len(parsed) == 2
+    assert parsed[-1]["_truncated"] == 4
+
+
+def test_safe_json_trims_results_when_over_char_limit() -> None:
+    big_results = [{"data": "x" * 500, "i": i} for i in range(200)]
+    output = _safe_json(big_results, 200, 200)
+    assert len(output) <= _RESPONSE_MAX_CHARS + 100  # small margin for truncated marker
+    parsed = json.loads(output)
+    assert parsed[-1]["_truncated"] > 0
+
+
+def test_safe_json_no_marker_when_all_shown() -> None:
+    results = [{"a": 1}]
+    output = _safe_json(results, 1, 1)
+    parsed = json.loads(output)
+    assert len(parsed) == 1
+    assert "_truncated" not in parsed[0]
