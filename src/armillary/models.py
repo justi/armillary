@@ -85,6 +85,8 @@ class ProjectMetadata(BaseModel):
     dirty_count: int | None = None
     ahead: int | None = None
     behind: int | None = None
+    commit_count: int | None = None
+    work_hours: float | None = None
 
     # Universal fields.
     size_bytes: int | None = None

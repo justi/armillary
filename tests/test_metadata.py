@@ -378,6 +378,59 @@ def test_extract_handles_detached_head(tmp_path: Path) -> None:
     assert md.last_commit_sha == sha
 
 
+def test_extract_commit_count_and_work_hours(tmp_path: Path) -> None:
+    """commit_count = total commits across all branches. work_hours sums
+    inter-commit gaps shorter than 8 h."""
+    import time as _time
+
+    repo = tmp_path / "multi"
+    env = {
+        "GIT_AUTHOR_NAME": "Test Author",
+        "GIT_AUTHOR_EMAIL": "test@example.com",
+        "GIT_COMMITTER_NAME": "Test Author",
+        "GIT_COMMITTER_EMAIL": "test@example.com",
+        "PATH": __import__("os").environ.get("PATH", ""),
+    }
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True, env=env)
+    (repo / "a.txt").write_text("a")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, env=env)
+
+    # 3 commits with GIT_COMMITTER_DATE controlling timestamps:
+    #   t0          → commit 1
+    #   t0 + 1h     → commit 2  (gap=1h, counts as work)
+    #   t0 + 10h    → commit 3  (gap=9h, exceeds 8h → break)
+    # Expected: 3 commits, work_hours ≈ 1.0
+    t0 = int(_time.time()) - 20 * 3600
+    for i, offset_s in enumerate([0, 3600, 36000]):
+        ts = t0 + offset_s
+        date_str = f"{ts} +0000"
+        (repo / "a.txt").write_text(f"v{i}")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True, env=env)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", f"c{i}"],
+            cwd=repo,
+            check=True,
+            env={**env, "GIT_COMMITTER_DATE": date_str, "GIT_AUTHOR_DATE": date_str},
+        )
+
+    md = metadata.extract(_git_project(repo))
+
+    assert md.commit_count == 3
+    assert md.work_hours == 1.0  # only the 1h gap counts
+
+
+def test_extract_commit_count_single_commit(tmp_path: Path) -> None:
+    """Repo with exactly 1 commit → commit_count=1, work_hours=0.0
+    (no gaps to sum)."""
+    repo = _mk_real_git_repo(tmp_path / "single")
+
+    md = metadata.extract(_git_project(repo))
+
+    assert md.commit_count == 1
+    assert md.work_hours == 0.0
+
+
 def test_extract_idea_project_skips_git_fields(tmp_path: Path) -> None:
     folder = tmp_path / "thoughts"
     folder.mkdir()

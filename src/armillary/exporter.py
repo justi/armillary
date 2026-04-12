@@ -29,6 +29,8 @@ _COLUMNS: tuple[tuple[str, str], ...] = (
     ("Status", "status"),
     ("Branch", "branch"),
     ("Dirty", "dirty"),
+    ("Commits", "commit_count"),
+    ("Work hours", "work_hours"),
     ("Last commit", "last_commit"),
     ("Last modified", "last_modified"),
     ("Path", "path"),
@@ -209,6 +211,10 @@ def _render_cell(project: Project, key: str) -> str:
             value = str(md.dirty_count)
         else:
             value = None
+    elif key == "commit_count":
+        value = str(md.commit_count) if md and md.commit_count is not None else None
+    elif key == "work_hours":
+        value = f"{md.work_hours:.1f}" if md and md.work_hours is not None else None
     elif key == "last_commit":
         value = (
             md.last_commit_ts.strftime("%Y-%m-%d") if md and md.last_commit_ts else None

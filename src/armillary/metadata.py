@@ -190,6 +190,47 @@ def _fill_git_fields(repo_path: Path, md: ProjectMetadata) -> None:
                 md.ahead = sum(1 for _ in repo.iter_commits(f"{tracking}..HEAD"))
                 md.behind = sum(1 for _ in repo.iter_commits(f"HEAD..{tracking}"))
 
+    # Commit count + estimated work hours from commit timestamps.
+    with contextlib.suppress(Exception):
+        md.commit_count, md.work_hours = _compute_commit_stats(repo)
+
+
+# --- commit stats ---------------------------------------------------------
+
+# Maximum gap between two consecutive commits that still counts as
+# "working time". Gaps longer than this are assumed to be breaks
+# (sleep, lunch, next day) and excluded from the sum.
+_WORK_SESSION_GAP_SECONDS = 8 * 3600  # 8 hours
+
+
+def _compute_commit_stats(repo: git.Repo) -> tuple[int, float]:
+    """Return (commit_count, estimated_work_hours) from the full log.
+
+    Uses `git log --format=%at` via GitPython's `repo.git.log()`
+    which shells out to git — fast even on large repos because we
+    only ask for the committer timestamp, no diff computation.
+
+    Work-hours algorithm: sort all commit timestamps ascending, sum
+    the inter-commit gaps that are shorter than `_WORK_SESSION_GAP_SECONDS`.
+    Gaps longer than 8 h are assumed to be sleep / next day / break.
+    Result is rounded to one decimal place.
+    """
+    raw = repo.git.log("--format=%at", "--all")
+    if not raw.strip():
+        return 0, 0.0
+
+    timestamps = sorted(int(ts) for ts in raw.strip().splitlines())
+    commit_count = len(timestamps)
+
+    total_work_seconds = 0
+    for i in range(1, len(timestamps)):
+        gap = timestamps[i] - timestamps[i - 1]
+        if 0 < gap < _WORK_SESSION_GAP_SECONDS:
+            total_work_seconds += gap
+
+    work_hours = round(total_work_seconds / 3600, 1)
+    return commit_count, work_hours
+
 
 # --- README ---------------------------------------------------------------
 
