@@ -199,8 +199,11 @@ def _fill_git_fields(repo_path: Path, md: ProjectMetadata) -> None:
 
 # Maximum gap between two consecutive commits that still counts as
 # "working time". Gaps longer than this are assumed to be breaks
-# (sleep, lunch, next day) and excluded from the sum.
-_WORK_SESSION_GAP_SECONDS = 8 * 3600  # 8 hours
+# (lunch, errands, next day) and excluded from the sum. 4 hours is
+# conservative — a 5-hour gap between commits almost certainly means
+# the developer took a real break, not that they sat coding the
+# whole time without committing.
+_WORK_SESSION_GAP_SECONDS = 4 * 3600  # 4 hours
 
 
 def _compute_commit_stats(repo: git.Repo) -> tuple[int, float]:
