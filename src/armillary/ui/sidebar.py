@@ -48,7 +48,7 @@ def _render_sidebar(
                 selection_mode="multi",
                 default=None,
             )
-            umbrella_pick = st.multiselect("Umbrella", umbrellas)
+            umbrella_pick = st.multiselect("Folder", umbrellas)
             name_substring = st.text_input(
                 "Name contains",
                 placeholder="quick filter\u2026",

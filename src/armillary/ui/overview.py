@@ -223,6 +223,7 @@ def _render_table(rows: list[OverviewRow]) -> None:
                 format="DD MMM YYYY",
             ),
             "Type": None,  # hide — almost all are "git"
+            "Umbrella": None,  # hide — sidebar filter is enough
         },
     )
 
