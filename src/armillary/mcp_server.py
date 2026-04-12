@@ -90,6 +90,11 @@ def _safe_json(results: list[dict[str, object]], total: int, shown: int) -> str:
     return _serialize(results, total)
 
 
+def _clamp_max_results(max_results: int) -> int:
+    """Keep public MCP tool limits within the supported inclusive range."""
+    return max(1, min(max_results, _MAX_RESULTS_CAP))
+
+
 def _get_project_roots() -> list[tuple[str, Path]]:
     """Return (name, path) for all cached projects."""
     with Cache() as cache:
@@ -114,7 +119,7 @@ def armillary_search(query: str, max_results: int = 20) -> str:
     - "OPENAI_API_KEY" → finds where API keys are configured
     - "def parse_price" → finds price parsing functions
     """
-    max_results = min(max_results, _MAX_RESULTS_CAP)
+    max_results = _clamp_max_results(max_results)
     backend = LiteralSearch()
     results: list[dict[str, object]] = []
     project_roots = _get_project_roots()
@@ -157,7 +162,7 @@ def armillary_semantic(query: str, max_results: int = 10) -> str:
     - "web scraping approaches" → finds BeautifulSoup, Nokogiri, Selenium
     - "how to handle file uploads" → finds ActiveStorage, CarrierWave, Shrine
     """
-    max_results = min(max_results, _MAX_RESULTS_CAP)
+    max_results = _clamp_max_results(max_results)
     try:
         cfg = load_config()
     except ConfigError:

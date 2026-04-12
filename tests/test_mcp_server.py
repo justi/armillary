@@ -16,10 +16,13 @@ from armillary.cache import Cache
 from armillary.mcp_server import (
     _PREVIEW_MAX_LEN,
     _RESPONSE_MAX_CHARS,
+    _clamp_max_results,
     _hit_to_dict,
     _project_context,
     _safe_json,
     armillary_projects,
+    armillary_search,
+    armillary_semantic,
 )
 from armillary.models import Project, ProjectMetadata, ProjectType, Status
 from armillary.search import SearchHit
@@ -216,3 +219,59 @@ def test_safe_json_no_marker_when_all_shown() -> None:
     parsed = json.loads(output)
     assert len(parsed) == 1
     assert "_truncated" not in parsed[0]
+
+
+def test_clamp_max_results_enforces_public_bounds() -> None:
+    assert _clamp_max_results(-5) == 1
+    assert _clamp_max_results(0) == 1
+    assert _clamp_max_results(1) == 1
+    assert _clamp_max_results(999) == 200
+
+
+def test_armillary_search_clamps_zero_max_results_before_backend_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[int] = []
+
+    class FakeLiteralSearch:
+        def search(
+            self, query: str, *, root: Path, max_results: int = 50
+        ) -> list[SearchHit]:
+            calls.append(max_results)
+            return []
+
+    monkeypatch.setattr("armillary.mcp_server.LiteralSearch", FakeLiteralSearch)
+    monkeypatch.setattr(
+        "armillary.mcp_server._get_project_roots",
+        lambda: [("alpha", Path("/tmp/alpha"))],
+    )
+
+    result = armillary_search("needle", max_results=0)
+
+    assert calls == [1]
+    assert result == "No matches for 'needle' across 1 projects."
+
+
+def test_armillary_semantic_clamps_negative_max_results_before_backend_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[int] = []
+
+    class FakeLiteralSearch:
+        def search(
+            self, query: str, *, root: Path, max_results: int = 50
+        ) -> list[SearchHit]:
+            calls.append(max_results)
+            return []
+
+    monkeypatch.setattr("armillary.mcp_server.load_config", lambda: None)
+    monkeypatch.setattr("armillary.mcp_server.LiteralSearch", FakeLiteralSearch)
+    monkeypatch.setattr(
+        "armillary.mcp_server._get_project_roots",
+        lambda: [("alpha", Path("/tmp/alpha"))],
+    )
+
+    result = armillary_semantic("concept", max_results=-3)
+
+    assert calls == [1]
+    assert result == "No semantic matches for 'concept' across 1 projects."
