@@ -287,11 +287,14 @@ def next_command(
         )
         return
 
+    from armillary.cli_helpers import _shorten_home
+
     console = Console()
     for s in suggestions:
         icon = _CATEGORY_ICONS.get(s.category, "•")
+        short_path = _shorten_home(s.project.path)
         console.print(
-            f"\n{icon} [bold]{s.project.name}[/bold]  [dim]{s.project.path}[/dim]"
+            f"\n{icon} [bold]{s.project.name}[/bold]  [dim]{short_path}[/dim]"
         )
         console.print(f"  {s.reason}")
 
