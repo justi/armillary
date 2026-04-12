@@ -273,6 +273,14 @@ def next_command(
         if not matches:
             typer.secho(f"No project matches '{skip}'.", fg=typer.colors.RED, err=True)
             raise typer.Exit(2)
+        if len(matches) > 1:
+            names = ", ".join(p.name for p in matches[:5])
+            typer.secho(
+                f"'{skip}' is ambiguous: {names}. Be more specific.",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(2)
         skip_project(str(matches[0].path))
         typer.secho(f"Skipped {matches[0].name} for 30 days.", fg=typer.colors.CYAN)
         return

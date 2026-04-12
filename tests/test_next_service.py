@@ -44,11 +44,6 @@ def _project(
 def _use_tmp_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     db_path = tmp_path / "cache.db"
     monkeypatch.setenv("ARMILLARY_CACHE_DB", str(db_path))
-    # Point skips file to tmp too
-    monkeypatch.setattr(
-        "armillary.next_service._skips_path",
-        lambda: tmp_path / "next-skips.json",
-    )
     return db_path
 
 
@@ -152,8 +147,8 @@ def test_skip_excludes_project(
     results = get_suggestions(db_path=db_path, now=_NOW)
     assert any(s.project.name == "skip-me" for s in results)
 
-    # Skip it
-    skip_project("/tmp/skip-me")
+    # Skip it (use same _NOW for deterministic test)
+    skip_project("/tmp/skip-me", now=_NOW, db_path=db_path)
 
     # After skip
     results = get_suggestions(db_path=db_path, now=_NOW)

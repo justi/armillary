@@ -11,7 +11,6 @@ Skip mechanism: projects can be dismissed for 30 days.
 from __future__ import annotations
 
 import json
-import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -46,7 +45,7 @@ def get_suggestions(
     with Cache(db_path=db_path) as cache:
         projects = cache.list_projects()
 
-    skips = _load_skips()
+    skips = _load_skips(db_path)
     active_skips = {
         path
         for path, ts in skips.items()
@@ -89,11 +88,17 @@ def get_suggestions(
     return result
 
 
-def skip_project(project_path: str) -> None:
+def skip_project(
+    project_path: str,
+    *,
+    now: datetime | None = None,
+    db_path: Path | None = None,
+) -> None:
     """Mark a project as skipped for 30 days."""
-    skips = _load_skips()
-    skips[project_path] = time.time()
-    _save_skips(skips)
+    now = now or datetime.now()
+    skips = _load_skips(db_path)
+    skips[project_path] = now.timestamp()
+    _save_skips(skips, db_path)
 
 
 def _evaluate(project: Project, now: datetime) -> Suggestion | None:
@@ -162,24 +167,29 @@ def _evaluate(project: Project, now: datetime) -> Suggestion | None:
 _SKIPS_FILENAME = "next-skips.json"
 
 
-def _skips_path() -> Path:
+def _skips_path(db_path: Path | None = None) -> Path:
     """Path to the skips file — next to the cache DB."""
+    if db_path is not None:
+        return db_path.parent / _SKIPS_FILENAME
     return default_db_path().parent / _SKIPS_FILENAME
 
 
-def _load_skips() -> dict[str, float]:
+def _load_skips(db_path: Path | None = None) -> dict[str, float]:
     """Load {project_path: timestamp} from disk."""
-    path = _skips_path()
+    path = _skips_path(db_path)
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(parsed, dict):
+            return {}
+        return {k: v for k, v in parsed.items() if isinstance(v, (int, float))}
     except (ValueError, OSError):
         return {}
 
 
-def _save_skips(skips: dict[str, float]) -> None:
+def _save_skips(skips: dict[str, float], db_path: Path | None = None) -> None:
     """Persist skips to disk."""
-    path = _skips_path()
+    path = _skips_path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(skips, indent=2), encoding="utf-8")
