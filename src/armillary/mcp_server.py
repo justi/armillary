@@ -23,7 +23,7 @@ from armillary.config import ConfigError, load_config
 from armillary.search import KhojConfig, KhojSearch, LiteralSearch, SearchHit
 
 # Hard limits to prevent MCP responses from exceeding token limits.
-_MAX_RESULTS_CAP = 30
+_MAX_RESULTS_CAP = 200
 _PREVIEW_MAX_LEN = 120
 _RESPONSE_MAX_CHARS = 40_000
 
