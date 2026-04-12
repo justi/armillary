@@ -11,7 +11,7 @@ from urllib.request import urlopen
 
 import typer
 
-from armillary import bootstrap, exporter, scan_service
+from armillary import bootstrap, exporter, launcher, scan_service
 from armillary.cli import app
 from armillary.cli_helpers import (
     _safe_load_config,
@@ -423,19 +423,23 @@ def _run_initial_scan_and_summary(
 
 
 def _show_launcher_availability() -> None:
-    """Cross-check `cfg.launchers` against `shutil.which()` and print
-    a 2-line summary of which commands are reachable on PATH."""
+    """Check launcher availability and print a short summary.
+
+    Availability includes both CLI shims on PATH and supported macOS
+    app-bundle fallbacks for GUI editors.
+    """
     cfg = _safe_load_config()
     if cfg is None or not cfg.launchers:
         return
-
-    import shutil as _shutil
 
     available: list[str] = []
     missing: list[str] = []
     for target_id, launcher_cfg in cfg.launchers.items():
         label = f"{launcher_cfg.command} ({target_id})"
-        if _shutil.which(launcher_cfg.command) is not None:
+        availability = launcher.detect_launcher(launcher_cfg)
+        if availability.available:
+            if availability.mode == "macos-app":
+                label = f"{label} via macOS app"
             available.append(label)
         else:
             missing.append(label)

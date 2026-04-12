@@ -3,7 +3,9 @@
 The launcher is a thin wrapper around `subprocess.Popen` that:
 
 1. Looks up a `LauncherConfig` by id (e.g. `"cursor"`, `"vscode"`).
-2. Verifies the executable exists on PATH via `shutil.which()`.
+2. Resolves how that launcher can be started:
+   - preferred: executable on PATH via `shutil.which()`
+   - macOS fallback: known GUI app bundle like `/Applications/Cursor.app`
 3. Substitutes `{path}` in the args with the project's resolved path.
 4. Spawns the process with `cwd=project.path` so the launched tool
    opens in the right working directory.
@@ -21,6 +23,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -42,6 +45,23 @@ class LaunchResult:
     project_path: Path
     command: list[str] | None = None
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class LauncherAvailability:
+    """How a launcher can currently be started on this machine."""
+
+    available: bool
+    mode: str  # "path" | "macos-app" | "missing"
+    detail: str | None = None
+    app_name: str | None = None
+
+
+_MACOS_APP_FALLBACKS = {
+    "cursor": "Cursor",
+    "code": "Visual Studio Code",
+    "zed": "Zed",
+}
 
 
 def launch(
@@ -66,18 +86,25 @@ def launch(
             error=f"Launcher '{target}' is not configured.",
         )
 
-    if shutil.which(config.command) is None:
+    availability = detect_launcher(config)
+    if not availability.available:
         return LaunchResult(
             ok=False,
             target=target,
             project_path=project.path,
             error=(
-                f"Launcher '{config.label}' needs the `{config.command}` "
-                "executable on your PATH, but it was not found."
+                f"Launcher '{config.label}' needs either the "
+                f"`{config.command}` executable on your PATH"
+                + (
+                    f" or the macOS app '{availability.app_name}'."
+                    if availability.app_name
+                    else "."
+                )
+                + " It was not found."
             ),
         )
 
-    cmd = _build_command(config, project.path)
+    cmd = _resolve_command(config, project.path, availability)
 
     try:
         if config.terminal:
@@ -121,7 +148,74 @@ def launch(
     )
 
 
+def detect_launcher(config: LauncherConfig) -> LauncherAvailability:
+    """Return whether `config` can be launched on this machine.
+
+    GUI launchers on macOS get a fallback path: if their CLI shim is not
+    installed on PATH but the corresponding `.app` bundle is present,
+    armillary can still launch them via `open -a`.
+    """
+    resolved = shutil.which(config.command)
+    if resolved is not None:
+        return LauncherAvailability(
+            available=True,
+            mode="path",
+            detail=resolved,
+        )
+
+    app_name = _macos_app_fallback_name(config)
+    if app_name is not None:
+        app_bundle = _find_macos_app_bundle(app_name)
+        if app_bundle is not None:
+            return LauncherAvailability(
+                available=True,
+                mode="macos-app",
+                detail=str(app_bundle),
+                app_name=app_name,
+            )
+        return LauncherAvailability(
+            available=False,
+            mode="missing",
+            app_name=app_name,
+        )
+
+    return LauncherAvailability(
+        available=False,
+        mode="missing",
+    )
+
+
 def _build_command(config: LauncherConfig, project_path: Path) -> list[str]:
     """Substitute `{path}` in each arg with the project's resolved path."""
     path_str = str(project_path)
     return [config.command, *[arg.replace("{path}", path_str) for arg in config.args]]
+
+
+def _resolve_command(
+    config: LauncherConfig,
+    project_path: Path,
+    availability: LauncherAvailability,
+) -> list[str]:
+    """Build the actual command list for the chosen launcher runtime."""
+    if availability.mode == "macos-app":
+        assert availability.app_name is not None
+        return ["open", "-a", availability.app_name, str(project_path)]
+    return _build_command(config, project_path)
+
+
+def _macos_app_fallback_name(config: LauncherConfig) -> str | None:
+    """Known macOS GUI-app fallback for built-in launcher shapes only."""
+    if sys.platform != "darwin" or config.terminal:
+        return None
+    if config.args != ["{path}"]:
+        return None
+    return _MACOS_APP_FALLBACKS.get(config.command)
+
+
+def _find_macos_app_bundle(app_name: str) -> Path | None:
+    """Return the `.app` bundle path if installed in a standard location."""
+    for base in (Path("/Applications"), Path.home() / "Applications"):
+        candidate = base / f"{app_name}.app"
+        if candidate.exists():
+            return candidate
+    return None

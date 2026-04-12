@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,7 +9,7 @@ from pathlib import Path
 import streamlit as st
 
 from armillary import launcher as launcher_mod
-from armillary.config import Config, LauncherConfig, default_config_path
+from armillary.config import Config, LauncherConfig
 from armillary.models import Project
 from armillary.ui.actions import go_to_overview
 from armillary.ui.helpers import (
@@ -27,19 +26,21 @@ class LauncherOption:
 
     target_id: str
     label: str
-    on_path: bool
+    availability_mode: str
+    detail: str | None = None
 
 
 def build_launcher_options(
     launchers: dict[str, LauncherConfig],
-) -> tuple[list[LauncherOption], list[str], list[str]]:
-    """Filter terminal launchers, check PATH, build display options.
+) -> tuple[list[LauncherOption], list[str], list[str], list[str]]:
+    """Filter terminal launchers, detect availability, build display options.
 
-    Returns ``(available, missing_labels, terminal_only_labels)``.
+    Returns ``(available, missing_labels, terminal_only_labels, app_labels)``.
     """
     available: list[LauncherOption] = []
     missing_labels: list[str] = []
     terminal_only_labels: list[str] = []
+    app_labels: list[str] = []
     for target_id, launcher_cfg in launchers.items():
         label = (
             f"{launcher_cfg.icon + ' ' if launcher_cfg.icon else ''}"
@@ -48,12 +49,21 @@ def build_launcher_options(
         if launcher_cfg.terminal:
             terminal_only_labels.append(launcher_cfg.label)
             continue
-        on_path = shutil.which(launcher_cfg.command) is not None
-        if on_path:
-            available.append(LauncherOption(target_id, label, on_path=True))
+        availability = launcher_mod.detect_launcher(launcher_cfg)
+        if availability.available:
+            available.append(
+                LauncherOption(
+                    target_id=target_id,
+                    label=label,
+                    availability_mode=availability.mode,
+                    detail=availability.detail,
+                )
+            )
+            if availability.mode == "macos-app":
+                app_labels.append(label)
         else:
             missing_labels.append(label)
-    return available, missing_labels, terminal_only_labels
+    return available, missing_labels, terminal_only_labels, app_labels
 
 
 def _render_project_detail(project_path: str) -> None:
@@ -182,8 +192,8 @@ def _render_launcher_dropdown(project: Project, cfg: Config) -> None:
         st.caption("No launchers configured.")
         return
 
-    available, missing_labels, terminal_only_labels = build_launcher_options(
-        cfg.launchers,
+    available, missing_labels, terminal_only_labels, app_labels = (
+        build_launcher_options(cfg.launchers)
     )
 
     # P2.8: Surface terminal-only info ABOVE the dropdown so it is not
@@ -197,8 +207,8 @@ def _render_launcher_dropdown(project: Project, cfg: Config) -> None:
 
     if not available:
         st.warning(
-            "No GUI launcher executables found on PATH. Edit "
-            f"`{_shorten_home(default_config_path())}` to add one."
+            "No GUI launchers were detected. armillary checks both CLI tools on PATH "
+            "and known macOS app bundles."
         )
         if missing_labels:
             st.caption(f"Configured but missing: {', '.join(missing_labels)}")
@@ -228,8 +238,13 @@ def _render_launcher_dropdown(project: Project, cfg: Config) -> None:
         else:
             st.error(result.error or "Launch failed.")
 
+    if app_labels:
+        st.caption(
+            "Detected via macOS app bundle: "
+            f"{', '.join(app_labels)}"
+        )
     if missing_labels:
-        st.caption(f"Not on PATH (skipped): {', '.join(missing_labels)}")
+        st.caption(f"Still not detected: {', '.join(missing_labels)}")
 
 
 def _render_recent_commits(repo_path: Path, limit: int = 5) -> None:

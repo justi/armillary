@@ -134,6 +134,7 @@ def test_launch_missing_executable_returns_error(
     project = _project(tmp_path / "x")
 
     monkeypatch.setattr(launcher.shutil, "which", lambda name: None)
+    monkeypatch.setattr(launcher, "_find_macos_app_bundle", lambda name: None)
 
     def must_not_run(*args: Any, **kwargs: Any) -> None:
         raise AssertionError("Popen called despite missing executable")
@@ -145,6 +146,56 @@ def test_launch_missing_executable_returns_error(
     assert result.error is not None
     assert "cursor" in result.error.lower()
     assert "not found" in result.error.lower()
+
+
+def test_launch_uses_macos_app_fallback_when_cli_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    launchers: dict[str, LauncherConfig],
+) -> None:
+    project = _project(tmp_path / "x")
+    project.path.mkdir(parents=True, exist_ok=True)
+
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(launcher.shutil, "which", lambda name: None)
+    monkeypatch.setattr(launcher.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        launcher,
+        "_find_macos_app_bundle",
+        lambda name: Path(f"/Applications/{name}.app"),
+    )
+
+    def fake_popen(cmd: list[str], **kwargs: Any) -> Any:
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(launcher.subprocess, "Popen", fake_popen)
+
+    result = launcher.launch(project, "cursor", launchers=launchers)
+
+    assert result.ok is True
+    assert captured["cmd"] == ["open", "-a", "Cursor", str(project.path)]
+    assert captured["kwargs"]["cwd"] == str(project.path)
+
+
+def test_detect_launcher_reports_macos_app_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    launchers: dict[str, LauncherConfig],
+) -> None:
+    monkeypatch.setattr(launcher.shutil, "which", lambda name: None)
+    monkeypatch.setattr(launcher.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        launcher,
+        "_find_macos_app_bundle",
+        lambda name: Path(f"/Applications/{name}.app"),
+    )
+
+    availability = launcher.detect_launcher(launchers["cursor"])
+
+    assert availability.available is True
+    assert availability.mode == "macos-app"
+    assert availability.app_name == "Cursor"
+    assert availability.detail == "/Applications/Cursor.app"
 
 
 def test_launch_popen_failure_is_caught(

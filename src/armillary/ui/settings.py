@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import shlex
-import shutil
 from pathlib import Path
 from urllib.parse import urlparse
 
 import streamlit as st
 
 from armillary import exporter as exporter_mod
+from armillary import launcher as launcher_mod
 from armillary.config import (
     Config,
     ConfigError,
@@ -242,8 +242,13 @@ def _render_settings_launchers(cfg: Config) -> None:
 
     for target_id in sorted(cfg.launchers.keys()):
         launcher = cfg.launchers[target_id]
-        on_path = shutil.which(launcher.command) is not None
-        status = "🟢 on PATH" if on_path else "🔴 missing"
+        availability = launcher_mod.detect_launcher(launcher)
+        if availability.mode == "path":
+            status = "🟢 CLI on PATH"
+        elif availability.mode == "macos-app":
+            status = "🟢 macOS app detected"
+        else:
+            status = "🔴 not detected"
         badge = " (built-in)" if target_id in builtin_ids else ""
 
         with st.expander(f"{launcher.icon or '·'} {target_id}{badge} — {status}"):
@@ -297,13 +302,36 @@ def _render_settings_launchers(cfg: Config) -> None:
                 )
 
             if test_clicked:
-                resolved = shutil.which(new_command)
-                if resolved:
-                    st.success(f"Found: `{resolved}`")
+                try:
+                    test_args = shlex.split(new_args) if new_args.strip() else []
+                except ValueError as exc:
+                    st.error(f"Could not parse args: {exc}")
+                    test_args = launcher.args
+                test_availability = launcher_mod.detect_launcher(
+                    LauncherConfig(
+                        label=new_label,
+                        command=new_command,
+                        args=test_args,
+                        icon=new_icon or None,
+                        terminal=new_terminal,
+                    )
+                )
+                if test_availability.mode == "path":
+                    st.success(f"Found CLI: `{test_availability.detail}`")
+                elif test_availability.mode == "macos-app":
+                    st.success(
+                        "Found macOS app bundle: "
+                        f"`{test_availability.detail}`. armillary will open it via "
+                        "`open -a`."
+                    )
                 else:
                     st.error(
-                        f"`{new_command}` is not on PATH. Install it or "
-                        "fix the command above."
+                        f"`{new_command}` was not found on PATH"
+                        + (
+                            " and no matching macOS app bundle was detected."
+                            if new_terminal is False
+                            else "."
+                        )
                     )
 
             if remove_clicked:
