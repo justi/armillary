@@ -275,8 +275,9 @@ def next_command(
             raise typer.Exit(2)
         if len(matches) > 1:
             names = ", ".join(p.name for p in matches[:5])
+            suffix = f" (+{len(matches) - 5} more)" if len(matches) > 5 else ""
             typer.secho(
-                f"'{skip}' is ambiguous: {names}. Be more specific.",
+                f"'{skip}' is ambiguous: {names}{suffix}. Be more specific.",
                 fg=typer.colors.RED,
                 err=True,
             )
@@ -314,8 +315,9 @@ def next_command(
 def mcp_serve() -> None:
     """Start the MCP server (stdio transport) for AI coding agents.
 
-    Exposes three tools that Claude Code / Cursor / Codex can call:
+    Exposes four tools that Claude Code / Cursor / Codex can call:
 
+    - armillary_next — what should I work on today? (momentum/zombie/gold)
     - armillary_search — ripgrep literal search across all repos
     - armillary_semantic — Khoj conceptual search (optional)
     - armillary_projects — list all indexed projects with metadata
