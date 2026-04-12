@@ -173,7 +173,7 @@ def armillary_projects(status_filter: str | None = None) -> str:
     Use this to find projects by concept or status. The agent can
     then enter the project directory for full details (git log, etc.).
 
-    Optional: filter by status (ACTIVE, PAUSED, DORMANT, IDEA).
+    Optional: filter by status (ACTIVE, PAUSED, DORMANT, IDEA, IN_PROGRESS).
 
     Examples:
     - armillary_projects() → all projects
