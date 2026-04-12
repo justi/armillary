@@ -246,6 +246,38 @@ def armillary_projects(status_filter: str | None = None) -> str:
     return _safe_json(rows, len(rows), len(rows))
 
 
+@mcp.tool()
+def armillary_next() -> str:
+    """What should I work on today?
+
+    Returns up to 3 project suggestions based on activity patterns:
+    - **momentum** — active project with recent commits, keep going
+    - **zombie** — marked active but no commit in >7 days, kill or ship
+    - **forgotten_gold** — dormant/paused project with >50h invested,
+      could be finished with AI tools
+
+    Call this at the start of a coding session to get context about
+    the user's project portfolio and recommend where to focus.
+    """
+    from armillary.next_service import get_suggestions
+
+    suggestions = get_suggestions()
+    if not suggestions:
+        return "No suggestions — cache is empty or all projects are skipped."
+
+    rows = []
+    for s in suggestions:
+        rows.append(
+            {
+                "project": s.project.name,
+                "path": str(s.project.path),
+                "category": s.category,
+                "reason": s.reason,
+            }
+        )
+    return _safe_json(rows, len(rows), len(rows))
+
+
 def run_server() -> None:
     """Entry point for `armillary mcp-serve`."""
     mcp.run(transport="stdio")
