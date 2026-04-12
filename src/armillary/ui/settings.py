@@ -5,6 +5,7 @@ from __future__ import annotations
 import shlex
 import shutil
 from pathlib import Path
+from urllib.parse import urlparse
 
 import streamlit as st
 
@@ -20,6 +21,8 @@ from armillary.config import (
 from armillary.ui.actions import go_to_overview, save_config_and_refresh
 from armillary.ui.helpers import _shorten_home
 
+_SETTINGS_TOAST_KEY = "_settings_toast"
+
 
 def _render_settings_page() -> None:
     """In-UI editor for the YAML config — umbrellas, launchers, Khoj.
@@ -33,6 +36,11 @@ def _render_settings_page() -> None:
     Loading the page itself is read-only — the only filesystem writes
     happen on explicit "Save" button clicks.
     """
+    # P1.2: Show toast feedback from the previous save/add/remove action.
+    toast_msg = st.session_state.pop(_SETTINGS_TOAST_KEY, None)
+    if toast_msg:
+        st.toast(toast_msg)
+
     if st.button("← Back to overview", key="settings_back"):
         go_to_overview()
 
@@ -42,7 +50,14 @@ def _render_settings_page() -> None:
     try:
         cfg = load_config()
     except ConfigError as exc:
-        st.error(f"Config could not be loaded:\n\n```\n{exc}\n```")
+        msg = str(exc)
+        # Surface just the first line (usually the human-readable summary)
+        # and hide the full traceback behind an expander.
+        short = msg.splitlines()[0] if msg else "Unknown error"
+        st.error(f"Config could not be loaded: {short}")
+        if len(msg.splitlines()) > 1:
+            with st.expander("Full error details"):
+                st.code(msg, language="text")
         st.info(
             "Fix the YAML by hand (`armillary config` from a terminal), "
             "then click Reload below."
@@ -58,6 +73,27 @@ def _render_settings_page() -> None:
         _render_settings_launchers(cfg)
     with tabs[2]:
         _render_settings_khoj(cfg)
+
+
+# ----- helpers -------------------------------------------------------------
+
+
+def _clear_umbrella_widget_keys(count: int) -> None:
+    """Remove per-row session_state keys so the next rerun uses fresh values.
+
+    After an add/remove the row indices shift, so stale keys would make
+    Streamlit show the wrong values (P1.1).
+    """
+    for idx in range(count + 1):  # +1 to cover the now-gone row
+        for suffix in ("path", "label", "depth"):
+            st.session_state.pop(f"umbrella_{suffix}_{idx}", None)
+
+
+def _clear_launcher_widget_keys(ids: list[str]) -> None:
+    """Remove per-launcher session_state keys before rerun (P1.1)."""
+    for target_id in ids:
+        for suffix in ("label", "command", "icon", "terminal", "args"):
+            st.session_state.pop(f"launcher_{suffix}_{target_id}", None)
 
 
 # ----- Umbrellas tab -------------------------------------------------------
@@ -130,6 +166,7 @@ def _render_settings_umbrellas(cfg: Config) -> None:
 
     if removed_any:
         cfg.umbrellas = edited
+        _clear_umbrella_widget_keys(len(cfg.umbrellas))
         save_config_and_refresh(cfg)
         return
 
@@ -176,6 +213,7 @@ def _render_settings_umbrellas(cfg: Config) -> None:
                 )
             )
             cfg.umbrellas = edited
+            _clear_umbrella_widget_keys(len(cfg.umbrellas))
             save_config_and_refresh(cfg)
             return
 
@@ -191,11 +229,11 @@ def _render_settings_umbrellas(cfg: Config) -> None:
 def _render_settings_launchers(cfg: Config) -> None:
     st.subheader("Launchers")
     st.caption(
-        "Tools `armillary open` can spawn. Built-in entries are always "
-        "available even when removed from this list — they reappear "
-        "after a save."
+        "Tools `armillary open` can spawn. Built-in launchers reappear "
+        "after save — they can be customized but not permanently removed."
     )
 
+    builtin_ids = set(Config.builtin_launchers())
     edited: dict[str, LauncherConfig] = {}
     removed_any = False
 
@@ -203,8 +241,9 @@ def _render_settings_launchers(cfg: Config) -> None:
         launcher = cfg.launchers[target_id]
         on_path = shutil.which(launcher.command) is not None
         status = "🟢 on PATH" if on_path else "🔴 missing"
+        badge = " (built-in)" if target_id in builtin_ids else ""
 
-        with st.expander(f"{launcher.icon or '·'} {target_id} — {status}"):
+        with st.expander(f"{launcher.icon or '·'} {target_id}{badge} — {status}"):
             cols_top = st.columns([3, 3, 1, 1])
             with cols_top[0]:
                 new_label = st.text_input(
@@ -284,6 +323,7 @@ def _render_settings_launchers(cfg: Config) -> None:
 
     if removed_any:
         cfg.launchers = edited
+        _clear_launcher_widget_keys(list(cfg.launchers.keys()))
         save_config_and_refresh(cfg)
         return
 
@@ -418,13 +458,20 @@ def _render_settings_khoj(cfg: Config) -> None:
         _test_khoj_connection(api_url, api_key, timeout_seconds)
 
     if save_clicked:
-        cfg.khoj = KhojConfigBlock(
-            enabled=enabled,
-            api_url=api_url,
-            api_key=api_key or None,
-            timeout_seconds=timeout_seconds,
-        )
-        save_config_and_refresh(cfg)
+        parsed_url = urlparse(api_url)
+        if not parsed_url.scheme or not parsed_url.netloc:
+            st.error(
+                "Invalid URL — must include a scheme and host "
+                "(e.g. `http://localhost:42110`)."
+            )
+        else:
+            cfg.khoj = KhojConfigBlock(
+                enabled=enabled,
+                api_url=api_url,
+                api_key=api_key or None,
+                timeout_seconds=timeout_seconds,
+            )
+            save_config_and_refresh(cfg)
 
     # Admin panel credentials — visible only when `armillary install-khoj`
     # has already generated the `khoj-admin.env` file. These auto-log the

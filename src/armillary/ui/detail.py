@@ -59,8 +59,14 @@ def build_launcher_options(
 def _render_project_detail(project_path: str) -> None:
     project = _load_project(project_path)
     if project is None:
-        st.error(f"Project not found in cache: `{project_path}`")
-        if st.button("← Back to overview"):
+        project_name = Path(project_path).name
+        st.error(
+            f"**{project_name}** not found in cache.\n\n"
+            "The cache may be stale. Click **Reload from cache** in the "
+            "sidebar, or run `armillary scan` from your terminal to "
+            "re-index."
+        )
+        if st.button("← Back to overview", type="primary"):
             go_to_overview()
         return
 
@@ -180,6 +186,15 @@ def _render_launcher_dropdown(project: Project, cfg: Config) -> None:
         cfg.launchers,
     )
 
+    # P2.8: Surface terminal-only info ABOVE the dropdown so it is not
+    # buried below the fold.
+    if terminal_only_labels:
+        st.info(
+            f"Terminal-only launchers ({', '.join(terminal_only_labels)}) "
+            "are interactive — use `armillary open <name> -t <id>` "
+            "from your terminal."
+        )
+
     if not available:
         st.warning(
             "No GUI launcher executables found on PATH. Edit "
@@ -187,11 +202,6 @@ def _render_launcher_dropdown(project: Project, cfg: Config) -> None:
         )
         if missing_labels:
             st.caption(f"Configured but missing: {', '.join(missing_labels)}")
-        if terminal_only_labels:
-            st.caption(
-                f"Terminal-only launchers (CLI: `armillary open <name> -t <id>`): "
-                f"{', '.join(terminal_only_labels)}"
-            )
         return
 
     options_map = {opt.target_id: opt.label for opt in available}
@@ -220,11 +230,6 @@ def _render_launcher_dropdown(project: Project, cfg: Config) -> None:
 
     if missing_labels:
         st.caption(f"Not on PATH (skipped): {', '.join(missing_labels)}")
-    if terminal_only_labels:
-        st.caption(
-            f"Terminal-only launchers (CLI: `armillary open <name> -t <id>`): "
-            f"{', '.join(terminal_only_labels)}"
-        )
 
 
 def _render_recent_commits(repo_path: Path, limit: int = 5) -> None:

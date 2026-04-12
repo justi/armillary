@@ -109,9 +109,19 @@ def _pre_start_scan() -> None:
     try:
         cfg = load_config()
     except ConfigError:
+        typer.secho(
+            "⚠ No config found. Run `armillary config --init` "
+            "or use ⚙️ Settings in the dashboard.",
+            fg=typer.colors.YELLOW,
+        )
         return
 
     if not cfg.umbrellas:
+        typer.secho(
+            "⚠ No umbrellas configured. Run `armillary config --init` "
+            "or use ⚙️ Settings in the dashboard.",
+            fg=typer.colors.YELLOW,
+        )
         return
 
     typer.secho("Scanning before dashboard launch…", fg=typer.colors.CYAN)

@@ -48,7 +48,7 @@ def run_scan_with_feedback(cfg: Config | None) -> None:
 
 
 def save_config_and_refresh(cfg: Config) -> None:
-    """Write config, clear caches, show success, rerun."""
+    """Write config, clear caches, set toast flag, rerun."""
     try:
         write_config(cfg)
     except OSError as exc:
@@ -56,5 +56,7 @@ def save_config_and_refresh(cfg: Config) -> None:
         return
     _load_overview_rows.clear()
     _load_project.clear()
-    st.success("Saved.")
+    # P1.2: st.success() before st.rerun() is invisible. Store a flag
+    # so the settings page can show a toast after the rerun.
+    st.session_state["_settings_toast"] = "Saved."
     st.rerun()

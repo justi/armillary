@@ -102,7 +102,10 @@ def _render_search_section(rows: list[OverviewRow], cfg: Config | None) -> None:
                 )
             else:
                 use_khoj = False
-                st.caption("_Semantic search off — enable in ⚙️ Settings → Khoj_")
+                st.markdown(
+                    "Semantic search off — [enable in ⚙️ Settings](/?page=settings)",
+                    help="Requires a running Khoj server.",
+                )
 
     if submitted:
         cleaned = query.strip()
@@ -287,7 +290,11 @@ def _render_search_results() -> None:
     backend_label = state.backend_label
     total_hits = sum(len(h) for _, h in hits_by_project)
     if total_hits == 0:
-        st.warning(f"No matches for '{saved_query}' ({backend_label}).")
+        st.warning(
+            f"No matches for '{saved_query}' ({backend_label}).\n\n"
+            "Try a different query, run `armillary scan` to refresh the "
+            "index, or check that all umbrella folders are configured."
+        )
         return
 
     header_col, clear_col = st.columns([5, 1])

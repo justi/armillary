@@ -45,7 +45,7 @@ def _render_overview() -> None:
     _render_search_section(rows, cfg)
 
     filtered = _apply_filters(rows, filters=filters, search=name_filter)
-    _render_summary_metrics(filtered)
+    _render_summary_metrics(filtered, total=len(rows))
     st.divider()
 
     if not filtered:
@@ -134,14 +134,13 @@ def _render_export_for_ai_button() -> None:
 
     markdown = exporter_mod.render_repos_index(projects)
     st.download_button(
-        label="📤 Export for AI",
+        label="📥 Download for AI",
         data=markdown,
         file_name="repos-index.md",
         mime="text/markdown",
         help=(
-            "Download a markdown table of every cached project. Drop it "
-            "into a Claude Code session, a Codex prompt, or paste it "
-            "into any AI chat. For automatic integration, run "
+            "Downloads a markdown table. Paste into Claude Code or any "
+            "AI chat. For automatic integration, run "
             "`armillary install-claude-bridge` from the terminal."
         ),
         use_container_width=True,
@@ -168,12 +167,16 @@ def _apply_filters(
     return out
 
 
-def _render_summary_metrics(rows: list[OverviewRow]) -> None:
+def _render_summary_metrics(rows: list[OverviewRow], *, total: int) -> None:
     counts: dict[str, int] = {}
     for r in rows:
         counts[r.status_raw] = counts.get(r.status_raw, 0) + 1
     cols = st.columns(5)
-    cols[0].metric("Total", len(rows))
+    showing = len(rows)
+    if showing < total:
+        cols[0].metric("Showing", f"{showing} of {total}")
+    else:
+        cols[0].metric("Total", total)
     cols[1].metric("Active", counts.get("ACTIVE", 0))
     cols[2].metric("Paused", counts.get("PAUSED", 0))
     cols[3].metric("Dormant", counts.get("DORMANT", 0))
@@ -207,4 +210,5 @@ def _render_table(rows: list[OverviewRow]) -> None:
     if selected_rows:
         idx = selected_rows[0]
         st.query_params["project"] = rows[idx].path
+        st.toast("Opening project\u2026")
         st.rerun()
