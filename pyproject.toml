@@ -87,6 +87,7 @@ select = [
 "src/armillary/cli.py" = ["B008"]
 "src/armillary/cli_config.py" = ["B008"]
 "src/armillary/cli_khoj.py" = ["B008"]
+"src/armillary/cli_tools.py" = ["B008"]
 
 [tool.ruff.format]
 quote-style = "double"
