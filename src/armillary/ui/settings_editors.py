@@ -36,7 +36,9 @@ def _clear_launcher_widget_keys(ids: list[str]) -> None:
             st.session_state.pop(f"launcher_{suffix}_{target_id}", None)
 
 
-def _parse_launcher_args(raw_args: str, fallback: list[str] | None) -> list[str] | None:
+def _parse_launcher_args(
+    raw_args: str, fallback: list[str] | None
+) -> list[str] | None:
     """Parse a launcher arg string, surfacing parse errors inline."""
 
     try:

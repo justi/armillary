@@ -15,9 +15,7 @@ def test_detect_launcher_compat_falls_back_to_path_when_symbol_is_missing(
     monkeypatch,
 ) -> None:
     monkeypatch.delattr(launcher_support.launcher_mod, "detect_launcher", raising=False)
-    monkeypatch.setattr(
-        launcher_support.shutil, "which", lambda name: "/usr/bin/cursor"
-    )
+    monkeypatch.setattr(launcher_support.shutil, "which", lambda name: "/usr/bin/cursor")
 
     availability = launcher_support.detect_launcher_compat(
         LauncherConfig(label="Cursor", command="cursor", args=["{path}"])
@@ -32,9 +30,7 @@ def test_detail_build_launcher_options_survives_old_launcher_module(
     monkeypatch,
 ) -> None:
     monkeypatch.delattr(launcher_support.launcher_mod, "detect_launcher", raising=False)
-    monkeypatch.setattr(
-        launcher_support.shutil, "which", lambda name: "/usr/bin/cursor"
-    )
+    monkeypatch.setattr(launcher_support.shutil, "which", lambda name: "/usr/bin/cursor")
 
     available, missing, terminal_only, app_labels = detail.build_launcher_options(
         {
@@ -101,9 +97,7 @@ def test_detail_not_found_renders_back_to_overview_cta(monkeypatch) -> None:
 
     monkeypatch.setattr(detail.st, "error", fake_error)
     monkeypatch.setattr(detail.st, "button", fake_button)
-    monkeypatch.setattr(
-        detail, "go_to_overview", lambda: navigations.append("overview")
-    )
+    monkeypatch.setattr(detail, "go_to_overview", lambda: navigations.append("overview"))
 
     detail._render_project_detail("/tmp/missing-project")
 
