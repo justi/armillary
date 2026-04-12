@@ -22,6 +22,11 @@ from armillary.cache import Cache
 from armillary.config import ConfigError, load_config
 from armillary.search import KhojConfig, KhojSearch, LiteralSearch, SearchHit
 
+# Hard limits to prevent MCP responses from exceeding token limits.
+_MAX_RESULTS_CAP = 30
+_PREVIEW_MAX_LEN = 120
+_RESPONSE_MAX_CHARS = 40_000
+
 mcp = FastMCP(
     "armillary",
     instructions=(
@@ -51,12 +56,30 @@ def _project_context(project_name: str) -> dict[str, object]:
 
 def _hit_to_dict(hit: SearchHit, project_meta: dict[str, object]) -> dict[str, object]:
     """Convert a SearchHit + project metadata to a flat dict."""
+    preview = hit.preview
+    if len(preview) > _PREVIEW_MAX_LEN:
+        preview = preview[:_PREVIEW_MAX_LEN] + "…"
     return {
         **project_meta,
         "file": str(hit.path),
         "line": hit.line,
-        "preview": hit.preview,
+        "preview": preview,
     }
+
+
+def _safe_json(results: list[dict[str, object]], total: int, shown: int) -> str:
+    """Serialize results to compact JSON, truncating if over char limit."""
+    output = json.dumps(results, separators=(",", ":"), default=str)
+    if len(output) <= _RESPONSE_MAX_CHARS:
+        if shown < total:
+            return output[:-1] + f',{{"_truncated":{total - shown}}}]'
+        return output
+    # Over limit — trim results until we fit.
+    while results and len(output) > _RESPONSE_MAX_CHARS:
+        results.pop()
+        output = json.dumps(results, separators=(",", ":"), default=str)
+    dropped = total - len(results)
+    return output[:-1] + f',{{"_truncated":{dropped}}}]'
 
 
 def _get_project_roots() -> list[tuple[str, Path]]:
@@ -83,9 +106,11 @@ def armillary_search(query: str, max_results: int = 20) -> str:
     - "OPENAI_API_KEY" → finds where API keys are configured
     - "def parse_price" → finds price parsing functions
     """
+    max_results = min(max_results, _MAX_RESULTS_CAP)
     backend = LiteralSearch()
     results: list[dict[str, object]] = []
     project_roots = _get_project_roots()
+    total_hits = 0
 
     for name, root in project_roots:
         if len(results) >= max_results:
@@ -95,6 +120,7 @@ def armillary_search(query: str, max_results: int = 20) -> str:
             hits = backend.search(query, root=root, max_results=remaining)
         except Exception:  # noqa: BLE001
             continue
+        total_hits += len(hits)
         if hits:
             meta = _project_context(name)
             results.extend(_hit_to_dict(h, meta) for h in hits)
@@ -102,7 +128,7 @@ def armillary_search(query: str, max_results: int = 20) -> str:
     if not results:
         return f"No matches for '{query}' across {len(project_roots)} projects."
 
-    return json.dumps(results[:max_results], indent=2, default=str)
+    return _safe_json(results[:max_results], total_hits, len(results[:max_results]))
 
 
 @mcp.tool()
@@ -123,6 +149,7 @@ def armillary_semantic(query: str, max_results: int = 10) -> str:
     - "web scraping approaches" → finds BeautifulSoup, Nokogiri, Selenium
     - "how to handle file uploads" → finds ActiveStorage, CarrierWave, Shrine
     """
+    max_results = min(max_results, _MAX_RESULTS_CAP)
     try:
         cfg = load_config()
     except ConfigError:
@@ -142,6 +169,7 @@ def armillary_semantic(query: str, max_results: int = 10) -> str:
 
     results: list[dict[str, object]] = []
     project_roots = _get_project_roots()
+    total_hits = 0
 
     for name, root in project_roots:
         if len(results) >= max_results:
@@ -151,6 +179,7 @@ def armillary_semantic(query: str, max_results: int = 10) -> str:
             hits = backend.search(query, root=root, max_results=remaining)
         except Exception:  # noqa: BLE001
             continue
+        total_hits += len(hits)
         if hits:
             meta = _project_context(name)
             results.extend(_hit_to_dict(h, meta) for h in hits)
@@ -160,7 +189,7 @@ def armillary_semantic(query: str, max_results: int = 10) -> str:
             f"No semantic matches for '{query}' across {len(project_roots)} projects."
         )
 
-    return json.dumps(results[:max_results], indent=2, default=str)
+    return _safe_json(results[:max_results], total_hits, len(results[:max_results]))
 
 
 @mcp.tool()
@@ -201,7 +230,7 @@ def armillary_projects(status_filter: str | None = None) -> str:
             }
         )
 
-    return json.dumps(rows, indent=2, default=str)
+    return _safe_json(rows, len(rows), len(rows))
 
 
 def run_server() -> None:
