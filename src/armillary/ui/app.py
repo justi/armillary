@@ -103,12 +103,16 @@ def _project_to_row(p: Project) -> dict[str, Any]:
     # tree is clean even though it never looked. Let Streamlit's
     # NumberColumn render the absence as an empty cell instead.
     dirty_value = md.dirty_count if md and md.dirty_count is not None else None
+    commit_count = md.commit_count if md and md.commit_count is not None else None
+    work_hours = md.work_hours if md and md.work_hours is not None else None
     return {
         "Status": status_label,
         "Type": p.type.value,
         "Name": p.name,
         "Branch": (md.branch if md else None) or "—",
         "Dirty": dirty_value,
+        "Commits": commit_count,
+        "Work h": work_hours,
         "Umbrella": _shorten_home(p.umbrella),
         "Last modified": p.last_modified,
         # Hidden columns used by the row-click handler.
@@ -752,6 +756,8 @@ def _render_table(rows: list[dict[str, Any]]) -> None:
                 format="YYYY-MM-DD HH:mm",
             ),
             "Dirty": st.column_config.NumberColumn("Dirty", format="%d"),
+            "Commits": st.column_config.NumberColumn("Commits", format="%d"),
+            "Work h": st.column_config.NumberColumn("Work h", format="%.1f"),
         },
     )
 
