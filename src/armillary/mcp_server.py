@@ -39,17 +39,12 @@ def _project_context(project_name: str) -> dict[str, object]:
     with Cache() as cache:
         project = cache.get_project_by_name(project_name)
     if project is None:
-        return {"project": project_name}
+        return {"path": None, "status": None, "description": None}
     md = project.metadata
     return {
-        "project": project.name,
         "path": str(project.path),
         "status": md.status.value if md and md.status else None,
-        "commits": md.commit_count if md else None,
-        "work_hours": md.work_hours if md else None,
-        "branch": md.branch if md else None,
-        "dirty_files": md.dirty_count if md else None,
-        "last_modified": project.last_modified.isoformat(),
+        "description": md.readme_excerpt if md else None,
     }
 
 
@@ -79,7 +74,7 @@ def armillary_search(query: str, max_results: int = 20) -> str:
     works offline.
 
     Returns matched lines with file paths, line numbers, and project
-    metadata (status, commits, work hours) so you can assess whether
+    metadata (path, status, description) so you can assess whether
     to reuse code from a specific project.
 
     Examples:
@@ -173,18 +168,15 @@ def armillary_semantic(query: str, max_results: int = 10) -> str:
 
 @mcp.tool()
 def armillary_projects(status_filter: str | None = None) -> str:
-    """List all indexed projects with metadata.
+    """List all indexed projects with path, status, and description.
 
-    Returns project name, status, commits, work hours, branch, dirty
-    files, last modified date, and path for every cached project.
-
-    Use this to understand what the user has built, find dormant
-    projects worth reviving, or check project health before reusing code.
+    Use this to find projects by concept or status. The agent can
+    then enter the project directory for full details (git log, etc.).
 
     Optional: filter by status (ACTIVE, PAUSED, DORMANT, IDEA, IN_PROGRESS).
 
     Examples:
-    - armillary_projects() → all 178 projects
+    - armillary_projects() → all projects
     - armillary_projects(status_filter="ACTIVE") → only active projects
     - armillary_projects(status_filter="DORMANT") → forgotten projects
     """
@@ -208,15 +200,9 @@ def armillary_projects(status_filter: str | None = None) -> str:
         md = p.metadata
         rows.append(
             {
-                "name": p.name,
                 "path": str(p.path),
                 "status": md.status.value if md and md.status else None,
-                "type": p.type.value,
-                "branch": md.branch if md else None,
-                "commits": md.commit_count if md else None,
-                "work_hours": md.work_hours if md else None,
-                "dirty_files": md.dirty_count if md else None,
-                "last_modified": p.last_modified.isoformat(),
+                "description": md.readme_excerpt if md else None,
             }
         )
 
