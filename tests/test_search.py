@@ -12,6 +12,7 @@ import json
 import shutil
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 from urllib.error import URLError
@@ -75,6 +76,63 @@ def test_literal_search_unavailable_returns_empty(
     backend = LiteralSearch()
     assert backend.is_available() is False
     assert backend.search("anything", root=tmp_path) == []
+
+
+def test_literal_search_runs_rg_with_expected_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, Any] = {}
+    stdout = json.dumps(
+        {
+            "type": "match",
+            "data": {
+                "path": {"text": str(tmp_path / "alpha.py")},
+                "lines": {"text": "needle()\n"},
+                "line_number": 3,
+            },
+        }
+    )
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> SimpleNamespace:
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(stdout=stdout, returncode=0)
+
+    monkeypatch.setattr(search.shutil, "which", lambda name: "/usr/bin/rg")
+    monkeypatch.setattr(search.subprocess, "run", fake_run)
+
+    hits = LiteralSearch().search("needle", root=tmp_path, max_results=7)
+
+    assert captured["cmd"] == [
+        "rg",
+        "--json",
+        "--max-count",
+        "7",
+        "--max-filesize",
+        "1M",
+        "--",
+        "needle",
+        str(tmp_path),
+    ]
+    assert captured["kwargs"]["capture_output"] is True
+    assert captured["kwargs"]["text"] is True
+    assert captured["kwargs"]["timeout"] == 15
+    assert len(hits) == 1
+    assert hits[0].path == tmp_path / "alpha.py"
+    assert hits[0].line == 3
+
+
+def test_literal_search_returns_empty_on_subprocess_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(search.shutil, "which", lambda name: "/usr/bin/rg")
+
+    def fake_run(*args: Any, **kwargs: Any) -> Any:
+        raise search.subprocess.TimeoutExpired(cmd=["rg"], timeout=15)
+
+    monkeypatch.setattr(search.subprocess, "run", fake_run)
+
+    assert LiteralSearch().search("needle", root=tmp_path) == []
 
 
 def test_parse_ripgrep_jsonl_handles_real_event_format() -> None:

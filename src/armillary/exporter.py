@@ -10,6 +10,7 @@ The exporter reads from the SQLite cache, never from disk.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -73,8 +74,6 @@ def render_repos_index(
         lines.append("| " + " | ".join(cells) + " |")
 
     if hidden:
-        from collections import Counter
-
         counts = Counter(
             p.metadata.status.value if p.metadata and p.metadata.status else "UNKNOWN"
             for p in hidden

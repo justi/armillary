@@ -8,6 +8,7 @@ by `test_scanner.py`; here we only verify the CLI wiring.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -15,9 +16,17 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from armillary import cli, cli_config, cli_helpers, cli_khoj, khoj_service
+from armillary import (
+    cli,
+    cli_config,
+    cli_config_ceremony,
+    cli_helpers,
+    cli_khoj,
+    khoj_service,
+)
 from armillary.cache import Cache
 from armillary.cli import app
+from armillary.config import LauncherConfig
 
 runner = CliRunner()
 
@@ -36,7 +45,7 @@ def _isolate_state(
        armillary/cache.db`.
     2. `ARMILLARY_CONFIG` pointed at a non-existent path so the test never
        reads the developer's local umbrellas.
-    3. `cli_config.urlopen` stubbed to raise `URLError` so `armillary config
+    3. `cli_config_ceremony.urlopen` stubbed to raise `URLError` so `armillary config
        --init` never accidentally probes the dev machine's localhost
        Khoj. Tests that exercise the Khoj detection path explicitly
        re-monkeypatch this attribute.
@@ -58,7 +67,7 @@ def _isolate_state(
     def _no_khoj(*args: Any, **kwargs: Any) -> Any:
         raise _URLError("test isolation: Khoj health probe disabled")
 
-    monkeypatch.setattr(cli_config, "urlopen", _no_khoj)
+    monkeypatch.setattr(cli_config_ceremony, "urlopen", _no_khoj)
 
 
 # Strips SGR / cursor control sequences from captured CLI output. Click and
@@ -664,6 +673,39 @@ def test_open_invokes_launcher_when_executable_present(
     assert "myrepo" in captured["cwd"]
 
 
+def test_open_uses_macos_app_fallback_when_cli_shim_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CLI open should still work when Cursor exists only as `/Applications/*.app`."""
+    _mkrepo(tmp_path / "myrepo")
+    runner.invoke(app, ["scan", "-u", str(tmp_path)])
+
+    captured: dict[str, Any] = {}
+    from armillary import launcher as launcher_mod
+
+    monkeypatch.setattr(launcher_mod.shutil, "which", lambda name: None)
+    monkeypatch.setattr(launcher_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        launcher_mod,
+        "_find_macos_app_bundle",
+        lambda name: Path(f"/Applications/{name}.app"),
+    )
+
+    def fake_popen(cmd: list[str], **kwargs: Any) -> Any:
+        captured["cmd"] = cmd
+        captured["cwd"] = kwargs.get("cwd")
+        return None
+
+    monkeypatch.setattr(launcher_mod.subprocess, "Popen", fake_popen)
+
+    result = runner.invoke(app, ["open", "myrepo", "--target", "cursor"])
+    assert result.exit_code == 0, result.stdout
+    assert captured["cmd"][0:3] == ["open", "-a", "Cursor"]
+    assert "myrepo" in captured["cmd"][-1]
+    assert "myrepo" in captured["cwd"]
+
+
 def test_open_unknown_target_errors_out(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1123,24 +1165,36 @@ def test_config_init_launcher_detection_lists_available_and_missing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Setup ceremony step 3: cross-checks `cfg.launchers` against
-    `shutil.which` and prints which are reachable on PATH."""
+    launcher detection and print a deterministic availability summary."""
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     _mkrepo(fake_home / "Projects" / "thing")
 
     monkeypatch.setattr(Path, "home", lambda: fake_home)
 
-    # Pretend `cursor` and `code` are on PATH but `zed` and `claude` are not.
-    real_which = cli_helpers.shutil_which
+    from armillary.launcher import LauncherAvailability
 
-    def fake_which(name: str) -> str | None:
-        if name in {"cursor", "code", "open"}:
-            return f"/usr/bin/{name}"
-        return None
+    def fake_detect_launcher(config: LauncherConfig) -> LauncherAvailability:
+        if config.command == "cursor":
+            return LauncherAvailability(
+                available=True,
+                mode="macos-app",
+                detail="/Applications/Cursor.app",
+                app_name="Cursor",
+            )
+        if config.command in {"code", "open"}:
+            return LauncherAvailability(
+                available=True,
+                mode="path",
+                detail=f"/usr/bin/{config.command}",
+            )
+        return LauncherAvailability(available=False, mode="missing")
 
-    import shutil as _shutil
-
-    monkeypatch.setattr(_shutil, "which", fake_which)
+    monkeypatch.setattr(
+        cli_config_ceremony.launcher,
+        "detect_launcher",
+        fake_detect_launcher,
+    )
 
     config_file = tmp_path / "armillary" / "config.yaml"
     monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
@@ -1159,10 +1213,11 @@ def test_config_init_launcher_detection_lists_available_and_missing(
 
     out = _strip_ansi(result.stdout)
     assert "available" in out.lower()
-    assert "cursor" in out
+    assert "cursor (cursor) via macOS app" in out
+    assert "code (vscode)" in out
     assert "missing" in out.lower()
-    assert "zed" in out or "claude" in out
-    del real_which  # silence linter
+    assert "zed (zed)" in out
+    assert "claude (claude-code)" in out
 
 
 def test_config_init_khoj_detection_auto_enables_when_health_responds(
@@ -1179,7 +1234,7 @@ def test_config_init_khoj_detection_auto_enables_when_health_responds(
     _mkrepo(fake_home / "Projects" / "thing")
 
     monkeypatch.setattr(Path, "home", lambda: fake_home)
-    monkeypatch.setattr(cli_config, "urlopen", _fake_urlopen_200)
+    monkeypatch.setattr(cli_config_ceremony, "urlopen", _fake_urlopen_200)
 
     config_file = tmp_path / "armillary" / "config.yaml"
     monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
@@ -1217,7 +1272,7 @@ def test_config_init_khoj_auto_enables_in_non_interactive_too(
     _mkrepo(fake_home / "Projects" / "thing")
 
     monkeypatch.setattr(Path, "home", lambda: fake_home)
-    monkeypatch.setattr(cli_config, "urlopen", _fake_urlopen_200)
+    monkeypatch.setattr(cli_config_ceremony, "urlopen", _fake_urlopen_200)
 
     config_file = tmp_path / "armillary" / "config.yaml"
     monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
@@ -1306,7 +1361,7 @@ def test_config_init_khoj_non_200_response_is_treated_as_unreachable(
         return FakeResponse()
 
     monkeypatch.setattr(Path, "home", lambda: fake_home)
-    monkeypatch.setattr(cli_config, "urlopen", _fake_urlopen_503)
+    monkeypatch.setattr(cli_config_ceremony, "urlopen", _fake_urlopen_503)
 
     config_file = tmp_path / "armillary" / "config.yaml"
     monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
@@ -1339,7 +1394,7 @@ def test_config_init_skip_khoj_flag_skips_detection_entirely(
     _mkrepo(fake_home / "Projects" / "thing")
 
     monkeypatch.setattr(Path, "home", lambda: fake_home)
-    monkeypatch.setattr(cli_config, "urlopen", _fake_urlopen_200)
+    monkeypatch.setattr(cli_config_ceremony, "urlopen", _fake_urlopen_200)
 
     config_file = tmp_path / "armillary" / "config.yaml"
     monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
@@ -2096,6 +2151,16 @@ def test_install_khoj_provisions_docker_container_happy_path(
     out = _strip_ansi(result.stdout)
     assert "armillary start-khoj" in out
     assert "armillary config --init --force" in out
+    admin_env = (
+        Path(
+            os.environ["ARMILLARY_CONFIG"]  # set by the autouse isolation fixture
+        ).parent
+        / "khoj-admin.env"
+    )
+    assert admin_env.exists()
+    admin_text = admin_env.read_text()
+    assert "KHOJ_ADMIN_EMAIL=admin@armillary.local" in admin_text
+    assert "KHOJ_ADMIN_PASSWORD=" in admin_text
 
 
 def test_install_khoj_reuses_running_container(
@@ -2486,6 +2551,10 @@ def test_start_khoj_execs_khoj_binary_with_env_vars(
     assert len(popen_captures) == 1
     p = popen_captures[0]
     assert p.cmd == [str(fake_khoj), "--anonymous-mode", "--non-interactive"]
+    log_path = tmp_path / "armillary" / "khoj-server.log"
+    assert p.kwargs["stderr"] is cli_khoj.subprocess.STDOUT
+    assert hasattr(p.kwargs["stdout"], "name")
+    assert Path(p.kwargs["stdout"].name) == log_path
 
     env = p.kwargs.get("env") or {}
     assert env.get("POSTGRES_HOST") == "localhost"
@@ -2552,8 +2621,12 @@ def test_start_khoj_without_container_tells_user_to_install(
             return _FakeProc(returncode=0, stdout="")
         return _FakeProc(returncode=0)
 
+    def must_not_popen(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("Khoj process should not spawn when container is missing")
+
     monkeypatch.setattr(cli_khoj.subprocess, "run", fake_run)
     monkeypatch.setattr(khoj_service.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli_khoj.subprocess, "Popen", must_not_popen)
 
     result = runner.invoke(app, ["start-khoj"])
     assert result.exit_code != 0
@@ -2625,8 +2698,12 @@ def test_start_khoj_errors_when_binary_missing(
             return _FakeProc(returncode=0, stdout="running")
         return _FakeProc(returncode=0)
 
+    def must_not_popen(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("Khoj process should not spawn when binary is missing")
+
     monkeypatch.setattr(cli_khoj.subprocess, "run", fake_run)
     monkeypatch.setattr(khoj_service.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli_khoj.subprocess, "Popen", must_not_popen)
 
     result = runner.invoke(app, ["start-khoj"])
     assert result.exit_code != 0

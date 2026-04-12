@@ -1,6 +1,6 @@
 """First-run umbrella folder discovery for `armillary config --init`.
 
-PLAN.md §5 "Bootstrap" describes a two-phase first-run experience:
+The two-phase first-run experience works as follows:
 
 1. Shallow scan of `~/` (maxdepth=2) looking for umbrella candidates
 2. Interactive picker → save selection to `~/.config/armillary/config.yaml`

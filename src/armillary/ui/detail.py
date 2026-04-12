@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,12 +11,14 @@ import streamlit as st
 from armillary import launcher as launcher_mod
 from armillary.config import Config, LauncherConfig
 from armillary.models import Project
+from armillary.ui.actions import go_to_overview
 from armillary.ui.helpers import (
     _STATUS_EMOJI,
     _load_project,
     _safe_load_config,
     _shorten_home,
 )
+from armillary.ui.launcher_support import detect_launcher_compat
 
 
 @dataclass(frozen=True)
@@ -28,27 +29,6 @@ class LauncherOption:
     label: str
     availability_mode: str
     detail: str | None = None
-
-
-@dataclass(frozen=True)
-class _LauncherAvailabilityCompat:
-    available: bool
-    mode: str
-    detail: str | None = None
-    app_name: str | None = None
-
-
-def _detect_launcher_compat(config: LauncherConfig) -> _LauncherAvailabilityCompat:
-    """Use the new launcher detection when available, else fall back to PATH."""
-    detect = getattr(launcher_mod, "detect_launcher", None)
-    if callable(detect):
-        return detect(config)
-    resolved = shutil.which(config.command)
-    return _LauncherAvailabilityCompat(
-        available=resolved is not None,
-        mode="path" if resolved is not None else "missing",
-        detail=resolved,
-    )
 
 
 def build_launcher_options(
@@ -70,7 +50,7 @@ def build_launcher_options(
         if launcher_cfg.terminal:
             terminal_only_labels.append(launcher_cfg.label)
             continue
-        availability = _detect_launcher_compat(launcher_cfg)
+        availability = detect_launcher_compat(launcher_cfg)
         if availability.available:
             available.append(
                 LauncherOption(
@@ -102,6 +82,14 @@ def _render_project_detail(project_path: str) -> None:
             "re-index.",
             icon=":material/error:",
         )
+        if st.button(
+            "Back to overview",
+            icon=":material/arrow_back:",
+            type="primary",
+            width="stretch",
+            key="detail_back_to_overview",
+        ):
+            go_to_overview()
         return
 
     md = project.metadata
@@ -111,7 +99,7 @@ def _render_project_detail(project_path: str) -> None:
     _render_detail_metric_tiles(project)
     _render_detail_captions(project)
 
-    # PLAN.md S5: "Open in…" dropdown wired to launcher catalogue.
+    # "Open in..." dropdown wired to the launcher catalogue.
     cfg = _safe_load_config()
     if cfg is not None:
         st.subheader("Open in\u2026", anchor=False)
@@ -198,7 +186,7 @@ def _render_detail_captions(project: Project) -> None:
 
 
 def _render_launcher_dropdown(project: Project, cfg: Config) -> None:
-    """PLAN.md S5: '"Open in…" dropdown per project — driven by yaml config'.
+    """'Open in...' dropdown per project, driven by yaml config.
 
     Each non-terminal entry from `cfg.launchers` is shown with its
     label/icon. Click -> calls `launcher.launch()` and surfaces

@@ -13,6 +13,7 @@ Claude Code's `.claude/mcp.json`).
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -20,6 +21,11 @@ from mcp.server.fastmcp import FastMCP
 from armillary.cache import Cache
 from armillary.config import ConfigError, load_config
 from armillary.search import KhojConfig, KhojSearch, LiteralSearch, SearchHit
+
+# Hard limits to prevent MCP responses from exceeding token limits.
+_MAX_RESULTS_CAP = 200
+_PREVIEW_MAX_LEN = 120
+_RESPONSE_MAX_CHARS = 20_000
 
 mcp = FastMCP(
     "armillary",
@@ -50,12 +56,43 @@ def _project_context(project_name: str) -> dict[str, object]:
 
 def _hit_to_dict(hit: SearchHit, project_meta: dict[str, object]) -> dict[str, object]:
     """Convert a SearchHit + project metadata to a flat dict."""
+    preview = hit.preview
+    if len(preview) > _PREVIEW_MAX_LEN:
+        preview = preview[:_PREVIEW_MAX_LEN] + "…"
     return {
         **project_meta,
         "file": str(hit.path),
         "line": hit.line,
-        "preview": hit.preview,
+        "preview": preview,
     }
+
+
+def _serialize(items: list[dict[str, object]], dropped: int) -> str:
+    """Serialize items + optional truncation marker to compact JSON."""
+    payload: list[dict[str, object] | dict[str, int]] = list(items)
+    if dropped > 0:
+        payload.append({"_truncated": dropped})
+    return json.dumps(payload, separators=(",", ":"), default=str)
+
+
+def _safe_json(results: list[dict[str, object]], total: int, shown: int) -> str:
+    """Serialize results to compact JSON, truncating if over char limit."""
+    dropped = total - shown if shown < total else 0
+    output = _serialize(results, dropped)
+    if len(output) <= _RESPONSE_MAX_CHARS:
+        return output
+    while results:
+        results.pop()
+        dropped = total - len(results)
+        output = _serialize(results, dropped)
+        if len(output) <= _RESPONSE_MAX_CHARS:
+            return output
+    return _serialize(results, total)
+
+
+def _clamp_max_results(max_results: int) -> int:
+    """Keep public MCP tool limits within the supported inclusive range."""
+    return max(1, min(max_results, _MAX_RESULTS_CAP))
 
 
 def _get_project_roots() -> list[tuple[str, Path]]:
@@ -82,9 +119,11 @@ def armillary_search(query: str, max_results: int = 20) -> str:
     - "OPENAI_API_KEY" → finds where API keys are configured
     - "def parse_price" → finds price parsing functions
     """
+    max_results = _clamp_max_results(max_results)
     backend = LiteralSearch()
     results: list[dict[str, object]] = []
     project_roots = _get_project_roots()
+    total_hits = 0
 
     for name, root in project_roots:
         if len(results) >= max_results:
@@ -94,6 +133,7 @@ def armillary_search(query: str, max_results: int = 20) -> str:
             hits = backend.search(query, root=root, max_results=remaining)
         except Exception:  # noqa: BLE001
             continue
+        total_hits += len(hits)
         if hits:
             meta = _project_context(name)
             results.extend(_hit_to_dict(h, meta) for h in hits)
@@ -101,9 +141,7 @@ def armillary_search(query: str, max_results: int = 20) -> str:
     if not results:
         return f"No matches for '{query}' across {len(project_roots)} projects."
 
-    import json
-
-    return json.dumps(results[:max_results], indent=2, default=str)
+    return _safe_json(results[:max_results], total_hits, len(results[:max_results]))
 
 
 @mcp.tool()
@@ -124,6 +162,7 @@ def armillary_semantic(query: str, max_results: int = 10) -> str:
     - "web scraping approaches" → finds BeautifulSoup, Nokogiri, Selenium
     - "how to handle file uploads" → finds ActiveStorage, CarrierWave, Shrine
     """
+    max_results = _clamp_max_results(max_results)
     try:
         cfg = load_config()
     except ConfigError:
@@ -134,7 +173,7 @@ def armillary_semantic(query: str, max_results: int = 10) -> str:
             config=KhojConfig(
                 api_url=cfg.khoj.api_url,
                 api_key=cfg.khoj.api_key,
-                timeout=cfg.khoj.timeout_seconds,
+                timeout_seconds=cfg.khoj.timeout_seconds,
             ),
             fallback=LiteralSearch(),
         )
@@ -143,6 +182,7 @@ def armillary_semantic(query: str, max_results: int = 10) -> str:
 
     results: list[dict[str, object]] = []
     project_roots = _get_project_roots()
+    total_hits = 0
 
     for name, root in project_roots:
         if len(results) >= max_results:
@@ -152,6 +192,7 @@ def armillary_semantic(query: str, max_results: int = 10) -> str:
             hits = backend.search(query, root=root, max_results=remaining)
         except Exception:  # noqa: BLE001
             continue
+        total_hits += len(hits)
         if hits:
             meta = _project_context(name)
             results.extend(_hit_to_dict(h, meta) for h in hits)
@@ -161,9 +202,7 @@ def armillary_semantic(query: str, max_results: int = 10) -> str:
             f"No semantic matches for '{query}' across {len(project_roots)} projects."
         )
 
-    import json
-
-    return json.dumps(results[:max_results], indent=2, default=str)
+    return _safe_json(results[:max_results], total_hits, len(results[:max_results]))
 
 
 @mcp.tool()
@@ -180,8 +219,6 @@ def armillary_projects(status_filter: str | None = None) -> str:
     - armillary_projects(status_filter="ACTIVE") → only active projects
     - armillary_projects(status_filter="DORMANT") → forgotten projects
     """
-    import json
-
     with Cache() as cache:
         projects = cache.list_projects()
 
@@ -206,7 +243,7 @@ def armillary_projects(status_filter: str | None = None) -> str:
             }
         )
 
-    return json.dumps(rows, indent=2, default=str)
+    return _safe_json(rows, len(rows), len(rows))
 
 
 def run_server() -> None:

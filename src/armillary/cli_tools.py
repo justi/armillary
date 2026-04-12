@@ -1,0 +1,262 @@
+"""CLI commands: search, open, install-claude-bridge, mcp-serve.
+
+Extracted from cli.py to keep modules under 400 lines.
+"""
+
+from __future__ import annotations
+
+import typer
+from rich.console import Console
+
+from armillary import exporter, launcher
+from armillary.cache import Cache
+from armillary.cli import app
+from armillary.cli_helpers import _safe_load_config
+from armillary.config import Config, default_config_path
+from armillary.search import KhojConfig, KhojSearch, LiteralSearch
+
+
+@app.command()
+def search(
+    query: str = typer.Argument(..., help="Search query."),
+    project_filter: str | None = typer.Option(
+        None,
+        "--project",
+        "-p",
+        help="Restrict the search to projects matching this substring.",
+    ),
+    max_results: int = typer.Option(
+        50,
+        "--max",
+        "-n",
+        min=1,
+        max=500,
+        help="Maximum number of hits to print.",
+    ),
+    use_khoj: bool = typer.Option(
+        False,
+        "--khoj",
+        help=(
+            "Use the Khoj semantic search backend instead of ripgrep. "
+            "Falls back to ripgrep if Khoj is unreachable. Only enabled "
+            "if `khoj.enabled` is true in your config."
+        ),
+    ),
+) -> None:
+    """Search across indexed project files (literal `ripgrep` by default).
+
+    Without flags, runs `rg <query>` over every cached project (or a
+    subset filtered by `--project`). With `--khoj`, posts to the Khoj
+    REST API configured in `~/.config/armillary/config.yaml` and falls
+    back to ripgrep on any error so the dashboard never breaks.
+    """
+    cfg = _safe_load_config()
+    if cfg is None:
+        raise typer.Exit(2)
+
+    with Cache() as cache:
+        all_projects = cache.list_projects()
+
+    if project_filter:
+        needle = project_filter.lower()
+        projects = [p for p in all_projects if needle in p.name.lower()]
+    else:
+        projects = all_projects
+
+    if not projects:
+        typer.secho(
+            "No projects in cache. Run `armillary scan` first.",
+            fg=typer.colors.YELLOW,
+        )
+        return
+
+    backend = _build_search_backend(cfg, use_khoj=use_khoj)
+    if backend is None:
+        raise typer.Exit(2)
+
+    console = Console()
+    total_hits = 0
+    for project in projects:
+        try:
+            hits = backend.search(query, root=project.path, max_results=max_results)
+        except Exception as exc:  # noqa: BLE001 — KhojResponseError, URLError, etc.
+            typer.secho(
+                f"Search backend ({backend.name}) failed: {exc}. "
+                "Install ripgrep (`brew install ripgrep`) for an automatic "
+                "fallback, or check that the Khoj server is reachable.",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(2) from exc
+        if not hits:
+            continue
+        console.print(
+            f"[bold cyan]{project.name}[/bold cyan]  [dim]{project.path}[/dim]"
+        )
+        for hit in hits[:max_results]:
+            location = (
+                f"{hit.path}:{hit.line}" if hit.line is not None else str(hit.path)
+            )
+            console.print(f"  [magenta]{location}[/magenta]")
+            console.print(f"    {hit.preview}")
+            total_hits += 1
+            if total_hits >= max_results:
+                break
+        if total_hits >= max_results:
+            console.print(f"[dim](truncated at --max {max_results})[/dim]")
+            break
+
+    if total_hits == 0:
+        typer.secho(f"No matches for '{query}'.", fg=typer.colors.YELLOW)
+
+
+def _build_search_backend(
+    cfg: Config, *, use_khoj: bool
+) -> LiteralSearch | KhojSearch | None:
+    if not use_khoj:
+        if not LiteralSearch.is_available():
+            typer.secho(
+                "ripgrep (`rg`) is not on PATH. "
+                "Install it (`brew install ripgrep`) or run with `--khoj`.",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            return None
+        return LiteralSearch()
+
+    if not cfg.khoj.enabled:
+        typer.secho(
+            "Khoj is not enabled. Set `khoj.enabled: true` in "
+            f"{default_config_path()} first.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        return None
+
+    fallback: LiteralSearch | None = (
+        LiteralSearch() if LiteralSearch.is_available() else None
+    )
+    return KhojSearch(
+        config=KhojConfig(
+            api_url=cfg.khoj.api_url,
+            api_key=cfg.khoj.api_key,
+            timeout_seconds=cfg.khoj.timeout_seconds,
+        ),
+        fallback=fallback,
+    )
+
+
+@app.command("open")
+def open_project(
+    project_name: str = typer.Argument(
+        ...,
+        help="Project name (as shown by `armillary list`).",
+    ),
+    target: str = typer.Option(
+        "cursor",
+        "--target",
+        "-t",
+        help="Launcher id from your config (cursor, vscode, claude-code, ...).",
+    ),
+) -> None:
+    """Open a project in the configured launcher."""
+    cfg = _safe_load_config()
+    if cfg is None:
+        raise typer.Exit(2)
+
+    with Cache() as cache:
+        all_projects = cache.list_projects()
+
+    matches = [p for p in all_projects if project_name.lower() in p.name.lower()]
+    if not matches:
+        typer.secho(
+            f"No project in cache matches '{project_name}'. "
+            "Run `armillary list` to see what is indexed.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2)
+    if len(matches) > 1:
+        names = ", ".join(p.name for p in matches[:5])
+        suffix = "" if len(matches) <= 5 else f" (+{len(matches) - 5} more)"
+        typer.secho(
+            f"'{project_name}' is ambiguous: {names}{suffix}. Be more specific.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    project = matches[0]
+    result = launcher.launch(project, target, launchers=cfg.launchers)
+
+    if not result.ok:
+        typer.secho(result.error or "Launch failed.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(2)
+
+    typer.secho(
+        f"Opened {project.name} in {target}.",
+        fg=typer.colors.GREEN,
+    )
+
+
+@app.command("install-claude-bridge")
+def install_claude_bridge(
+    with_claude_md: bool = typer.Option(
+        False,
+        "--with-claude-md",
+        help=(
+            "Also append an `@armillary/repos-index.md` import line to "
+            "~/.claude/CLAUDE.md so every Claude Code session in your home "
+            "automatically loads the project table. Idempotent — safe to "
+            "re-run."
+        ),
+    ),
+) -> None:
+    """Write the repos-index for Claude Code at `~/.claude/armillary/repos-index.md`."""
+    bridge_path, written, appended = exporter.install_claude_bridge(
+        with_claude_md=with_claude_md,
+    )
+
+    if written == 0:
+        typer.secho(
+            f"Wrote {bridge_path} but the cache is empty. "
+            "Run `armillary scan` first, then re-run this command.",
+            fg=typer.colors.YELLOW,
+        )
+    else:
+        typer.secho(
+            f"Wrote {written} project(s) to {bridge_path}",
+            fg=typer.colors.GREEN,
+        )
+
+    if with_claude_md:
+        claude_md = bridge_path.parent.parent / "CLAUDE.md"
+        if appended:
+            typer.secho(
+                f"  ✓ Appended @armillary/repos-index.md import to {claude_md}",
+                fg=typer.colors.GREEN,
+            )
+        else:
+            typer.secho(
+                f"  · {claude_md} already imports armillary — left untouched.",
+                fg=typer.colors.CYAN,
+            )
+
+
+@app.command("mcp-serve")
+def mcp_serve() -> None:
+    """Start the MCP server (stdio transport) for AI coding agents.
+
+    Exposes three tools that Claude Code / Cursor / Codex can call:
+
+    - armillary_search — ripgrep literal search across all repos
+    - armillary_semantic — Khoj conceptual search (optional)
+    - armillary_projects — list all indexed projects with metadata
+
+    Configure in Claude Code's `.claude/mcp.json`:
+
+        { "armillary": { "command": "armillary", "args": ["mcp-serve"] } }
+    """
+    from armillary.mcp_server import run_server
+
+    run_server()

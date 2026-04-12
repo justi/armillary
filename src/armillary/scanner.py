@@ -1,6 +1,6 @@
 """Project auto-discovery — walk umbrella folders, return `Project` list.
 
-Rules (per PLAN.md §5 M1 Phase 3):
+Auto-discovery rules:
 
 1.  A directory containing a `.git` child  → `ProjectType.GIT`;
     stop descending (a repo is one project, not many).
