@@ -206,24 +206,37 @@ def _fill_git_fields(repo_path: Path, md: ProjectMetadata) -> None:
 _WORK_SESSION_GAP_SECONDS = 4 * 3600  # 4 hours
 
 
+_WORK_HOURS_COMMIT_LIMIT = 2000
+
+
 def _compute_commit_stats(repo: git.Repo) -> tuple[int, float]:
-    """Return (commit_count, estimated_work_hours) from the full log.
+    """Return (commit_count, estimated_work_hours).
 
-    Uses `git log --format=%at` via GitPython's `repo.git.log()`
-    which shells out to git — fast even on large repos because we
-    only ask for the committer timestamp, no diff computation.
+    Two separate git invocations, both fast:
 
-    Work-hours algorithm: sort all commit timestamps ascending, sum
-    the inter-commit gaps that are shorter than `_WORK_SESSION_GAP_SECONDS`.
-    Gaps longer than 8 h are assumed to be sleep / next day / break.
-    Result is rounded to one decimal place.
+    1. `git rev-list --count --all` for the exact commit count.
+       Reads from the packfile index — instant even on 100k+ repos.
+    2. `git log --format=%at -n 2000` for the work-hours estimate.
+       Limited to the most recent 2000 commits so large repos
+       (ensembl: 21k, matchmaker: 6k) don't block the scan for
+       seconds. 2000 commits covers months of active work which is
+       more than enough for an orientation metric.
+
+    Work-hours algorithm: sort timestamps ascending, sum inter-commit
+    gaps shorter than `_WORK_SESSION_GAP_SECONDS` (4 h). Gaps longer
+    than that are assumed to be breaks (lunch, sleep, next day).
     """
-    raw = repo.git.log("--format=%at", "--all")
-    if not raw.strip():
+    count_raw = repo.git.rev_list("--count", "--all")
+    commit_count = int(count_raw.strip()) if count_raw.strip() else 0
+
+    if commit_count == 0:
         return 0, 0.0
 
+    raw = repo.git.log("--format=%at", f"-n{_WORK_HOURS_COMMIT_LIMIT}")
+    if not raw.strip():
+        return commit_count, 0.0
+
     timestamps = sorted(int(ts) for ts in raw.strip().splitlines())
-    commit_count = len(timestamps)
 
     total_work_seconds = 0
     for i in range(1, len(timestamps)):
