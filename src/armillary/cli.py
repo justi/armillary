@@ -602,6 +602,25 @@ def install_claude_bridge(
             )
 
 
+@app.command("mcp-serve")
+def mcp_serve() -> None:
+    """Start the MCP server (stdio transport) for AI coding agents.
+
+    Exposes three tools that Claude Code / Cursor / Codex can call:
+
+    - armillary_search — ripgrep literal search across all repos
+    - armillary_semantic — Khoj conceptual search (optional)
+    - armillary_projects — list all indexed projects with metadata
+
+    Configure in Claude Code's `.claude/mcp.json`:
+
+        { "armillary": { "command": "armillary", "args": ["mcp-serve"] } }
+    """
+    from armillary.mcp_server import run_server
+
+    run_server()
+
+
 # Register commands from submodules — must come after `app` is defined.
 import armillary.cli_config  # noqa: F401, E402
 import armillary.cli_khoj  # noqa: F401, E402
