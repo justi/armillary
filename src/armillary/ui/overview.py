@@ -196,11 +196,10 @@ def _render_table(rows: list[OverviewRow]) -> None:
                 "Branch",
                 width="small",
             ),
-            "Dirty": st.column_config.NumberColumn(
+            "Dirty": st.column_config.TextColumn(
                 "Dirty",
-                format="%d",
                 width="small",
-                help="Unstaged + staged + untracked files",
+                help="Unstaged + staged + untracked files (empty = clean)",
             ),
             "Commits": st.column_config.ProgressColumn(
                 "Commits",

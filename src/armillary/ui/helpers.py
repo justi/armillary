@@ -51,12 +51,15 @@ class OverviewRow:
 
     def display_dict(self) -> dict[str, object]:
         """Dict with user-facing columns only (for st.dataframe)."""
+        # Dirty: 0 or None → empty string (clean repo = normal, no noise).
+        # Only non-zero values show — instantly spots what needs committing.
+        dirty_display = str(self.dirty) if self.dirty else ""
         return {
             "Status": self.status_label,
             "Type": self.type,
             "Name": self.name,
             "Branch": self.branch,
-            "Dirty": self.dirty,
+            "Dirty": dirty_display,
             "Commits": self.commits,
             "Work h": self.work_hours,
             "Umbrella": self.umbrella,
