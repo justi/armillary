@@ -7,12 +7,10 @@ from typing import Any
 
 import streamlit as st
 
-from armillary import metadata as metadata_mod
-from armillary import status as status_mod
+from armillary import scan_service
 from armillary.cache import Cache
 from armillary.config import Config, ConfigError, load_config
-from armillary.models import Project, ProjectType, UmbrellaFolder
-from armillary.scanner import scan as scan_umbrellas_fn
+from armillary.models import Project, UmbrellaFolder
 
 _STATUS_EMOJI = {
     "ACTIVE": "🟢",
@@ -83,11 +81,10 @@ def _shorten_home(path: Path) -> str:
 def _run_dashboard_scan(cfg: Config | None) -> tuple[bool, str]:
     """Walk the configured umbrellas, persist to cache, return status.
 
-    Mirrors the pipeline used by `cli.scan` and PR #16's
-    `_run_initial_scan_and_summary`: scanner -> metadata -> status compute
-    (with the `last_modified = max(fs, last_commit_ts)` lift for git
-    repos) -> cache.upsert. Then clears Streamlit's data caches so the
-    rerender shows the fresh data.
+    Delegates to :func:`scan_service.full_scan` which handles the full
+    pipeline: scanner -> metadata -> status compute -> cache.upsert +
+    prune. Then clears Streamlit's data caches so the rerender shows
+    the fresh data.
 
     Returns `(ok, message)`. The caller is responsible for `st.rerun()`.
 
@@ -109,22 +106,7 @@ def _run_dashboard_scan(cfg: Config | None) -> tuple[bool, str]:
             UmbrellaFolder(path=u.path, label=u.label, max_depth=u.max_depth)
             for u in cfg.umbrellas
         ]
-        projects = scan_umbrellas_fn(umbrellas)
-        metadata_mod.extract_all(projects)
-        for project in projects:
-            if project.metadata is None:
-                continue
-            if (
-                project.type is ProjectType.GIT
-                and project.metadata.last_commit_ts is not None
-                and project.metadata.last_commit_ts > project.last_modified
-            ):
-                project.last_modified = project.metadata.last_commit_ts
-            project.metadata.status = status_mod.compute_status(project)
-
-        with Cache() as cache:
-            cache.upsert(projects, write_metadata=True)
-            cache.prune_stale()
+        projects = scan_service.full_scan(umbrellas, write_metadata=True)
     except Exception as exc:  # noqa: BLE001 — surface error to the UI, not crash
         return False, f"Scan failed: {exc}"
 
@@ -152,7 +134,4 @@ def _load_project(project_path: str) -> Project | None:
     the overview rows so navigating into a detail page does not invalidate
     the table list."""
     with Cache() as cache:
-        for project in cache.list_projects():
-            if str(project.path) == project_path:
-                return project
-    return None
+        return cache.get_project(project_path)

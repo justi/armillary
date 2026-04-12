@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import contextlib
 import importlib.util
 import json
 import os
-import secrets
 import shlex
 import subprocess
 import sys
-import time
 from datetime import datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -20,7 +17,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from armillary import bootstrap, exporter, launcher, metadata, status
+from armillary import bootstrap, exporter, khoj_service, launcher, scan_service
 from armillary.cache import Cache
 from armillary.config import (
     Config,
@@ -28,7 +25,7 @@ from armillary.config import (
     default_config_path,
     load_config,
 )
-from armillary.models import Project, ProjectType, Status, UmbrellaFolder
+from armillary.models import ProjectType, Status, UmbrellaFolder
 from armillary.scanner import scan as scan_umbrellas
 from armillary.search import KhojConfig, KhojSearch, LiteralSearch
 
@@ -127,45 +124,10 @@ def _pre_start_scan() -> None:
         umbrellas = [
             UmbrellaFolder(path=u.path, max_depth=u.max_depth) for u in cfg.umbrellas
         ]
-        projects = scan_umbrellas(umbrellas)
-
-        # Load cached metadata so we can skip unchanged projects.
-        with Cache() as cache:
-            cached = {str(p.path): p for p in cache.list_projects()}
-
-        needs_extract: list[Project] = []
-        for project in projects:
-            cp = cached.get(str(project.path))
-            if (
-                cp is not None
-                and cp.metadata is not None
-                and abs((cp.last_modified - project.last_modified).total_seconds())
-                < 2  # filesystem mtime granularity
-            ):
-                project.metadata = cp.metadata
-            else:
-                needs_extract.append(project)
-
-        if needs_extract:
-            metadata.extract_all(needs_extract)
-
-        for project in needs_extract:
-            if project.metadata is None:
-                continue
-            if (
-                project.type is ProjectType.GIT
-                and project.metadata.last_commit_ts is not None
-                and project.metadata.last_commit_ts > project.last_modified
-            ):
-                project.last_modified = project.metadata.last_commit_ts
-            project.metadata.status = status.compute_status(project)
-
-        with Cache() as cache:
-            cache.upsert(projects, write_metadata=True)
-            cache.prune_stale()
+        projects, changed_count = scan_service.incremental_scan(umbrellas)
 
         typer.secho(
-            f"  ✓ {len(projects)} project(s), {len(needs_extract)} changed.",
+            f"  ✓ {len(projects)} project(s), {changed_count} changed.",
             fg=typer.colors.GREEN,
         )
     except Exception as exc:  # noqa: BLE001
@@ -254,44 +216,16 @@ def scan(
         )
         raise typer.Exit(2)
 
-    projects = scan_umbrellas(umbrellas)
-
-    if not no_metadata:
-        metadata.extract_all(projects)
-        for project in projects:
-            if project.metadata is None:
-                continue
-            # The scanner already excludes `.git/` from `last_modified` to
-            # avoid GitPython's `git status` side effect. But for a freshly
-            # cloned repo, every file has mtime = clone time, which makes
-            # the scanner's signal say "today" even though the last real
-            # activity was years ago. We therefore reconcile both signals:
-            # `last_modified` = max(scanner mtime, last_commit_ts).
-            #
-            # - Edit-after-commit:    scanner mtime > commit ts  → scanner wins ✓
-            # - Untouched since commit: scanner mtime ≈ commit ts → either
-            # - Freshly cloned old repo: scanner mtime > commit ts → scanner
-            #   wins ("today, I cloned this") which is actually fine — the
-            #   user explicitly chose to bring it onto disk today
-            #
-            # This matches the OR semantics of PLAN.md §5 status heuristic
-            # ("ACTIVE = commit in last 7 days OR file modification in last
-            # 7 days"). Status compute also uses both signals.
-            if (
-                project.type is ProjectType.GIT
-                and project.metadata.last_commit_ts is not None
-                and project.metadata.last_commit_ts > project.last_modified
-            ):
-                project.last_modified = project.metadata.last_commit_ts
-            project.metadata.status = status.compute_status(project)
+    if no_cache:
+        # No cache write: scan + enrich in-memory only.
+        projects = scan_umbrellas(umbrellas)
+        if not no_metadata:
+            scan_service.enrich(projects)
+    else:
+        projects = scan_service.full_scan(umbrellas, write_metadata=not no_metadata)
 
     payload = [p.model_dump(mode="json") for p in projects]
     typer.echo(json.dumps(payload, indent=2, ensure_ascii=False))
-
-    if not no_cache:
-        with Cache() as cache:
-            cache.upsert(projects, write_metadata=not no_metadata)
-            cache.prune_stale()
 
     if refresh_bridge:
         claude_dir = Path.home() / ".claude"
@@ -723,10 +657,10 @@ def install_khoj(
     separate terminal, then rerun `armillary config --init --force`
     (or flip the toggle in the dashboard Settings → Khoj tab).
     """
-    installer_cmd, installer_label = _pick_khoj_installer()
+    installer = khoj_service.pick_khoj_installer()
 
     typer.secho(
-        f"This will install Khoj via `{installer_label}`.",
+        f"This will install Khoj via `{installer.label}`.",
         fg=typer.colors.CYAN,
     )
     typer.echo(
@@ -734,7 +668,7 @@ def install_khoj(
         "This can take several minutes."
     )
     typer.echo(f"  Python:    {sys.executable}")
-    typer.echo(f"  Command:   {' '.join(installer_cmd)}")
+    typer.echo(f"  Command:   {' '.join(installer.cmd)}")
 
     if not non_interactive and not typer.confirm(
         "\n  Proceed?",
@@ -744,26 +678,26 @@ def install_khoj(
         raise typer.Exit(1)
 
     typer.secho("\nInstalling Khoj…", fg=typer.colors.CYAN)
-    result = subprocess.run(installer_cmd, check=False)
+    result = subprocess.run(installer.cmd, check=False)
 
     # If plain `python -m pip` failed with "No module named pip", try
     # to bootstrap pip via ensurepip and retry once. uv path already
     # succeeded or failed for its own reasons — do not second-guess it.
-    if result.returncode != 0 and installer_cmd[:3] == [sys.executable, "-m", "pip"]:
+    if result.returncode != 0 and installer.cmd[:3] == [sys.executable, "-m", "pip"]:
         typer.secho(
             "\npip install failed. Trying to bootstrap pip via ensurepip…",
             fg=typer.colors.YELLOW,
         )
-        bootstrap = subprocess.run(
+        bootstrap_result = subprocess.run(
             [sys.executable, "-m", "ensurepip", "--upgrade"],
             check=False,
         )
-        if bootstrap.returncode == 0:
+        if bootstrap_result.returncode == 0:
             typer.secho(
                 "  ✓ ensurepip OK — retrying pip install.",
                 fg=typer.colors.CYAN,
             )
-            result = subprocess.run(installer_cmd, check=False)
+            result = subprocess.run(installer.cmd, check=False)
 
     if result.returncode != 0:
         typer.secho(
@@ -813,12 +747,12 @@ def install_khoj(
         )
         raise typer.Exit(1)
 
-    _provision_khoj_postgres_container()
+    _provision_khoj_postgres_container_cli()
 
     # Generate / reuse local admin credentials so Khoj does not drop
     # into its interactive `Email: / Password:` prompt on first run.
-    admin_env = _ensure_khoj_admin_env()
-    admin_env_path = _khoj_admin_env_path()
+    admin_env = khoj_service.ensure_khoj_admin_env()
+    admin_env_path = khoj_service.khoj_admin_env_path()
     typer.echo("")
     typer.secho(
         f"✓ Khoj admin credentials at {admin_env_path}",
@@ -848,286 +782,60 @@ def install_khoj(
     )
 
 
-# --- Khoj docker / runner helpers -----------------------------------------
-
-_KHOJ_PG_CONTAINER = "khoj-pg"
-_KHOJ_PG_IMAGE = "pgvector/pgvector:pg15"
-_KHOJ_PG_VOLUME = "khoj-pg-data"
-_KHOJ_DB_NAME = "khoj"
-_KHOJ_DB_USER = "postgres"
-# The container is not exposed outside localhost; POSTGRES_PASSWORD is
-# a Docker-init default, not a secret. Using `_KHOJ_DB_USER` as the
-# value keeps the literal out of the source so secret scanners
-# (GitGuardian, gitleaks, trufflehog) do not flag it while preserving
-# the postgres/postgres convention that every pgvector/pgvector:pg15
-# tutorial assumes.
-_KHOJ_DB_PASSWORD = _KHOJ_DB_USER
-_KHOJ_DB_HOST = "localhost"
-
-# Non-default host port so we do NOT fight with an existing
-# `brew services start postgresql@*` or a system Postgres that owns
-# 5432. Inside the container Postgres still listens on 5432 — the
-# mapping is host:54322 → container:5432. Anyone already running a
-# host Postgres on 5432 can keep it; armillary just picks a dedicated
-# port. `start-khoj` exports POSTGRES_PORT=54322 so the Khoj Django
-# backend connects to the right process.
-_KHOJ_DB_PORT = "54322"
-_KHOJ_CONTAINER_PORT = "5432"
+# --- Khoj docker CLI wrapper -----------------------------------------------
 
 
-def _khoj_admin_env_path() -> Path:
-    """Where the auto-generated Khoj admin credentials live on disk.
+def _provision_khoj_postgres_container_cli() -> None:
+    """Provision the Khoj Postgres container with typer output.
 
-    Sits next to `config.yaml` so it travels with the rest of the
-    user's armillary state and inherits the same `ARMILLARY_CONFIG`
-    override for tests.
+    Wraps :func:`khoj_service.provision_postgres_container` and its
+    sub-steps with user-facing ``typer.secho`` messages.
     """
-    return default_config_path().parent / "khoj-admin.env"
-
-
-def _load_khoj_admin_env() -> dict[str, str] | None:
-    """Read `khoj-admin.env` into a dict, or None if it does not exist.
-
-    Format is `KEY=VALUE\\n` lines (no quoting, no shell escaping) —
-    deliberately minimal so users can inspect and edit the file by
-    hand without parsing concerns.
-    """
-    path = _khoj_admin_env_path()
-    if not path.is_file():
-        return None
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    env: dict[str, str] = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        env[key.strip()] = value.strip()
-    return env
-
-
-def _ensure_khoj_admin_env() -> dict[str, str]:
-    """Return the Khoj admin credentials, generating them on first call.
-
-    Policy: the container is local-only, the admin account exists
-    purely to satisfy Khoj's first-run initialisation, and we never
-    surface the password over the network. A 32-char url-safe random
-    password stored at 0600 is enough; users who want to rotate it
-    can delete the file and rerun `install-khoj`.
-
-    Subsequent calls are pure reads — we do NOT re-roll the password,
-    otherwise the stored admin in Postgres would drift from the env
-    and Khoj would hit "authentication failed" on every restart.
-    """
-    existing = _load_khoj_admin_env()
-    if (
-        existing
-        and existing.get("KHOJ_ADMIN_EMAIL")
-        and existing.get("KHOJ_ADMIN_PASSWORD")
-    ):
-        return existing
-
-    env = {
-        "KHOJ_ADMIN_EMAIL": "admin@armillary.local",
-        "KHOJ_ADMIN_PASSWORD": secrets.token_urlsafe(16),
-    }
-    path = _khoj_admin_env_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    body = "\n".join(f"{k}={v}" for k, v in env.items()) + "\n"
-    path.write_text(
-        "# armillary — auto-generated Khoj admin credentials\n"
-        "# Used by `armillary start-khoj` to initialise the local Khoj\n"
-        "# admin panel at http://localhost:42110/server/admin.\n"
-        "# Delete this file and rerun `armillary install-khoj` to rotate.\n" + body,
-        encoding="utf-8",
-    )
-    with contextlib.suppress(OSError):
-        path.chmod(0o600)
-    return env
-
-
-def _docker_container_state(name: str) -> str:
-    """Return "running", "stopped", or "missing" for a docker container."""
-    # `docker ps -a --filter name=^<name>$ --format {{.State}}` — the
-    # caret/dollar anchor prevents accidental prefix matches on
-    # "khoj-pg-backup" etc.
-    result = subprocess.run(
-        [
-            "docker",
-            "ps",
-            "-a",
-            "--filter",
-            f"name=^{name}$",
-            "--format",
-            "{{.State}}",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        return "missing"
-    state = result.stdout.strip().lower()
-    if not state:
-        return "missing"
-    if state == "running":
-        return "running"
-    return "stopped"
-
-
-def _docker_container_host_port(name: str) -> str | None:
-    """Return the host port currently mapped to the container's 5432.
-
-    Uses `docker port <name> 5432/tcp`, which prints lines like
-    `0.0.0.0:54322` — we keep just the port after the final colon.
-    Returns None if the container is missing or has no such mapping.
-    """
-    result = subprocess.run(
-        ["docker", "port", name, f"{_KHOJ_CONTAINER_PORT}/tcp"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        return None
-    first_line = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
-    if ":" not in first_line:
-        return None
-    return first_line.rsplit(":", 1)[-1]
-
-
-def _provision_khoj_postgres_container() -> None:
-    """Create (or reuse) the Khoj Postgres+pgvector docker container.
-
-    Idempotent:
-    - Missing              → `docker run -d --name khoj-pg …`
-    - Stopped, right port  → `docker start khoj-pg`
-    - Running, right port  → skip
-    - Wrong host port      → `docker rm -f khoj-pg` + recreate
-      (persistent volume `khoj-pg-data` keeps the embeddings across
-      the recreate — no data loss)
-
-    Always follows with a wait-for-ready loop and
-    `CREATE EXTENSION IF NOT EXISTS vector` so subsequent reruns just
-    confirm the DB is healthy.
-    """
-    state = _docker_container_state(_KHOJ_PG_CONTAINER)
     typer.secho(
-        f"Provisioning Postgres+pgvector container `{_KHOJ_PG_CONTAINER}`…",
+        f"Provisioning Postgres+pgvector container `{khoj_service.KHOJ_PG_CONTAINER}`…",
         fg=typer.colors.CYAN,
     )
-    typer.echo(f"  Image:     {_KHOJ_PG_IMAGE}")
-    typer.echo(f"  Volume:    {_KHOJ_PG_VOLUME} (persists embeddings)")
+    typer.echo(f"  Image:     {khoj_service.KHOJ_PG_IMAGE}")
+    typer.echo(f"  Volume:    {khoj_service.KHOJ_PG_VOLUME} (persists embeddings)")
     typer.echo(
-        f"  Port:      {_KHOJ_DB_HOST}:{_KHOJ_DB_PORT} "
-        f"→ container:{_KHOJ_CONTAINER_PORT}"
+        f"  Port:      {khoj_service.KHOJ_DB_HOST}:{khoj_service.KHOJ_DB_PORT} "
+        f"→ container:{khoj_service.KHOJ_CONTAINER_PORT}"
     )
 
-    # If the container exists, check whether its host-side port
-    # mapping matches what we want today. Historically armillary
-    # used 5432:5432, which collided with brew postgresql@14/@15 and
-    # led to "extension control file postgresql@14 not found" crashes
-    # (wrong process was answering psql). Recreate with the new port
-    # — the named volume survives so embeddings don't.
-    if state != "missing":
-        current_port = _docker_container_host_port(_KHOJ_PG_CONTAINER)
-        if current_port is not None and current_port != _KHOJ_DB_PORT:
-            typer.secho(
-                f"  · Existing container uses host port {current_port}, "
-                f"expected {_KHOJ_DB_PORT}.",
-                fg=typer.colors.YELLOW,
-            )
-            typer.secho(
-                f"  · Recreating `{_KHOJ_PG_CONTAINER}` with the new port "
-                f"(volume `{_KHOJ_PG_VOLUME}` persists — no data loss).",
-                fg=typer.colors.CYAN,
-            )
-            rm = subprocess.run(
-                ["docker", "rm", "-f", _KHOJ_PG_CONTAINER],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if rm.returncode != 0:
-                typer.secho(
-                    f"  ✗ docker rm -f failed: {rm.stderr.strip()}",
-                    fg=typer.colors.RED,
-                    err=True,
-                )
-                raise typer.Exit(rm.returncode or 2)
-            state = "missing"  # fall through to the "Creating new" branch
+    try:
+        prov = khoj_service.provision_postgres_container()
+    except RuntimeError as exc:
+        typer.secho(f"  ✗ {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(2) from exc
 
-    if state == "running":
-        typer.secho("  ✓ Container already running.", fg=typer.colors.GREEN)
-    elif state == "stopped":
+    if prov.port_was_stale:
         typer.secho(
-            "  · Container exists but stopped — starting.",
+            f"  · Existing container uses host port {prov.old_port}, "
+            f"expected {khoj_service.KHOJ_DB_PORT}.",
+            fg=typer.colors.YELLOW,
+        )
+        typer.secho(
+            f"  · Recreating `{khoj_service.KHOJ_PG_CONTAINER}` with the new port "
+            f"(volume `{khoj_service.KHOJ_PG_VOLUME}` persists — no data loss).",
             fg=typer.colors.CYAN,
         )
-        r = subprocess.run(
-            ["docker", "start", _KHOJ_PG_CONTAINER],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if r.returncode != 0:
-            typer.secho(
-                f"  ✗ docker start failed: {r.stderr.strip()}",
-                fg=typer.colors.RED,
-                err=True,
-            )
-            raise typer.Exit(r.returncode or 2)
+
+    if prov.status == "reused":
+        typer.secho("  ✓ Container already running.", fg=typer.colors.GREEN)
+    elif prov.status == "started":
         typer.secho("  ✓ Container started.", fg=typer.colors.GREEN)
-    else:
-        typer.secho("  · Creating new container.", fg=typer.colors.CYAN)
-        r = subprocess.run(
-            [
-                "docker",
-                "run",
-                "-d",
-                "--name",
-                _KHOJ_PG_CONTAINER,
-                "-p",
-                f"{_KHOJ_DB_PORT}:{_KHOJ_CONTAINER_PORT}",
-                "-e",
-                f"POSTGRES_DB={_KHOJ_DB_NAME}",
-                "-e",
-                f"POSTGRES_USER={_KHOJ_DB_USER}",
-                "-e",
-                f"POSTGRES_PASSWORD={_KHOJ_DB_PASSWORD}",
-                "-v",
-                f"{_KHOJ_PG_VOLUME}:/var/lib/postgresql/data",
-                _KHOJ_PG_IMAGE,
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if r.returncode != 0:
-            typer.secho(
-                f"  ✗ docker run failed: {r.stderr.strip()}",
-                fg=typer.colors.RED,
-                err=True,
-            )
-            typer.echo(
-                "  Common causes: port 5432 already in use (brew postgres?), "
-                "docker daemon not running, disk full."
-            )
-            raise typer.Exit(r.returncode or 2)
+    elif prov.status in ("created", "recreated"):
         typer.secho("  ✓ Container created.", fg=typer.colors.GREEN)
 
     # Wait for the DB to accept connections before we touch it.
     typer.secho("  · Waiting for Postgres to accept connections…", fg=typer.colors.CYAN)
-    if not _wait_for_postgres_ready(timeout_s=30):
+    if not khoj_service.wait_for_postgres_ready(timeout_s=30):
         typer.secho(
             "  ✗ Postgres did not become ready within 30 seconds.",
             fg=typer.colors.RED,
             err=True,
         )
-        typer.echo(f"  Check logs with: docker logs {_KHOJ_PG_CONTAINER}")
+        typer.echo(f"  Check logs with: docker logs {khoj_service.KHOJ_PG_CONTAINER}")
         raise typer.Exit(2)
     typer.secho("  ✓ Postgres ready.", fg=typer.colors.GREEN)
 
@@ -1136,79 +844,15 @@ def _provision_khoj_postgres_container() -> None:
         "  · Enabling pgvector extension (CREATE EXTENSION IF NOT EXISTS vector)…",
         fg=typer.colors.CYAN,
     )
-    r = subprocess.run(
-        [
-            "docker",
-            "exec",
-            _KHOJ_PG_CONTAINER,
-            "psql",
-            "-U",
-            _KHOJ_DB_USER,
-            "-d",
-            _KHOJ_DB_NAME,
-            "-c",
-            "CREATE EXTENSION IF NOT EXISTS vector;",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if r.returncode != 0:
+    pgv = khoj_service.enable_pgvector()
+    if not pgv.ok:
         typer.secho(
-            f"  ✗ Could not enable pgvector: {r.stderr.strip()}",
+            f"  ✗ Could not enable pgvector: {pgv.error}",
             fg=typer.colors.RED,
             err=True,
         )
-        raise typer.Exit(r.returncode or 2)
+        raise typer.Exit(2)
     typer.secho("  ✓ pgvector enabled.", fg=typer.colors.GREEN)
-
-
-def _wait_for_postgres_ready(*, timeout_s: int = 30) -> bool:
-    """Poll `pg_isready` inside the khoj-pg container until it answers.
-
-    The `pgvector/pgvector:pg15` image ships `pg_isready`, so we call
-    it via `docker exec` rather than trying a raw TCP connect from the
-    host (which would add a psycopg2 dependency just for this probe).
-    Returns True on success, False on timeout.
-    """
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        result = subprocess.run(
-            [
-                "docker",
-                "exec",
-                _KHOJ_PG_CONTAINER,
-                "pg_isready",
-                "-U",
-                _KHOJ_DB_USER,
-                "-d",
-                _KHOJ_DB_NAME,
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode == 0:
-            return True
-        time.sleep(0.5)
-    return False
-
-
-def _khoj_binary_path() -> Path | None:
-    """Resolve the `khoj` executable that this armillary venv installed.
-
-    Prefers `<sys.executable>/../khoj` because that's exactly where
-    `uv pip install --python <interp>` dropped it. Falls back to
-    `shutil.which("khoj")` for the rare case the user activated the
-    venv and wants the shell-resolved path.
-    """
-    venv_bin = Path(sys.executable).parent / "khoj"
-    if venv_bin.is_file() and os.access(venv_bin, os.X_OK):
-        return venv_bin
-    on_path = shutil_which("khoj")
-    if on_path:
-        return Path(on_path)
-    return None
 
 
 @app.command("start-khoj")
@@ -1234,10 +878,10 @@ def start_khoj() -> None:
         )
         raise typer.Exit(1)
 
-    state = _docker_container_state(_KHOJ_PG_CONTAINER)
+    state = khoj_service.docker_container_state(khoj_service.KHOJ_PG_CONTAINER)
     if state == "missing":
         typer.secho(
-            f"Container `{_KHOJ_PG_CONTAINER}` does not exist.\n"
+            f"Container `{khoj_service.KHOJ_PG_CONTAINER}` does not exist.\n"
             "Run `armillary install-khoj` to create it.",
             fg=typer.colors.RED,
             err=True,
@@ -1245,32 +889,28 @@ def start_khoj() -> None:
         raise typer.Exit(1)
     if state == "stopped":
         typer.secho(
-            f"Starting stopped container `{_KHOJ_PG_CONTAINER}`…",
+            f"Starting stopped container `{khoj_service.KHOJ_PG_CONTAINER}`…",
             fg=typer.colors.CYAN,
         )
-        r = subprocess.run(
-            ["docker", "start", _KHOJ_PG_CONTAINER],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if r.returncode != 0:
+        start_result = khoj_service.start_container(khoj_service.KHOJ_PG_CONTAINER)
+        if not start_result.ok:
             typer.secho(
-                f"docker start failed: {r.stderr.strip()}",
+                f"docker start failed: {start_result.error}",
                 fg=typer.colors.RED,
                 err=True,
             )
-            raise typer.Exit(r.returncode or 2)
+            raise typer.Exit(2)
 
-    if not _wait_for_postgres_ready(timeout_s=15):
+    if not khoj_service.wait_for_postgres_ready(timeout_s=15):
         typer.secho(
-            f"Postgres did not become ready. Check: docker logs {_KHOJ_PG_CONTAINER}",
+            f"Postgres did not become ready. Check: docker logs "
+            f"{khoj_service.KHOJ_PG_CONTAINER}",
             fg=typer.colors.RED,
             err=True,
         )
         raise typer.Exit(2)
 
-    khoj_bin = _khoj_binary_path()
+    khoj_bin = khoj_service.khoj_binary_path()
     if khoj_bin is None:
         typer.secho(
             "`khoj` binary not found. Run `armillary install-khoj` first.",
@@ -1282,11 +922,11 @@ def start_khoj() -> None:
     env = os.environ.copy()
     env.update(
         {
-            "POSTGRES_HOST": _KHOJ_DB_HOST,
-            "POSTGRES_PORT": _KHOJ_DB_PORT,
-            "POSTGRES_DB": _KHOJ_DB_NAME,
-            "POSTGRES_USER": _KHOJ_DB_USER,
-            "POSTGRES_PASSWORD": _KHOJ_DB_PASSWORD,
+            "POSTGRES_HOST": khoj_service.KHOJ_DB_HOST,
+            "POSTGRES_PORT": khoj_service.KHOJ_DB_PORT,
+            "POSTGRES_DB": khoj_service.KHOJ_DB_NAME,
+            "POSTGRES_USER": khoj_service.KHOJ_DB_USER,
+            "POSTGRES_PASSWORD": khoj_service.KHOJ_DB_PASSWORD,
             # PLAN.md §14: armillary promises "no telemetry, no
             # analytics, no external calls". Khoj defaults to sending
             # usage stats to khoj.dev — `KHOJ_TELEMETRY_DISABLE=true`
@@ -1299,9 +939,7 @@ def start_khoj() -> None:
     )
     # Inject auto-generated admin credentials so Khoj does NOT drop
     # into its interactive "Email: / Password:" prompt on first run.
-    # `_ensure_khoj_admin_env` is a read-through — generates on first
-    # call, subsequent calls just load the existing file.
-    env.update(_ensure_khoj_admin_env())
+    env.update(khoj_service.ensure_khoj_admin_env())
 
     # Redirect Khoj's stdout/stderr to a log file instead of the
     # terminal. Khoj's startup logs are noisy and confusing —
@@ -1317,7 +955,7 @@ def start_khoj() -> None:
         "  Subsequent starts reuse the cache and take a few seconds."
     )
     typer.echo(f"  Logs:   {log_path}")
-    typer.echo(f"  Admin:  {_khoj_admin_env_path()}")
+    typer.echo(f"  Admin:  {khoj_service.khoj_admin_env_path()}")
 
     with open(log_path, "w", encoding="utf-8") as log_fh:
         # `--non-interactive` flips Khoj's `initialization()` into a
@@ -1331,13 +969,35 @@ def start_khoj() -> None:
             stdout=log_fh,
             stderr=subprocess.STDOUT,
         )
-        _wait_for_khoj_or_die(proc, log_path)
+        health = khoj_service.wait_for_khoj_health(proc, log_path)
 
-        typer.secho(
-            "✓ Khoj running at http://localhost:42110 — Ctrl-C to stop.",
-            fg=typer.colors.GREEN,
-            bold=True,
-        )
+        if health.process_exited:
+            typer.secho(
+                "\n✗ Khoj exited before becoming ready.",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            _show_log_tail(log_path)
+            raise typer.Exit(health.exit_code or 2)
+
+        if health.timed_out:
+            typer.secho(
+                "\n⚠ Khoj did not respond to health check within 120s.",
+                fg=typer.colors.YELLOW,
+            )
+            typer.echo(
+                "  The server is still running (may be downloading models).\n"
+                "  Wait for it or check the log:"
+            )
+            _show_log_tail(log_path)
+
+        if health.ready:
+            typer.secho(
+                "✓ Khoj running at http://localhost:42110 — Ctrl-C to stop.",
+                fg=typer.colors.GREEN,
+                bold=True,
+            )
+
         try:
             proc.wait()
         except KeyboardInterrupt:
@@ -1353,84 +1013,13 @@ def start_khoj() -> None:
         raise typer.Exit(proc.returncode or 0)
 
 
-def _wait_for_khoj_or_die(
-    proc: subprocess.Popen[bytes],
-    log_path: Path,
-    *,
-    timeout_s: int = 120,
-) -> None:
-    """Poll Khoj's /api/health until it responds 200 or the process dies.
-
-    First start can take 30–60 s (model downloads + Django migrations),
-    so 120 s is generous. On timeout we do NOT kill the server — it may
-    still be downloading — but we warn the user and point them at the
-    log file for diagnosis.
-    """
-    from urllib.request import urlopen as _urlopen
-
-    health_url = "http://127.0.0.1:42110/api/health"
-    deadline = time.monotonic() + timeout_s
-
-    while time.monotonic() < deadline:
-        # Check if the process crashed before becoming ready.
-        if proc.poll() is not None:
-            typer.secho(
-                "\n✗ Khoj exited before becoming ready.",
-                fg=typer.colors.RED,
-                err=True,
-            )
-            _show_log_tail(log_path)
-            raise typer.Exit(proc.returncode or 2)
-
-        try:
-            with _urlopen(health_url, timeout=1) as resp:
-                if resp.status == 200:
-                    return
-        except Exception:  # noqa: BLE001 — any failure = not ready yet
-            pass
-        time.sleep(1)
-
-    # Timeout — server still running but health not answering.
-    typer.secho(
-        f"\n⚠ Khoj did not respond to health check within {timeout_s}s.",
-        fg=typer.colors.YELLOW,
-    )
-    typer.echo(
-        "  The server is still running (may be downloading models).\n"
-        "  Wait for it or check the log:"
-    )
-    _show_log_tail(log_path)
-
-
 def _show_log_tail(log_path: Path, lines: int = 8) -> None:
     """Print the last N lines of a log file to help the user debug."""
-    try:
-        all_lines = log_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return
-    tail = all_lines[-lines:] if len(all_lines) > lines else all_lines
+    tail = khoj_service.show_log_tail(log_path, lines=lines)
     if tail:
         typer.echo(f"  Last {len(tail)} lines of {log_path}:")
         for line in tail:
             typer.echo(f"    {line}")
-
-
-def _pick_khoj_installer() -> tuple[list[str], str]:
-    """Return `(argv, human_label)` for the best available installer.
-
-    Prefers `uv pip install` because it works on `uv venv`-created
-    environments that do not ship pip. Falls back to `python -m pip`
-    if uv is not on PATH. A pip-less interpreter will still fail fast
-    in `install_khoj`; the `ensurepip` retry lives there, not here,
-    so callers / tests can inspect what we tried without running it.
-    """
-    uv = shutil_which("uv")
-    if uv:
-        return (
-            [uv, "pip", "install", "--python", sys.executable, "khoj"],
-            "uv pip install",
-        )
-    return ([sys.executable, "-m", "pip", "install", "khoj"], "pip install")
 
 
 @app.command()
@@ -1794,26 +1383,7 @@ def _run_initial_scan_and_summary(
 
     try:
         umbrellas = [UmbrellaFolder(path=c.path, max_depth=3) for c in chosen]
-        projects = scan_umbrellas(umbrellas)
-        metadata.extract_all(projects)
-        for project in projects:
-            if project.metadata is None:
-                continue
-            # Same `last_modified = max(fs, last_commit_ts)` lift used by
-            # `armillary scan` — see cli.scan() for the rationale.
-            if (
-                project.type is ProjectType.GIT
-                and project.metadata.last_commit_ts is not None
-                and project.metadata.last_commit_ts > project.last_modified
-            ):
-                project.last_modified = project.metadata.last_commit_ts
-            project.metadata.status = status.compute_status(project)
-
-        with Cache() as cache:
-            # Init is "fresh setup" — start from a clean slate so no
-            # rows from a removed umbrella linger in the dashboard.
-            cache.clear_projects()
-            cache.upsert(projects, write_metadata=True)
+        projects = scan_service.initial_scan(umbrellas)
     except Exception as exc:  # noqa: BLE001 — never abort init on scan failure
         typer.secho(
             f"⚠ Initial scan failed: {exc}",

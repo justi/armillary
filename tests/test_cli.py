@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from armillary import cli
+from armillary import cli, khoj_service
 from armillary.cache import Cache
 from armillary.cli import app
 
@@ -2063,8 +2063,9 @@ def _set_which(
     uv: str | None = "/fake/bin/uv",
     docker: str | None = "/fake/bin/docker",
 ) -> None:
-    """Stub `cli.shutil_which` so install-khoj / start-khoj see (or miss)
-    `uv` and `docker` deterministically regardless of the CI box."""
+    """Stub `cli.shutil_which` and `khoj_service.shutil_which` so
+    install-khoj / start-khoj see (or miss) `uv` and `docker`
+    deterministically regardless of the CI box."""
     real_which = cli.shutil_which
 
     def fake(name: str) -> str | None:
@@ -2075,11 +2076,12 @@ def _set_which(
         return real_which(name)
 
     monkeypatch.setattr(cli, "shutil_which", fake)
+    monkeypatch.setattr(khoj_service, "shutil_which", fake)
 
 
 def _no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     """Kill `time.sleep` in the wait-for-postgres loop so tests fly."""
-    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(khoj_service.time, "sleep", lambda _s: None)
 
 
 def test_install_khoj_provisions_docker_container_happy_path(
@@ -2106,6 +2108,7 @@ def test_install_khoj_provisions_docker_container_happy_path(
         return _FakeProc(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(khoj_service.subprocess, "run", fake_run)
 
     result = runner.invoke(app, ["install-khoj", "-y"])
     assert result.exit_code == 0, result.stdout
@@ -2154,6 +2157,7 @@ def test_install_khoj_reuses_running_container(
         return _FakeProc(returncode=0)
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(khoj_service.subprocess, "run", fake_run)
 
     result = runner.invoke(app, ["install-khoj", "-y"])
     assert result.exit_code == 0, result.stdout
@@ -2194,6 +2198,7 @@ def test_install_khoj_recreates_container_when_host_port_is_stale(
         return _FakeProc(returncode=0)
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(khoj_service.subprocess, "run", fake_run)
 
     result = runner.invoke(app, ["install-khoj", "-y"])
     assert result.exit_code == 0, result.stdout
@@ -2230,6 +2235,7 @@ def test_install_khoj_starts_stopped_container(
         return _FakeProc(returncode=0)
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(khoj_service.subprocess, "run", fake_run)
 
     result = runner.invoke(app, ["install-khoj", "-y"])
     assert result.exit_code == 0, result.stdout
@@ -2252,6 +2258,7 @@ def test_install_khoj_without_docker_exits_with_clear_message(
         return _FakeProc(returncode=0)
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(khoj_service.subprocess, "run", fake_run)
 
     result = runner.invoke(app, ["install-khoj", "-y"])
     assert result.exit_code != 0
@@ -2279,6 +2286,7 @@ def test_install_khoj_aborts_without_confirm(
         return _FakeProc(returncode=0)
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(khoj_service.subprocess, "run", fake_run)
 
     result = runner.invoke(app, ["install-khoj"], input="\n")
     assert result.exit_code != 0
@@ -2317,6 +2325,7 @@ def test_install_khoj_bootstraps_pip_via_ensurepip_when_missing(
         return _FakeProc(returncode=0)
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(khoj_service.subprocess, "run", fake_run)
 
     result = runner.invoke(app, ["install-khoj", "-y"])
     assert result.exit_code == 0, result.stdout
@@ -2346,6 +2355,7 @@ def test_install_khoj_surfaces_pip_failure(
         return _FakeProc(returncode=1)
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(khoj_service.subprocess, "run", fake_run)
 
     result = runner.invoke(app, ["install-khoj", "-y"])
     assert result.exit_code == 1
@@ -2377,8 +2387,9 @@ def test_install_khoj_errors_when_postgres_never_becomes_ready(
         return _FakeProc(returncode=0)
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(khoj_service.subprocess, "run", fake_run)
     # Shrink the timeout so the test does not hang
-    monkeypatch.setattr(cli.time, "monotonic", iter([0.0, 1.0, 31.0]).__next__)
+    monkeypatch.setattr(khoj_service.time, "monotonic", iter([0.0, 1.0, 31.0]).__next__)
 
     result = runner.invoke(app, ["install-khoj", "-y"])
     assert result.exit_code != 0
@@ -2457,8 +2468,10 @@ def _setup_start_khoj_env(
     fake_python = fake_bin / "python"
     fake_python.write_text("")
     monkeypatch.setattr(cli.sys, "executable", str(fake_python))
+    monkeypatch.setattr(khoj_service.sys, "executable", str(fake_python))
 
-    # Mock subprocess.run (docker calls) + subprocess.Popen (khoj).
+    # Mock subprocess.run (docker calls via khoj_service) +
+    # subprocess.Popen (khoj binary launch via cli).
     popen_captures: list[_FakePopen] = []
 
     def fake_run(cmd: list[str], **kwargs: Any) -> _FakeProc:
@@ -2472,6 +2485,7 @@ def _setup_start_khoj_env(
         return fp
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(khoj_service.subprocess, "run", fake_run)
     monkeypatch.setattr(cli.subprocess, "Popen", fake_popen)
 
     # Mock the health-check urlopen inside _wait_for_khoj_or_die.
@@ -2579,6 +2593,7 @@ def test_start_khoj_without_container_tells_user_to_install(
         return _FakeProc(returncode=0)
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(khoj_service.subprocess, "run", fake_run)
 
     result = runner.invoke(app, ["start-khoj"])
     assert result.exit_code != 0
@@ -2608,6 +2623,7 @@ def test_start_khoj_restarts_stopped_container(
         return _FakeProc(returncode=0)
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(khoj_service.subprocess, "run", fake_run)
 
     result = runner.invoke(app, ["start-khoj"])
     assert result.exit_code == 0, result.stdout
@@ -2628,6 +2644,7 @@ def test_start_khoj_errors_when_binary_missing(
     fake_python = fake_bin / "python"
     fake_python.write_text("")
     monkeypatch.setattr(cli.sys, "executable", str(fake_python))
+    monkeypatch.setattr(khoj_service.sys, "executable", str(fake_python))
 
     # Also pretend `khoj` is not on PATH
     real_which = cli.shutil_which
@@ -2640,6 +2657,7 @@ def test_start_khoj_errors_when_binary_missing(
         return real_which(name)
 
     monkeypatch.setattr(cli, "shutil_which", no_khoj)
+    monkeypatch.setattr(khoj_service, "shutil_which", no_khoj)
 
     def fake_run(cmd: list[str], **kwargs: Any) -> _FakeProc:
         if cmd[:2] == ["docker", "ps"]:
@@ -2647,6 +2665,7 @@ def test_start_khoj_errors_when_binary_missing(
         return _FakeProc(returncode=0)
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(khoj_service.subprocess, "run", fake_run)
 
     result = runner.invoke(app, ["start-khoj"])
     assert result.exit_code != 0

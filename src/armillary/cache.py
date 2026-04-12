@@ -334,6 +334,26 @@ class Cache:
         rows = self.conn.execute(sql, params).fetchall()
         return [_row_to_project(r) for r in rows]
 
+    def get_project(self, path: str | Path) -> Project | None:
+        """Single project by canonical path. Returns None if not cached."""
+        row = self.conn.execute(
+            "SELECT path, name, type, umbrella, last_modified_ts, "
+            "status, branch, last_commit_ts, last_commit_author, "
+            "dirty_count, metadata_json "
+            "FROM projects WHERE path = ?",
+            (str(path),),
+        ).fetchone()
+        if row is None:
+            return None
+        return _row_to_project(row)
+
+    def last_scan_time(self) -> float | None:
+        """Latest ``last_scanned_at`` across all rows. None if cache is empty."""
+        row = self.conn.execute("SELECT MAX(last_scanned_at) FROM projects").fetchone()
+        if row is None or row[0] is None:
+            return None
+        return row[0]
+
     def count(self) -> int:
         return self.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
 

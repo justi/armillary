@@ -105,10 +105,7 @@ def _render_header_caption() -> None:
     # Last scan time = max(last_scanned_at) across all rows. Cheap query.
     try:
         with Cache() as cache:
-            row = cache.conn.execute(
-                "SELECT MAX(last_scanned_at) FROM projects"
-            ).fetchone()
-        last_scanned_ts = row[0] if row else None
+            last_scanned_ts = cache.last_scan_time()
     except Exception:  # noqa: BLE001 — never let a header crash the page
         last_scanned_ts = None
 
