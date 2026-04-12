@@ -115,17 +115,7 @@ def _render_header_caption() -> None:
 
 
 def _render_export_for_ai_button() -> None:
-    """Download-current-projects-as-markdown button for AI tools.
-
-    Renders the markdown in-memory (no tempfile, no disk write) and hands
-    it to `st.download_button`. The markdown is exactly what
-    `armillary export-index` would emit, so the same document works in
-    Claude Code, Codex, or any other tool that reads `.md` files.
-
-    On click, Streamlit serves the bytes straight to the browser.
-    Nothing on disk changes — that's what
-    `armillary install-claude-bridge` is for.
-    """
+    """Download-current-projects-as-markdown button for AI tools."""
     try:
         with Cache() as cache:
             projects = cache.list_projects()
@@ -139,13 +129,13 @@ def _render_export_for_ai_button() -> None:
         file_name="repos-index.md",
         mime="text/markdown",
         help=(
-            "Downloads a markdown table. Paste into Claude Code or any "
-            "AI chat. For automatic integration, run "
-            "`armillary install-claude-bridge` from the terminal."
+            "Downloads a markdown snapshot of the current cache. "
+            "For Claude Code auto-load, use Settings -> Integrations."
         ),
         use_container_width=True,
         disabled=not projects,
     )
+    st.caption("Claude Code auto-load: Settings -> Integrations")
 
 
 def _apply_filters(

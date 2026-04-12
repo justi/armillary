@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 import streamlit as st
 
+from armillary import exporter as exporter_mod
 from armillary.config import (
     Config,
     ConfigError,
@@ -28,7 +29,7 @@ def _render_settings_page() -> None:
     """In-UI editor for the YAML config — umbrellas, launchers, Khoj.
 
     Replaces the "edit YAML by hand" workflow per the user-stated rule
-    "what you can't click in the UI doesn't exist". Three tabs, each
+    "what you can't click in the UI doesn't exist". Four tabs, each
     with its own form + Save button. Inline test affordances for the
     things that can be tested without leaving the page (launcher PATH
     check, Khoj health probe).
@@ -66,13 +67,15 @@ def _render_settings_page() -> None:
             st.rerun()
         return
 
-    tabs = st.tabs(["Umbrellas", "Launchers", "Khoj"])
+    tabs = st.tabs(["Umbrellas", "Launchers", "Khoj", "Integrations"])
     with tabs[0]:
         _render_settings_umbrellas(cfg)
     with tabs[1]:
         _render_settings_launchers(cfg)
     with tabs[2]:
         _render_settings_khoj(cfg)
+    with tabs[3]:
+        _render_settings_integrations()
 
 
 # ----- helpers -------------------------------------------------------------
@@ -515,6 +518,105 @@ def _render_khoj_admin_credentials() -> None:
     with cred_cols[1], st.expander("Show password"):
         st.code(password, language=None)
     st.caption(f"Stored at `{khoj_admin_env_path()}`")
+
+
+# ----- Integrations tab ----------------------------------------------------
+
+
+def _render_settings_integrations() -> None:
+    st.subheader("Integrations")
+    st.caption(
+        "Connect armillary outputs to external tools. "
+        "Downloads are one-off snapshots; integrations write to a stable path."
+    )
+    _render_claude_code_integration()
+
+
+def _render_claude_code_integration() -> None:
+    status = exporter_mod.get_claude_bridge_status()
+
+    st.markdown("**Claude Code**")
+    st.write(
+        "The Claude bridge writes your current project index to "
+        "`~/.claude/armillary/repos-index.md`. "
+        "Optionally it also adds `@armillary/repos-index.md` to "
+        "`~/.claude/CLAUDE.md`, so new Claude Code sessions load that index "
+        "automatically."
+    )
+
+    with st.expander("How this works", expanded=not status.bridge_installed):
+        st.markdown(
+            "1. `Install / Update` writes a markdown snapshot from the current cache.\n"
+            "2. If CLAUDE.md wiring is enabled, armillary adds the import line once.\n"
+            "3. Re-run `Install / Update` after a new scan when you want to refresh "
+            "the snapshot used by Claude Code."
+        )
+        st.caption(
+            "This action only adds wiring. It does not remove an existing "
+            "`@armillary/repos-index.md` import."
+        )
+
+    status_cols = st.columns(2)
+    with status_cols[0]:
+        st.metric(
+            "Bridge file",
+            "Installed" if status.bridge_installed else "Not installed",
+        )
+    with status_cols[1]:
+        if status.claude_md_wired:
+            wiring_status = "Active"
+        elif status.claude_md_exists:
+            wiring_status = "Not wired"
+        else:
+            wiring_status = "Missing"
+        st.metric("CLAUDE.md wiring", wiring_status)
+
+    st.caption(f"Bridge path: `{status.bridge_path}`")
+    st.caption(f"CLAUDE.md: `{status.claude_md_path}`")
+
+    wire_claude_md = st.checkbox(
+        "Also add wiring to ~/.claude/CLAUDE.md if missing",
+        value=status.claude_md_wired,
+        key="claude_bridge_wire_claude_md",
+        help=(
+            "Adds `@armillary/repos-index.md` if it is not already present. "
+            "Unchecking this does not remove existing wiring."
+        ),
+    )
+
+    action_label = (
+        "Update Claude bridge" if status.bridge_installed else "Install Claude bridge"
+    )
+    if st.button(
+        action_label,
+        key="claude_bridge_install",
+        type="primary",
+        use_container_width=True,
+    ):
+        try:
+            bridge_path, written, appended = exporter_mod.install_claude_bridge(
+                with_claude_md=wire_claude_md
+            )
+        except Exception as exc:  # noqa: BLE001 — surface install errors inline
+            st.error(f"Could not install Claude bridge: {exc}")
+            return
+
+        refreshed = exporter_mod.get_claude_bridge_status()
+        st.success(
+            f"Wrote {written} project(s) to `{bridge_path}`."
+            + (
+                " Added the import line to CLAUDE.md."
+                if wire_claude_md and appended
+                else " CLAUDE.md was already wired."
+                if wire_claude_md and refreshed.claude_md_wired
+                else ""
+            )
+        )
+        if written == 0:
+            st.warning(
+                "The bridge is installed, but the cache is empty. Run a scan and then "
+                "use `Update Claude bridge` to refresh the snapshot."
+            )
 
 
 def _test_khoj_connection(api_url: str, api_key: str, timeout: float) -> None:

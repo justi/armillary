@@ -13,6 +13,7 @@ it as fast as `armillary list` and as side-effect-free.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -117,10 +118,46 @@ _CLAUDE_MD_MARKER = (
 )
 
 
+@dataclass(frozen=True)
+class ClaudeBridgeStatus:
+    """Current on-disk state of the Claude Code bridge integration."""
+
+    bridge_path: Path
+    bridge_installed: bool
+    claude_md_path: Path
+    claude_md_exists: bool
+    claude_md_wired: bool
+
+
 def claude_bridge_path(home: Path | None = None) -> Path:
     """Canonical location of the Claude Code bridge repos-index."""
     home = (home or Path.home()).expanduser()
     return home / ".claude" / _BRIDGE_SUBDIR / _BRIDGE_FILENAME
+
+
+def claude_md_path(home: Path | None = None) -> Path:
+    """Canonical top-level `CLAUDE.md` path in the user's home."""
+    home = (home or Path.home()).expanduser()
+    return home / ".claude" / "CLAUDE.md"
+
+
+def get_claude_bridge_status(home: Path | None = None) -> ClaudeBridgeStatus:
+    """Inspect whether the Claude bridge file and CLAUDE.md wiring exist."""
+    bridge = claude_bridge_path(home)
+    claude_md = claude_md_path(home)
+    wired = False
+    if claude_md.exists():
+        try:
+            wired = _CLAUDE_MD_IMPORT_LINE in claude_md.read_text(encoding="utf-8")
+        except OSError:
+            wired = False
+    return ClaudeBridgeStatus(
+        bridge_path=bridge,
+        bridge_installed=bridge.exists(),
+        claude_md_path=claude_md,
+        claude_md_exists=claude_md.exists(),
+        claude_md_wired=wired,
+    )
 
 
 def install_claude_bridge(
@@ -147,7 +184,7 @@ def install_claude_bridge(
 
     appended = False
     if with_claude_md:
-        claude_md = bridge_path.parent.parent / "CLAUDE.md"
+        claude_md = claude_md_path(home)
         appended = _ensure_claude_md_import(claude_md)
 
     return bridge_path, written, appended

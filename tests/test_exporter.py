@@ -389,3 +389,37 @@ def test_install_claude_bridge_repairs_marker_only_state(tmp_path: Path) -> None
     )
     assert appended is True
     assert "@armillary/repos-index.md" in claude_md.read_text()
+
+
+def test_get_claude_bridge_status_when_nothing_is_installed(tmp_path: Path) -> None:
+    from armillary.exporter import get_claude_bridge_status
+
+    fake_home = tmp_path / "home"
+
+    status = get_claude_bridge_status(fake_home)
+
+    assert status.bridge_installed is False
+    assert status.claude_md_exists is False
+    assert status.claude_md_wired is False
+    assert status.bridge_path == fake_home / ".claude" / "armillary" / "repos-index.md"
+    assert status.claude_md_path == fake_home / ".claude" / "CLAUDE.md"
+
+
+def test_get_claude_bridge_status_detects_existing_install_and_wiring(
+    tmp_path: Path,
+) -> None:
+    from armillary.exporter import get_claude_bridge_status, install_claude_bridge
+
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude").mkdir(parents=True)
+
+    db_path = tmp_path / "cache.db"
+    with Cache(db_path=db_path) as cache:
+        cache.upsert([_project("solo")])
+
+    install_claude_bridge(home=fake_home, db_path=db_path, with_claude_md=True)
+    status = get_claude_bridge_status(fake_home)
+
+    assert status.bridge_installed is True
+    assert status.claude_md_exists is True
+    assert status.claude_md_wired is True
