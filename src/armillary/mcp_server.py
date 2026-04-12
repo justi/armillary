@@ -177,8 +177,6 @@ def armillary_projects(status_filter: str | None = None) -> str:
     - armillary_projects(status_filter="ACTIVE") → only active projects
     - armillary_projects(status_filter="DORMANT") → forgotten projects
     """
-    import json
-
     with Cache() as cache:
         projects = cache.list_projects()
 
