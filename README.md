@@ -111,6 +111,7 @@ Skip this if ripgrep is enough — armillary works perfectly without Khoj.
 | `armillary start` | Incremental scan + Streamlit dashboard |
 | `armillary scan` | Full scan of all umbrellas, persist to cache |
 | `armillary list` | Rich terminal table with `--status`, `--type`, `--umbrella` filters |
+| `armillary next` | What should I work on today? 3 suggestions: momentum, zombies, forgotten gold |
 | `armillary search "<query>"` | ripgrep across all projects, optional `--khoj` semantic backend |
 | `armillary open <name>` | Launch project in configured editor (`--target cursor`/`vscode`/`zed`/...) |
 | `armillary install-claude-bridge` | Write compact `~/.claude/armillary/repos-index.md` + optional CLAUDE.md import |
@@ -120,10 +121,11 @@ Skip this if ripgrep is enough — armillary works perfectly without Khoj.
 
 ## MCP server for AI coding agents
 
-armillary exposes three MCP tools that Claude Code / Cursor / Codex can call:
+armillary exposes four MCP tools that Claude Code / Cursor / Codex can call:
 
 | Tool | Backend | Use case | Speed |
 |---|---|---|---|
+| `armillary_next` | SQLite cache | What should I work on today? Momentum, zombies, forgotten gold | instant |
 | `armillary_search` | ripgrep | Exact matches: function names, imports, error messages | <10ms |
 | `armillary_semantic` | Khoj | Conceptual: "authentication patterns", "scraping approaches" | ~500ms |
 | `armillary_projects` | SQLite cache | List all projects with metadata, optional status filter | instant |
@@ -156,8 +158,8 @@ Every result includes project metadata (path, status, description) so the AI age
 ```bash
 uv sync --extra dev
 
-# 305 tests covering scanner / metadata / status / cache / config /
-# launcher / search / exporter / bootstrap / CLI / MCP
+# 313 tests covering scanner / metadata / status / cache / config /
+# launcher / search / exporter / bootstrap / CLI / MCP / next
 .venv/bin/python -m pytest
 
 # lint + format

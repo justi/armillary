@@ -243,12 +243,81 @@ def install_claude_bridge(
             )
 
 
+_CATEGORY_ICONS = {"momentum": "🔥", "zombie": "⚠️", "forgotten_gold": "💀"}
+
+
+@app.command("next")
+def next_command(
+    skip: str | None = typer.Option(
+        None,
+        "--skip",
+        help="Project name to dismiss from suggestions for 30 days.",
+    ),
+) -> None:
+    """What should you work on today?
+
+    Shows up to 3 suggestions based on your project activity:
+    momentum (keep going), zombies (kill or ship), and forgotten
+    gold (high-effort dormant projects worth revisiting with AI).
+
+    Use --skip <name> to dismiss a project for 30 days.
+    """
+    from armillary.cache import Cache
+    from armillary.next_service import get_suggestions, skip_project
+
+    if skip:
+        with Cache() as cache:
+            matches = [
+                p for p in cache.list_projects() if skip.lower() in p.name.lower()
+            ]
+        if not matches:
+            typer.secho(f"No project matches '{skip}'.", fg=typer.colors.RED, err=True)
+            raise typer.Exit(2)
+        if len(matches) > 1:
+            names = ", ".join(p.name for p in matches[:5])
+            suffix = f" (+{len(matches) - 5} more)" if len(matches) > 5 else ""
+            typer.secho(
+                f"'{skip}' is ambiguous: {names}{suffix}. Be more specific.",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(2)
+        skip_project(str(matches[0].path))
+        typer.secho(f"Skipped {matches[0].name} for 30 days.", fg=typer.colors.CYAN)
+        return
+
+    suggestions = get_suggestions()
+
+    if not suggestions:
+        typer.secho(
+            "No suggestions — cache is empty or everything is skipped. "
+            "Run `armillary scan` first.",
+            fg=typer.colors.YELLOW,
+        )
+        return
+
+    from armillary.cli_helpers import _shorten_home
+
+    console = Console()
+    for s in suggestions:
+        icon = _CATEGORY_ICONS.get(s.category, "•")
+        short_path = _shorten_home(s.project.path)
+        console.print(
+            f"\n{icon} [bold]{s.project.name}[/bold]  [dim]{short_path}[/dim]"
+        )
+        console.print(f"  {s.reason}")
+        console.print(f"  [dim]→ cd {short_path}[/dim]")
+        if s.category == "forgotten_gold":
+            console.print(f"  [dim]→ armillary next --skip {s.project.name}[/dim]")
+
+
 @app.command("mcp-serve")
 def mcp_serve() -> None:
     """Start the MCP server (stdio transport) for AI coding agents.
 
-    Exposes three tools that Claude Code / Cursor / Codex can call:
+    Exposes four tools that Claude Code / Cursor / Codex can call:
 
+    - armillary_next — what should I work on today? (momentum/zombie/gold)
     - armillary_search — ripgrep literal search across all repos
     - armillary_semantic — Khoj conceptual search (optional)
     - armillary_projects — list all indexed projects with metadata
