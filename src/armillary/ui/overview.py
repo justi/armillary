@@ -1,0 +1,220 @@
+"""Overview page — table of all cached projects with filters and search."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import streamlit as st
+
+from armillary import __version__
+from armillary import exporter as exporter_mod
+from armillary.cache import Cache, default_db_path
+from armillary.config import Config, default_config_path
+from armillary.ui.helpers import (
+    _load_overview_rows,
+    _run_dashboard_scan,
+    _safe_load_config,
+    _shorten_home,
+)
+from armillary.ui.search import _render_search_section
+from armillary.ui.sidebar import _render_sidebar
+
+
+def _render_overview() -> None:
+    title_col, export_col = st.columns([5, 2])
+    with title_col:
+        st.title("🔭 armillary")
+    with export_col:
+        _render_export_for_ai_button()
+    _render_header_caption()
+
+    cfg = _safe_load_config()
+    rows = _load_overview_rows()
+
+    # Render the sidebar BEFORE branching on empty cache so the user can
+    # always reach the Settings / Reload / Scan-now affordances, even on
+    # a brand-new install with zero indexed projects. The sidebar
+    # gracefully handles empty rows by skipping the filter widgets.
+    filters = _render_sidebar(rows, cfg)
+    name_filter = filters.pop("name_substring", "")
+
+    if not rows:
+        _render_empty_cache_state(cfg)
+        return
+
+    # Top-level search bar — runs ripgrep across cached projects on demand.
+    _render_search_section(rows, cfg)
+
+    filtered = _apply_filters(rows, filters=filters, search=name_filter)
+    _render_summary_metrics(filtered)
+    st.divider()
+
+    if not filtered:
+        st.warning("No projects match the current filters.")
+        return
+
+    _render_table(filtered)
+
+
+def _render_empty_cache_state(cfg: Config | None) -> None:
+    """Show a friendly first-launch screen with a real "Scan now" button.
+
+    Replaces the old text hint that told the user to "go to the terminal" —
+    that violated the rule "what you can't click in the UI doesn't exist".
+    """
+    st.subheader("🪐 Cache is empty")
+    st.write(
+        "armillary needs to walk the filesystem at least once to discover "
+        "your projects. Click the button below to run a scan against the "
+        "umbrellas in your config."
+    )
+
+    can_scan = cfg is not None and bool(cfg.umbrellas)
+
+    col_btn, col_help = st.columns([1, 2])
+    with col_btn:
+        if st.button(
+            "🔁 Scan filesystem now",
+            use_container_width=True,
+            disabled=not can_scan,
+            key="empty_state_scan",
+        ):
+            with st.spinner("Scanning…"):
+                ok, message = _run_dashboard_scan(cfg)
+            if ok:
+                st.success(message)
+                st.rerun()
+            else:
+                st.error(message)
+    with col_help:
+        if can_scan:
+            st.caption(
+                f"Will scan: {', '.join(_shorten_home(u.path) for u in cfg.umbrellas)}"
+            )
+        else:
+            st.warning(
+                "No umbrellas configured. Run `armillary config --init` "
+                "from your terminal first."
+            )
+
+
+def _render_header_caption() -> None:
+    """Sub-title line with version, last scan time, and a config link."""
+    parts = [f"v{__version__}"]
+
+    # Last scan time = max(last_scanned_at) across all rows. Cheap query.
+    try:
+        with Cache() as cache:
+            row = cache.conn.execute(
+                "SELECT MAX(last_scanned_at) FROM projects"
+            ).fetchone()
+        last_scanned_ts = row[0] if row else None
+    except Exception:  # noqa: BLE001 — never let a header crash the page
+        last_scanned_ts = None
+
+    if last_scanned_ts:
+        from datetime import datetime as _dt
+
+        when = _dt.fromtimestamp(last_scanned_ts).strftime("%Y-%m-%d %H:%M")
+        parts.append(f"last scan: {when}")
+
+    parts.append(f"config: `{_shorten_home(default_config_path())}`")
+    parts.append(f"cache: `{_shorten_home(default_db_path())}`")
+
+    st.caption(" · ".join(parts))
+
+
+def _render_export_for_ai_button() -> None:
+    """Download-current-projects-as-markdown button for AI tools.
+
+    Renders the markdown in-memory (no tempfile, no disk write) and hands
+    it to `st.download_button`. The markdown is exactly what
+    `armillary export-index` would emit, so the same document works in
+    Claude Code, Codex, or any other tool that reads `.md` files.
+
+    On click, Streamlit serves the bytes straight to the browser.
+    Nothing on disk changes — that's what
+    `armillary install-claude-bridge` is for.
+    """
+    try:
+        with Cache() as cache:
+            projects = cache.list_projects()
+    except Exception:  # noqa: BLE001 — never let the header crash the page
+        projects = []
+
+    markdown = exporter_mod.render_repos_index(projects)
+    st.download_button(
+        label="📤 Export for AI",
+        data=markdown,
+        file_name="repos-index.md",
+        mime="text/markdown",
+        help=(
+            "Download a markdown table of every cached project. Drop it "
+            "into a Claude Code session, a Codex prompt, or paste it "
+            "into any AI chat. For automatic integration, run "
+            "`armillary install-claude-bridge` from the terminal."
+        ),
+        use_container_width=True,
+        disabled=not projects,
+    )
+
+
+def _apply_filters(
+    rows: list[dict[str, Any]],
+    *,
+    filters: dict[str, list[str]],
+    search: str,
+) -> list[dict[str, Any]]:
+    out = rows
+    if filters["status"]:
+        out = [r for r in out if r["_status_raw"] in filters["status"]]
+    if filters["type"]:
+        out = [r for r in out if r["Type"] in filters["type"]]
+    if filters["umbrella"]:
+        out = [r for r in out if r["Umbrella"] in filters["umbrella"]]
+    if search:
+        needle = search.lower()
+        out = [r for r in out if needle in r["Name"].lower()]
+    return out
+
+
+def _render_summary_metrics(rows: list[dict[str, Any]]) -> None:
+    counts: dict[str, int] = {}
+    for r in rows:
+        counts[r["_status_raw"]] = counts.get(r["_status_raw"], 0) + 1
+    cols = st.columns(5)
+    cols[0].metric("Total", len(rows))
+    cols[1].metric("Active", counts.get("ACTIVE", 0))
+    cols[2].metric("Paused", counts.get("PAUSED", 0))
+    cols[3].metric("Dormant", counts.get("DORMANT", 0))
+    cols[4].metric(
+        "Ideas",
+        counts.get("IDEA", 0) + counts.get("IN_PROGRESS", 0),
+    )
+
+
+def _render_table(rows: list[dict[str, Any]]) -> None:
+    display = [{k: v for k, v in r.items() if not k.startswith("_")} for r in rows]
+    event = st.dataframe(
+        display,
+        width="stretch",
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        column_config={
+            "Last modified": st.column_config.DatetimeColumn(
+                "Last modified",
+                format="YYYY-MM-DD HH:mm",
+            ),
+            "Dirty": st.column_config.NumberColumn("Dirty", format="%d"),
+            "Commits": st.column_config.NumberColumn("Commits", format="%d"),
+            "Work h": st.column_config.NumberColumn("Work h", format="%.1f"),
+        },
+    )
+
+    selection = getattr(event, "selection", None)
+    selected_rows = getattr(selection, "rows", []) if selection else []
+    if selected_rows:
+        idx = selected_rows[0]
+        st.query_params["project"] = rows[idx]["_path"]
+        st.rerun()
