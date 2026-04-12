@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import shlex
+import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -19,10 +21,18 @@ from armillary.config import (
     default_config_path,
     load_config,
 )
-from armillary.ui.actions import go_to_overview, save_config_and_refresh
+from armillary.ui.actions import save_config_and_refresh
 from armillary.ui.helpers import _shorten_home
 
 _SETTINGS_TOAST_KEY = "_settings_toast"
+
+
+@dataclass(frozen=True)
+class _LauncherAvailabilityCompat:
+    available: bool
+    mode: str
+    detail: str | None = None
+    app_name: str | None = None
 
 
 def _render_settings_page() -> None:
@@ -37,13 +47,14 @@ def _render_settings_page() -> None:
     Loading the page itself is read-only — the only filesystem writes
     happen on explicit "Save" button clicks.
     """
+    from armillary.ui.sidebar import _render_nav_sidebar
+
+    _render_nav_sidebar()
+
     # P1.2: Show toast feedback from the previous save/add/remove action.
     toast_msg = st.session_state.pop(_SETTINGS_TOAST_KEY, None)
     if toast_msg:
         st.toast(toast_msg)
-
-    if st.button("← Back to overview", key="settings_back"):
-        go_to_overview()
 
     st.title("⚙️ Settings")
     st.caption(f"Editing `{_shorten_home(default_config_path())}`")
@@ -97,6 +108,25 @@ def _clear_launcher_widget_keys(ids: list[str]) -> None:
     for target_id in ids:
         for suffix in ("label", "command", "icon", "terminal", "args"):
             st.session_state.pop(f"launcher_{suffix}_{target_id}", None)
+
+
+def _detect_launcher_compat(config: LauncherConfig) -> _LauncherAvailabilityCompat:
+    """Use the new launcher detection when available, else degrade gracefully.
+
+    Streamlit can temporarily keep an older `armillary.launcher` module in
+    memory across hot reloads. In that case the new UI must not crash on a
+    missing `detect_launcher` symbol — fall back to the old PATH-only check
+    until the process is restarted.
+    """
+    detect = getattr(launcher_mod, "detect_launcher", None)
+    if callable(detect):
+        return detect(config)
+    resolved = shutil.which(config.command)
+    return _LauncherAvailabilityCompat(
+        available=resolved is not None,
+        mode="path" if resolved is not None else "missing",
+        detail=resolved,
+    )
 
 
 # ----- Umbrellas tab -------------------------------------------------------
@@ -242,7 +272,7 @@ def _render_settings_launchers(cfg: Config) -> None:
 
     for target_id in sorted(cfg.launchers.keys()):
         launcher = cfg.launchers[target_id]
-        availability = launcher_mod.detect_launcher(launcher)
+        availability = _detect_launcher_compat(launcher)
         if availability.mode == "path":
             status = "🟢 CLI on PATH"
         elif availability.mode == "macos-app":
@@ -307,7 +337,7 @@ def _render_settings_launchers(cfg: Config) -> None:
                 except ValueError as exc:
                     st.error(f"Could not parse args: {exc}")
                     test_args = launcher.args
-                test_availability = launcher_mod.detect_launcher(
+                test_availability = _detect_launcher_compat(
                     LauncherConfig(
                         label=new_label,
                         command=new_command,

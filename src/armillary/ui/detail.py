@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,7 +12,6 @@ import streamlit as st
 from armillary import launcher as launcher_mod
 from armillary.config import Config, LauncherConfig
 from armillary.models import Project
-from armillary.ui.actions import go_to_overview
 from armillary.ui.helpers import (
     _STATUS_EMOJI,
     _load_project,
@@ -28,6 +28,27 @@ class LauncherOption:
     label: str
     availability_mode: str
     detail: str | None = None
+
+
+@dataclass(frozen=True)
+class _LauncherAvailabilityCompat:
+    available: bool
+    mode: str
+    detail: str | None = None
+    app_name: str | None = None
+
+
+def _detect_launcher_compat(config: LauncherConfig) -> _LauncherAvailabilityCompat:
+    """Use the new launcher detection when available, else fall back to PATH."""
+    detect = getattr(launcher_mod, "detect_launcher", None)
+    if callable(detect):
+        return detect(config)
+    resolved = shutil.which(config.command)
+    return _LauncherAvailabilityCompat(
+        available=resolved is not None,
+        mode="path" if resolved is not None else "missing",
+        detail=resolved,
+    )
 
 
 def build_launcher_options(
@@ -49,7 +70,7 @@ def build_launcher_options(
         if launcher_cfg.terminal:
             terminal_only_labels.append(launcher_cfg.label)
             continue
-        availability = launcher_mod.detect_launcher(launcher_cfg)
+        availability = _detect_launcher_compat(launcher_cfg)
         if availability.available:
             available.append(
                 LauncherOption(
@@ -67,23 +88,22 @@ def build_launcher_options(
 
 
 def _render_project_detail(project_path: str) -> None:
+    from armillary.ui.sidebar import _render_nav_sidebar
+
+    _render_nav_sidebar()
+
     project = _load_project(project_path)
     if project is None:
         project_name = Path(project_path).name
         st.error(
             f"**{project_name}** not found in cache.\n\n"
-            "The cache may be stale. Click **Reload from cache** in the "
-            "sidebar, or run `armillary scan` from your terminal to "
+            "The cache may be stale. Click **🔄 Reload from cache** in "
+            "the sidebar, or run `armillary scan` from your terminal to "
             "re-index."
         )
-        if st.button("← Back to overview", type="primary"):
-            go_to_overview()
         return
 
     md = project.metadata
-
-    if st.button("← Back to overview"):
-        go_to_overview()
 
     st.title(project.name)
 
@@ -239,10 +259,7 @@ def _render_launcher_dropdown(project: Project, cfg: Config) -> None:
             st.error(result.error or "Launch failed.")
 
     if app_labels:
-        st.caption(
-            "Detected via macOS app bundle: "
-            f"{', '.join(app_labels)}"
-        )
+        st.caption(f"Detected via macOS app bundle: {', '.join(app_labels)}")
     if missing_labels:
         st.caption(f"Still not detected: {', '.join(missing_labels)}")
 
