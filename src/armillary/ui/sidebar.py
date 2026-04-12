@@ -2,34 +2,31 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import streamlit as st
 
 from armillary.config import Config
 from armillary.ui.helpers import (
+    OverviewRow,
     _load_overview_rows,
     _load_project,
     _run_dashboard_scan,
 )
 
 
-def _render_sidebar(rows: list[dict[str, Any]], cfg: Config | None) -> dict[str, Any]:
+def _render_sidebar(
+    rows: list[OverviewRow], cfg: Config | None
+) -> dict[str, list[str] | str]:
     status_pick: list[str] = []
     type_pick: list[str] = []
     umbrella_pick: list[str] = []
     name_substring = ""
 
     with st.sidebar:
-        # Filter widgets are only useful when there is something to filter.
-        # On the empty-cache state we still render the sidebar (so the user
-        # can reach Settings / Reload / Scan-now), just without the filter
-        # multiselects pointing at empty option lists.
         if rows:
             st.header("Filters")
-            statuses = sorted({r["_status_raw"] for r in rows if r["_status_raw"]})
-            types = sorted({r["Type"] for r in rows})
-            umbrellas = sorted({r["Umbrella"] for r in rows})
+            statuses = sorted({r.status_raw for r in rows if r.status_raw})
+            types = sorted({r.type for r in rows})
+            umbrellas = sorted({r.umbrella for r in rows})
 
             status_pick = st.multiselect("Status", statuses)
             type_pick = st.multiselect("Type", types)

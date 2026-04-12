@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 import streamlit as st
 
@@ -21,23 +22,62 @@ _STATUS_EMOJI = {
 }
 
 
+# --- typed view model ------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class OverviewRow:
+    """Typed view model for one row in the overview table.
+
+    Replaces the old ``dict[str, Any]`` so every consumer has
+    auto-complete, type checking, and a stable contract instead of
+    stringly-typed key lookups. Frozen + hashable so Streamlit's
+    ``st.cache_data`` can serialise it without surprises.
+    """
+
+    status_label: str  # e.g. "🟢 ACTIVE" or "—"
+    status_raw: str  # e.g. "ACTIVE" or "" (for filters)
+    type: str
+    name: str
+    branch: str
+    dirty: int | None
+    commits: int | None
+    work_hours: float | None
+    umbrella: str
+    last_modified: datetime
+    path: str  # canonical path string
+
+    def display_dict(self) -> dict[str, object]:
+        """Dict with user-facing columns only (for st.dataframe)."""
+        return {
+            "Status": self.status_label,
+            "Type": self.type,
+            "Name": self.name,
+            "Branch": self.branch,
+            "Dirty": self.dirty,
+            "Commits": self.commits,
+            "Work h": self.work_hours,
+            "Umbrella": self.umbrella,
+            "Last modified": self.last_modified,
+        }
+
+
 # --- data loading ----------------------------------------------------------
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def _load_overview_rows() -> list[dict[str, Any]]:
-    """Read the cache once per minute and return rows as plain dicts.
+def _load_overview_rows() -> list[OverviewRow]:
+    """Read the cache once per minute and return typed rows.
 
-    Returning dicts (rather than `Project` instances) keeps the cached
-    payload trivially hashable and pickle-friendly so Streamlit's data
-    cache works without surprises.
+    ``OverviewRow`` is a frozen dataclass — hashable and pickle-friendly
+    so Streamlit's data cache works without surprises.
     """
     with Cache() as cache:
         projects = cache.list_projects()
     return [_project_to_row(p) for p in projects]
 
 
-def _project_to_row(p: Project) -> dict[str, Any]:
+def _project_to_row(p: Project) -> OverviewRow:
     md = p.metadata
     status_value = md.status.value if md and md.status else None
     status_label = (
@@ -45,28 +85,22 @@ def _project_to_row(p: Project) -> dict[str, Any]:
         if status_value
         else "—"
     )
-    # `dirty_count` stays None when metadata was never extracted (e.g.
-    # `armillary scan --no-metadata` or a repo whose extraction failed).
-    # Coercing it to 0 would lie — the dashboard would claim the working
-    # tree is clean even though it never looked. Let Streamlit's
-    # NumberColumn render the absence as an empty cell instead.
     dirty_value = md.dirty_count if md and md.dirty_count is not None else None
     commit_count = md.commit_count if md and md.commit_count is not None else None
     work_hours = md.work_hours if md and md.work_hours is not None else None
-    return {
-        "Status": status_label,
-        "Type": p.type.value,
-        "Name": p.name,
-        "Branch": (md.branch if md else None) or "—",
-        "Dirty": dirty_value,
-        "Commits": commit_count,
-        "Work h": work_hours,
-        "Umbrella": _shorten_home(p.umbrella),
-        "Last modified": p.last_modified,
-        # Hidden columns used by the row-click handler.
-        "_path": str(p.path),
-        "_status_raw": status_value or "",
-    }
+    return OverviewRow(
+        status_label=status_label,
+        status_raw=status_value or "",
+        type=p.type.value,
+        name=p.name,
+        branch=(md.branch if md else None) or "—",
+        dirty=dirty_value,
+        commits=commit_count,
+        work_hours=work_hours,
+        umbrella=_shorten_home(p.umbrella),
+        last_modified=p.last_modified,
+        path=str(p.path),
+    )
 
 
 def _shorten_home(path: Path) -> str:

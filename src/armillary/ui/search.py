@@ -14,11 +14,12 @@ from armillary.search import (
     LiteralSearch,
     SearchHit,
 )
+from armillary.ui.helpers import OverviewRow
 
 _SEARCH_STATE_KEY = "armillary_search_state"
 
 
-def _render_search_section(rows: list[dict[str, Any]], cfg: Config | None) -> None:
+def _render_search_section(rows: list[OverviewRow], cfg: Config | None) -> None:
     """Top-level search across all cached projects.
 
     PLAN.md S5: 'Global search bar at the top — first iteration:
@@ -37,7 +38,7 @@ def _render_search_section(rows: list[dict[str, Any]], cfg: Config | None) -> No
     - max hits number input (1..500, default 50)
     - Search submit button
     """
-    project_options = ["(all projects)"] + sorted(r["Name"] for r in rows)
+    project_options = ["(all projects)"] + sorted(r.name for r in rows)
     khoj_available = cfg is not None and cfg.khoj.enabled
 
     with st.form("search_form", clear_on_submit=False):
@@ -105,7 +106,7 @@ def _render_search_section(rows: list[dict[str, Any]], cfg: Config | None) -> No
 
 def _run_search_and_store(
     *,
-    rows: list[dict[str, Any]],
+    rows: list[OverviewRow],
     cfg: Config | None,
     query: str,
     project_pick: str | None,
@@ -144,17 +145,17 @@ def _run_search_and_store(
 
     # Restrict the projects we iterate to either the selected one or all.
     if project_pick is not None:
-        target_rows = [r for r in rows if r["Name"] == project_pick]
+        target_rows = [r for r in rows if r.name == project_pick]
     else:
         target_rows = rows
 
-    hits_by_project: list[tuple[dict[str, Any], list[SearchHit]]] = []
+    hits_by_project: list[tuple[OverviewRow, list[SearchHit]]] = []
     total_hits = 0
     with st.spinner(f"Searching {len(target_rows)} project(s) for '{query}'…"):
         for row in target_rows:
             if total_hits >= max_hits:
                 break
-            project_path = Path(row["_path"])
+            project_path = Path(row.path)
 
             # Khoj: always pass the full cap so the per-query cache fires
             # once. Ripgrep: cap to remaining budget for efficiency.
@@ -279,12 +280,12 @@ def _render_search_results() -> None:
             st.rerun()
 
     for row, hits in hits_by_project[:10]:
-        with st.expander(f"📂 {row['Name']}  ({len(hits)} match(es))"):
+        with st.expander(f"📂 {row.name}  ({len(hits)} match(es))"):
             if st.button(
                 "→ Open project detail",
-                key=f"open_search_hit_{row['_path']}",
+                key=f"open_search_hit_{row.path}",
             ):
-                st.query_params["project"] = row["_path"]
+                st.query_params["project"] = row.path
                 st.rerun()
             for hit in hits[:10]:
                 location = (

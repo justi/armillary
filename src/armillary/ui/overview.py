@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import streamlit as st
 
 from armillary import __version__
@@ -11,6 +9,7 @@ from armillary import exporter as exporter_mod
 from armillary.cache import Cache, default_db_path
 from armillary.config import Config, default_config_path
 from armillary.ui.helpers import (
+    OverviewRow,
     _load_overview_rows,
     _run_dashboard_scan,
     _safe_load_config,
@@ -157,28 +156,28 @@ def _render_export_for_ai_button() -> None:
 
 
 def _apply_filters(
-    rows: list[dict[str, Any]],
+    rows: list[OverviewRow],
     *,
     filters: dict[str, list[str]],
     search: str,
-) -> list[dict[str, Any]]:
+) -> list[OverviewRow]:
     out = rows
     if filters["status"]:
-        out = [r for r in out if r["_status_raw"] in filters["status"]]
+        out = [r for r in out if r.status_raw in filters["status"]]
     if filters["type"]:
-        out = [r for r in out if r["Type"] in filters["type"]]
+        out = [r for r in out if r.type in filters["type"]]
     if filters["umbrella"]:
-        out = [r for r in out if r["Umbrella"] in filters["umbrella"]]
+        out = [r for r in out if r.umbrella in filters["umbrella"]]
     if search:
         needle = search.lower()
-        out = [r for r in out if needle in r["Name"].lower()]
+        out = [r for r in out if needle in r.name.lower()]
     return out
 
 
-def _render_summary_metrics(rows: list[dict[str, Any]]) -> None:
+def _render_summary_metrics(rows: list[OverviewRow]) -> None:
     counts: dict[str, int] = {}
     for r in rows:
-        counts[r["_status_raw"]] = counts.get(r["_status_raw"], 0) + 1
+        counts[r.status_raw] = counts.get(r.status_raw, 0) + 1
     cols = st.columns(5)
     cols[0].metric("Total", len(rows))
     cols[1].metric("Active", counts.get("ACTIVE", 0))
@@ -190,8 +189,8 @@ def _render_summary_metrics(rows: list[dict[str, Any]]) -> None:
     )
 
 
-def _render_table(rows: list[dict[str, Any]]) -> None:
-    display = [{k: v for k, v in r.items() if not k.startswith("_")} for r in rows]
+def _render_table(rows: list[OverviewRow]) -> None:
+    display = [r.display_dict() for r in rows]
     event = st.dataframe(
         display,
         width="stretch",
@@ -213,5 +212,5 @@ def _render_table(rows: list[dict[str, Any]]) -> None:
     selected_rows = getattr(selection, "rows", []) if selection else []
     if selected_rows:
         idx = selected_rows[0]
-        st.query_params["project"] = rows[idx]["_path"]
+        st.query_params["project"] = rows[idx].path
         st.rerun()
