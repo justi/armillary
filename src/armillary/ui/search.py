@@ -280,7 +280,14 @@ def _render_search_results() -> None:
         st.error(state.error)
         return
 
-    assert isinstance(state, SearchResults)
+    # Guard against legacy dict-shaped state left in st.session_state
+    # by a pre-refactor Streamlit session that is still open. Streamlit
+    # keeps session state across code reloads, so an already-open tab
+    # that searched before upgrading would hit `assert isinstance(...)`.
+    # Discard the stale entry and let the user re-search.
+    if not isinstance(state, SearchResults):
+        del st.session_state[_SEARCH_STATE_KEY]
+        return
     saved_query = state.query
     hits_by_project = state.hits_by_project
     backend_label = state.backend_label
