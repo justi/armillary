@@ -84,6 +84,8 @@ select = [
 # function defaults. Migrating to `Annotated[T, Option(...)]` is a separate
 # refactor; suppress B008 for now in the CLI module only.
 "src/armillary/cli.py" = ["B008"]
+"src/armillary/cli_config.py" = ["B008"]
+"src/armillary/cli_khoj.py" = ["B008"]
 
 [tool.ruff.format]
 quote-style = "double"
