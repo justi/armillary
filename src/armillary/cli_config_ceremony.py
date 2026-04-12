@@ -237,14 +237,20 @@ def install_mcp_config(claude_dir: Path) -> None:
         except (ValueError, OSError):
             existing = {}
 
-    if "armillary" in existing:
+    # Claude Code expects {"mcpServers": {"name": {...}}} wrapper.
+    servers = existing.setdefault("mcpServers", {})
+    if not isinstance(servers, dict):
+        servers = {}
+        existing["mcpServers"] = servers
+
+    if "armillary" in servers:
         typer.secho(
             f"  · {mcp_json_path} already has armillary MCP — left untouched.",
             fg=typer.colors.CYAN,
         )
         return
 
-    existing["armillary"] = {
+    servers["armillary"] = {
         "command": armillary_bin,
         "args": ["mcp-serve"],
     }
