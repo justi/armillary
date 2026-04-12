@@ -113,8 +113,7 @@ Skip this if ripgrep is enough — armillary works perfectly without Khoj.
 | `armillary list` | Rich terminal table with `--status`, `--type`, `--umbrella` filters |
 | `armillary search "<query>"` | ripgrep across all projects, optional `--khoj` semantic backend |
 | `armillary open <name>` | Launch project in configured editor (`--target cursor`/`vscode`/`zed`/...) |
-| `armillary export-index` | Markdown table for Claude Code / Codex / any AI tool |
-| `armillary install-claude-bridge` | Write `~/.claude/armillary/repos-index.md` + optional CLAUDE.md import |
+| `armillary install-claude-bridge` | Write compact `~/.claude/armillary/repos-index.md` + optional CLAUDE.md import |
 | `armillary install-khoj` | pip install khoj + Docker pgvector container + admin credentials |
 | `armillary start-khoj` | Start Khoj server (foreground, env vars, telemetry disabled) |
 | `armillary mcp-serve` | MCP server (stdio) — AI agents query your repos |
@@ -129,15 +128,17 @@ armillary exposes three MCP tools that Claude Code / Cursor / Codex can call:
 | `armillary_semantic` | Khoj | Conceptual: "authentication patterns", "scraping approaches" | ~500ms |
 | `armillary_projects` | SQLite cache | List all projects with metadata, optional status filter | instant |
 
-Every result includes project metadata (status, commits, work hours, last modified) so the AI agent can assess whether to reuse code.
+Every result includes project metadata (path, status, description) so the AI agent can assess whether to reuse code.
 
 `armillary config --init` auto-configures MCP in `~/.claude/mcp.json`. Or manually:
 
 ```json
 {
-  "armillary": {
-    "command": "/path/to/venv/bin/armillary",
-    "args": ["mcp-serve"]
+  "mcpServers": {
+    "armillary": {
+      "command": "/path/to/venv/bin/armillary",
+      "args": ["mcp-serve"]
+    }
   }
 }
 ```
@@ -155,7 +156,7 @@ Every result includes project metadata (status, commits, work hours, last modifi
 ```bash
 uv sync --extra dev
 
-# 286 tests covering scanner / metadata / status / cache / config /
+# 305 tests covering scanner / metadata / status / cache / config /
 # launcher / search / exporter / bootstrap / CLI / MCP
 .venv/bin/python -m pytest
 
@@ -168,20 +169,15 @@ CI runs pytest + ruff on Python 3.11 and 3.12.
 
 ## Architecture
 
-10 ADRs document the key decisions:
+Key design decisions:
 
-| ADR | Decision |
-|---|---|
-| 0001 | Maintainability-first UI (thin Streamlit, services, typed models) |
-| 0002 | Incremental scan as default hot path (mtime compare, 1-2s vs 20+s) |
-| 0003 | Docker-based Khoj provisioning (pgvector:pg15, port 54322) |
-| 0004 | Cache schema — drop and rebuild, no migrations |
-| 0005 | Work-hours estimation from commit timestamps (4h gap threshold) |
-| 0006 | DRY refactor — shared actions, typed search state, launcher VM |
-| 0007 | UX audit fixes (settings persistence, toast feedback, validation) |
-| 0008 | Persona-driven UX priorities (Levels, Lou, Kahl) |
-| 0009 | Agentic coding knowledge layer |
-| 0010 | MCP server with semantic search |
+- **Thin Streamlit UI** — presentation only, logic in importable services
+- **Incremental scan** — mtime compare, 1–2s vs 20+s full scan
+- **SQLite cache** — drop and rebuild, no migrations (`PRAGMA user_version`)
+- **Docker-based Khoj** — pgvector:pg15, port 54322, auto-provisioned
+- **Work-hours estimation** — commit timestamp gaps (4h threshold)
+- **MCP server** — search + semantic + project listing for AI agents
+- **Response safety** — 20k char cap, preview truncation, compact JSON
 
 ## License
 
