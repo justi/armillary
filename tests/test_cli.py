@@ -15,7 +15,14 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from armillary import cli, cli_config, cli_helpers, cli_khoj, khoj_service
+from armillary import (
+    cli,
+    cli_config,
+    cli_config_ceremony,
+    cli_helpers,
+    cli_khoj,
+    khoj_service,
+)
 from armillary.cache import Cache
 from armillary.cli import app
 
@@ -36,7 +43,7 @@ def _isolate_state(
        armillary/cache.db`.
     2. `ARMILLARY_CONFIG` pointed at a non-existent path so the test never
        reads the developer's local umbrellas.
-    3. `cli_config.urlopen` stubbed to raise `URLError` so `armillary config
+    3. `cli_config_ceremony.urlopen` stubbed to raise `URLError` so `armillary config
        --init` never accidentally probes the dev machine's localhost
        Khoj. Tests that exercise the Khoj detection path explicitly
        re-monkeypatch this attribute.
@@ -58,7 +65,7 @@ def _isolate_state(
     def _no_khoj(*args: Any, **kwargs: Any) -> Any:
         raise _URLError("test isolation: Khoj health probe disabled")
 
-    monkeypatch.setattr(cli_config, "urlopen", _no_khoj)
+    monkeypatch.setattr(cli_config_ceremony, "urlopen", _no_khoj)
 
 
 # Strips SGR / cursor control sequences from captured CLI output. Click and
@@ -1179,7 +1186,7 @@ def test_config_init_khoj_detection_auto_enables_when_health_responds(
     _mkrepo(fake_home / "Projects" / "thing")
 
     monkeypatch.setattr(Path, "home", lambda: fake_home)
-    monkeypatch.setattr(cli_config, "urlopen", _fake_urlopen_200)
+    monkeypatch.setattr(cli_config_ceremony, "urlopen", _fake_urlopen_200)
 
     config_file = tmp_path / "armillary" / "config.yaml"
     monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
@@ -1217,7 +1224,7 @@ def test_config_init_khoj_auto_enables_in_non_interactive_too(
     _mkrepo(fake_home / "Projects" / "thing")
 
     monkeypatch.setattr(Path, "home", lambda: fake_home)
-    monkeypatch.setattr(cli_config, "urlopen", _fake_urlopen_200)
+    monkeypatch.setattr(cli_config_ceremony, "urlopen", _fake_urlopen_200)
 
     config_file = tmp_path / "armillary" / "config.yaml"
     monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
@@ -1306,7 +1313,7 @@ def test_config_init_khoj_non_200_response_is_treated_as_unreachable(
         return FakeResponse()
 
     monkeypatch.setattr(Path, "home", lambda: fake_home)
-    monkeypatch.setattr(cli_config, "urlopen", _fake_urlopen_503)
+    monkeypatch.setattr(cli_config_ceremony, "urlopen", _fake_urlopen_503)
 
     config_file = tmp_path / "armillary" / "config.yaml"
     monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))
@@ -1339,7 +1346,7 @@ def test_config_init_skip_khoj_flag_skips_detection_entirely(
     _mkrepo(fake_home / "Projects" / "thing")
 
     monkeypatch.setattr(Path, "home", lambda: fake_home)
-    monkeypatch.setattr(cli_config, "urlopen", _fake_urlopen_200)
+    monkeypatch.setattr(cli_config_ceremony, "urlopen", _fake_urlopen_200)
 
     config_file = tmp_path / "armillary" / "config.yaml"
     monkeypatch.setenv("ARMILLARY_CONFIG", str(config_file))

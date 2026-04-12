@@ -13,6 +13,7 @@ Claude Code's `.claude/mcp.json`).
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -101,8 +102,6 @@ def armillary_search(query: str, max_results: int = 20) -> str:
     if not results:
         return f"No matches for '{query}' across {len(project_roots)} projects."
 
-    import json
-
     return json.dumps(results[:max_results], indent=2, default=str)
 
 
@@ -160,8 +159,6 @@ def armillary_semantic(query: str, max_results: int = 10) -> str:
         return (
             f"No semantic matches for '{query}' across {len(project_roots)} projects."
         )
-
-    import json
 
     return json.dumps(results[:max_results], indent=2, default=str)
 

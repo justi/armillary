@@ -6,16 +6,13 @@ import shlex
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlparse
 
 import streamlit as st
 
-from armillary import exporter as exporter_mod
 from armillary import launcher as launcher_mod
 from armillary.config import (
     Config,
     ConfigError,
-    KhojConfigBlock,
     LauncherConfig,
     UmbrellaConfig,
     default_config_path,
@@ -23,6 +20,10 @@ from armillary.config import (
 )
 from armillary.ui.actions import save_config_and_refresh
 from armillary.ui.helpers import _shorten_home
+from armillary.ui.settings_services import (
+    render_settings_integrations,
+    render_settings_khoj,
+)
 
 _SETTINGS_TOAST_KEY = "_settings_toast"
 
@@ -91,9 +92,9 @@ def _render_settings_page() -> None:
     with tabs[1]:
         _render_settings_launchers(cfg)
     with tabs[2]:
-        _render_settings_khoj(cfg)
+        render_settings_khoj(cfg)
     with tabs[3]:
-        _render_settings_integrations()
+        render_settings_integrations()
 
 
 # ----- helpers -------------------------------------------------------------
@@ -461,281 +462,3 @@ def _render_settings_launchers(cfg: Config) -> None:
     ):
         cfg.launchers = edited
         save_config_and_refresh(cfg)
-
-
-# ----- Khoj tab ------------------------------------------------------------
-
-
-def _render_settings_khoj(cfg: Config) -> None:
-    st.subheader("Khoj semantic search")
-    st.caption(
-        "Optional. When enabled, the search bar gets a 🧠 Semantic toggle "
-        "that calls a local Khoj instance instead of ripgrep."
-    )
-
-    # When Khoj is not yet set up, surface the install path up front so
-    # users don't have to go hunting for "how do I turn this on". The
-    # block is expanded by default in the disabled state and collapses
-    # once the user flips the checkbox — still one click away.
-    with st.expander(
-        "How to install Khoj",
-        icon=":material/package_2:",
-        expanded=not cfg.khoj.enabled,
-    ):
-        st.markdown(
-            "Khoj needs **PostgreSQL 15+ with the pgvector extension** — "
-            "it does not support SQLite. armillary provisions the "
-            "database for you via **Docker** (pgvector/pgvector:pg15 "
-            "image) so there's no host-side package manager conflict. "
-            "You need Docker Desktop running."
-        )
-        st.markdown("**1. Install the Khoj Python package + provision Postgres:**")
-        st.code("armillary install-khoj", language="bash")
-        st.caption(
-            "Runs `uv pip install khoj`, creates the `khoj-pg` Docker "
-            "container, and enables pgvector."
-        )
-        st.markdown("**2. Start the Khoj server in a separate terminal:**")
-        st.code("armillary start-khoj", language="bash")
-        st.caption(
-            "Foreground process; exports the Postgres env vars and "
-            "execs `khoj --anonymous-mode`. First start downloads the "
-            "sentence-transformers model (~500 MB)."
-        )
-        st.markdown(
-            "**3.** Once the server responds at `http://localhost:42110`, "
-            "flip **Enable Khoj** below and hit **💾 Save changes**. "
-            "Use the 🧪 Test connection button to verify."
-        )
-
-    enabled = st.checkbox(
-        "Enable Khoj",
-        value=cfg.khoj.enabled,
-        key="khoj_enabled",
-    )
-    api_url = st.text_input(
-        "API URL",
-        value=cfg.khoj.api_url,
-        key="khoj_api_url",
-    )
-    api_key = st.text_input(
-        "API key (optional, sent as Bearer token)",
-        value=cfg.khoj.api_key or "",
-        type="password",
-        key="khoj_api_key",
-    )
-    timeout_seconds = st.slider(
-        "Timeout (seconds)",
-        min_value=0.5,
-        max_value=60.0,
-        value=cfg.khoj.timeout_seconds,
-        step=0.5,
-        key="khoj_timeout",
-    )
-
-    cols = st.columns([1, 1, 4])
-    with cols[0]:
-        test_clicked = st.button(
-            "Test connection",
-            icon=":material/science:",
-            key="khoj_test",
-        )
-    with cols[1]:
-        save_clicked = st.button(
-            "Save changes",
-            icon=":material/save:",
-            key="khoj_save",
-            type="primary",
-        )
-
-    if test_clicked:
-        _test_khoj_connection(api_url, api_key, timeout_seconds)
-
-    if save_clicked:
-        parsed_url = urlparse(api_url)
-        if not parsed_url.scheme or not parsed_url.netloc:
-            st.error(
-                "Invalid URL — must include a scheme and host "
-                "(e.g. `http://localhost:42110`)."
-            )
-        else:
-            cfg.khoj = KhojConfigBlock(
-                enabled=enabled,
-                api_url=api_url,
-                api_key=api_key or None,
-                timeout_seconds=timeout_seconds,
-            )
-            save_config_and_refresh(cfg)
-
-    # Admin panel credentials — visible only when `armillary install-khoj`
-    # has already generated the `khoj-admin.env` file. These auto-log the
-    # user into http://localhost:42110/server/admin; there is no reason
-    # to hunt through a dotfile to find them.
-    _render_khoj_admin_credentials()
-
-
-def _render_khoj_admin_credentials() -> None:
-    """Show the auto-generated Khoj admin credentials read-only.
-
-    Reads `~/.config/armillary/khoj-admin.env` via the same helper
-    `start-khoj` uses, so we always surface exactly what Khoj is
-    booting with. Password is masked behind an expander so casual
-    onlookers do not see it over the user's shoulder.
-    """
-    from armillary.khoj_service import khoj_admin_env_path, load_khoj_admin_env
-
-    env = load_khoj_admin_env()
-    if env is None:
-        return
-
-    st.markdown("**Khoj admin panel credentials**")
-    st.caption(
-        "Auto-generated by `armillary install-khoj`. Use these to log "
-        "into `http://localhost:42110/server/admin` once the Khoj "
-        "server is running. To rotate, delete the file below and "
-        "re-run `install-khoj`."
-    )
-    email = env.get("KHOJ_ADMIN_EMAIL", "—")
-    password = env.get("KHOJ_ADMIN_PASSWORD", "—")
-    cred_cols = st.columns([2, 3])
-    with cred_cols[0]:
-        st.text_input(
-            "Admin email",
-            value=email,
-            key="khoj_admin_email_readonly",
-            disabled=True,
-        )
-    with cred_cols[1], st.expander("Show password"):
-        st.code(password, language=None)
-    st.caption(f"Stored at `{khoj_admin_env_path()}`")
-
-
-# ----- Integrations tab ----------------------------------------------------
-
-
-def _render_settings_integrations() -> None:
-    st.subheader("Integrations")
-    st.caption(
-        "Connect armillary outputs to external tools. "
-        "Downloads are one-off snapshots; integrations write to a stable path."
-    )
-    _render_claude_code_integration()
-
-
-def _render_claude_code_integration() -> None:
-    status = exporter_mod.get_claude_bridge_status()
-
-    st.markdown("**Claude Code**")
-    st.write(
-        "The Claude bridge writes your current project index to "
-        "`~/.claude/armillary/repos-index.md`. "
-        "Optionally it also adds `@armillary/repos-index.md` to "
-        "`~/.claude/CLAUDE.md`, so new Claude Code sessions load that index "
-        "automatically."
-    )
-
-    with st.expander(
-        "How this works",
-        icon=":material/info:",
-        expanded=not status.bridge_installed,
-    ):
-        st.markdown(
-            "1. `Install / Update` writes a markdown snapshot from the current cache.\n"
-            "2. If CLAUDE.md wiring is enabled, armillary adds the import line once.\n"
-            "3. Re-run `Install / Update` after a new scan when you want to refresh "
-            "the snapshot used by Claude Code."
-        )
-        st.caption(
-            "This action only adds wiring. It does not remove an existing "
-            "`@armillary/repos-index.md` import."
-        )
-
-    with st.container(horizontal=True):
-        st.metric(
-            "Bridge file",
-            "Installed" if status.bridge_installed else "Not installed",
-            border=True,
-        )
-        if status.claude_md_wired:
-            wiring_status = "Active"
-        elif status.claude_md_exists:
-            wiring_status = "Not wired"
-        else:
-            wiring_status = "Missing"
-        st.metric("CLAUDE.md wiring", wiring_status, border=True)
-
-    st.caption(f"Bridge path: `{status.bridge_path}`")
-    st.caption(f"CLAUDE.md: `{status.claude_md_path}`")
-
-    wire_claude_md = st.checkbox(
-        "Also add wiring to ~/.claude/CLAUDE.md if missing",
-        value=status.claude_md_wired,
-        key="claude_bridge_wire_claude_md",
-        help=(
-            "Adds `@armillary/repos-index.md` if it is not already present. "
-            "Unchecking this does not remove existing wiring."
-        ),
-    )
-
-    action_label = (
-        "Update Claude bridge" if status.bridge_installed else "Install Claude bridge"
-    )
-    if st.button(
-        action_label,
-        key="claude_bridge_install",
-        type="primary",
-        width="stretch",
-    ):
-        try:
-            bridge_path, written, appended = exporter_mod.install_claude_bridge(
-                with_claude_md=wire_claude_md
-            )
-        except Exception as exc:  # noqa: BLE001 — surface install errors inline
-            st.error(f"Could not install Claude bridge: {exc}")
-            return
-
-        refreshed = exporter_mod.get_claude_bridge_status()
-        st.success(
-            f"Wrote {written} project(s) to `{bridge_path}`."
-            + (
-                " Added the import line to CLAUDE.md."
-                if wire_claude_md and appended
-                else " CLAUDE.md was already wired."
-                if wire_claude_md and refreshed.claude_md_wired
-                else ""
-            )
-        )
-        if written == 0:
-            st.warning(
-                "The bridge is installed, but the cache is empty. Run a scan and then "
-                "use `Update Claude bridge` to refresh the snapshot."
-            )
-
-
-def _test_khoj_connection(api_url: str, api_key: str, timeout: float) -> None:
-    """Probe `<api_url>/api/health` with the form-supplied timeout.
-
-    Treats any 2xx status as success. Catches the same exception family
-    as the CLI's init Khoj-detect step plus `KhojResponseError` for
-    safety.
-    """
-    from urllib.error import HTTPError, URLError
-    from urllib.request import Request, urlopen
-
-    try:
-        url = f"{api_url.rstrip('/')}/api/health"
-        request = Request(url)
-        if api_key:
-            request.add_header("Authorization", f"Bearer {api_key}")
-        with urlopen(request, timeout=timeout) as response:
-            status = getattr(response, "status", None) or response.getcode()
-            if 200 <= int(status) < 300:
-                st.success(f"Khoj responded with HTTP {status}.")
-            else:
-                st.error(f"Khoj responded with HTTP {status}.")
-    except HTTPError as exc:
-        st.error(f"Khoj returned HTTP {exc.code}: {exc.reason}")
-    except (URLError, TimeoutError, OSError) as exc:
-        st.error(f"Khoj unreachable at {api_url}: {exc}")
-    except Exception as exc:  # noqa: BLE001 — surface anything weird
-        st.error(f"Khoj test failed: {exc}")
