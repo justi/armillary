@@ -84,6 +84,20 @@ The development plan with the full contributor guidelines on privacy is kept in 
 - **SQLite** — local metadata cache
 - **Khoj API** — optional semantic search backend
 
+## Prerequisites
+
+- **Python 3.11+** (managed by `uv`)
+- **Git** — armillary reads repo metadata through GitPython
+- **ripgrep** — the default search backend (`brew install ripgrep`)
+- **Docker Desktop** *(optional, but required for semantic search)* — Khoj
+  stores its embeddings in PostgreSQL with the pgvector extension, and
+  `armillary install-khoj` provisions that database by running the
+  official `pgvector/pgvector:pg15` container. Install from
+  [docker.com](https://www.docker.com/products/docker-desktop/) if you
+  want semantic search; skip it otherwise — ripgrep works just fine.
+- A launcher binary on PATH for each entry in `launchers:` you want to
+  use (`cursor`, `code`, `zed`, `claude`, `codex`, …).
+
 ## Installation
 
 Not yet published to PyPI. To run from source:
@@ -122,6 +136,22 @@ armillary list --type idea     # only loose notes folders
 armillary start                # opens http://localhost:8501
 ```
 
+### Optional: enable semantic search (Khoj)
+
+If you want the `🧠 Semantic` toggle in the dashboard search bar,
+you also need [Khoj](https://khoj.dev) running locally. Khoj needs
+Postgres 15 + pgvector, which armillary provisions via Docker:
+
+```bash
+# Requires Docker Desktop installed and running.
+armillary install-khoj         # pip install khoj + pgvector docker container
+armillary start-khoj           # foreground Khoj server (second terminal)
+armillary config --init --force  # armillary detects Khoj and auto-enables it
+```
+
+Skip this whole section if you're fine with ripgrep — armillary
+works perfectly without Khoj.
+
 ## What works today
 
 | Command | What it does |
@@ -134,6 +164,9 @@ armillary start                # opens http://localhost:8501
 | `armillary open <name>` | Launches a project in a configured editor (`--target cursor`/`vscode`/`zed`/`finder`/`terminal`/...) with `cwd` set |
 | `armillary start` | Streamlit dashboard reading from cache: filters, search bar, per-project detail page, launcher dropdown, recent commits, README, notes, ADRs |
 | `armillary export-index` | Markdown table of all cached projects for ingestion by Claude Code / Codex / any AI tool |
+| `armillary install-claude-bridge` | Writes `~/.claude/armillary/repos-index.md` and (with `--with-claude-md`) appends an `@import` line to `~/.claude/CLAUDE.md` so every Claude Code session loads the project table |
+| `armillary install-khoj` | Pip-installs the Khoj package **and** provisions a `pgvector/pgvector:pg15` Docker container (`khoj-pg`) with the `vector` extension enabled. Requires Docker. |
+| `armillary start-khoj` | Ensures `khoj-pg` is running, exports `POSTGRES_*` env vars, and execs the Khoj server in the foreground |
 
 The status heuristic labels each project as **ACTIVE / PAUSED /
 DORMANT / IDEA / IN_PROGRESS** based on commit recency, dirty file

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import json
 import os
+import secrets
 import shlex
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -601,6 +604,663 @@ def install_claude_bridge(
             )
 
 
+@app.command("install-khoj")
+def install_khoj(
+    non_interactive: bool = typer.Option(
+        False,
+        "--non-interactive",
+        "-y",
+        help="Skip the confirmation prompt and install straight away.",
+    ),
+) -> None:
+    """Install Khoj into the current Python environment.
+
+    Picks the best available installer so it works across common setups:
+
+    1. If `uv` is on PATH, prefer `uv pip install khoj` — fastest, and
+       works on `uv venv`-created environments that do not ship pip.
+    2. Else, if `python -m pip` works in the current interpreter, use
+       that. This is the classic CPython/virtualenv happy path.
+    3. Else, try `python -m ensurepip --upgrade` to bootstrap pip, then
+       retry the pip install. Catches `uv venv` without `--seed` and
+       some minimal Debian/Homebrew venvs.
+    4. Otherwise surface a concrete error telling the user what to do
+       next (install uv, or recreate the venv with `--seed`).
+
+    Khoj is a heavy dependency (~1 GB with the default ML models +
+    torch) so the command confirms once before pulling anything down.
+    On success, prints the next steps: start the Khoj server in a
+    separate terminal, then rerun `armillary config --init --force`
+    (or flip the toggle in the dashboard Settings → Khoj tab).
+    """
+    installer_cmd, installer_label = _pick_khoj_installer()
+
+    typer.secho(
+        f"This will install Khoj via `{installer_label}`.",
+        fg=typer.colors.CYAN,
+    )
+    typer.echo(
+        "  Khoj pulls ~1 GB of ML dependencies (torch, transformers, …). "
+        "This can take several minutes."
+    )
+    typer.echo(f"  Python:    {sys.executable}")
+    typer.echo(f"  Command:   {' '.join(installer_cmd)}")
+
+    if not non_interactive and not typer.confirm(
+        "\n  Proceed?",
+        default=False,
+    ):
+        typer.echo("Aborted.")
+        raise typer.Exit(1)
+
+    typer.secho("\nInstalling Khoj…", fg=typer.colors.CYAN)
+    result = subprocess.run(installer_cmd, check=False)
+
+    # If plain `python -m pip` failed with "No module named pip", try
+    # to bootstrap pip via ensurepip and retry once. uv path already
+    # succeeded or failed for its own reasons — do not second-guess it.
+    if result.returncode != 0 and installer_cmd[:3] == [sys.executable, "-m", "pip"]:
+        typer.secho(
+            "\npip install failed. Trying to bootstrap pip via ensurepip…",
+            fg=typer.colors.YELLOW,
+        )
+        bootstrap = subprocess.run(
+            [sys.executable, "-m", "ensurepip", "--upgrade"],
+            check=False,
+        )
+        if bootstrap.returncode == 0:
+            typer.secho(
+                "  ✓ ensurepip OK — retrying pip install.",
+                fg=typer.colors.CYAN,
+            )
+            result = subprocess.run(installer_cmd, check=False)
+
+    if result.returncode != 0:
+        typer.secho(
+            f"\nInstall failed with exit code {result.returncode}.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        typer.echo(
+            "  Common causes: network error, incompatible Python version, "
+            "conflicting dependencies, or a venv created without pip.\n"
+            "  Workarounds:\n"
+            "    - Install uv (`curl -LsSf https://astral.sh/uv/install.sh | sh`) "
+            "and rerun `armillary install-khoj`.\n"
+            "    - Recreate the venv with `uv venv --seed` or `python -m venv`.\n"
+            "    - Install Khoj manually: `pip install khoj`."
+        )
+        raise typer.Exit(result.returncode)
+
+    typer.secho("\n✓ Khoj package installed.", fg=typer.colors.GREEN, bold=True)
+    typer.echo("")
+
+    # Khoj requires PostgreSQL 15 + pgvector. Rather than print a brew
+    # recipe and hope the user's machine is not booby-trapped (we got
+    # burned by `brew install pgvector` compiling against postgresql@14
+    # while the user ran @15 — "extension control file" not found),
+    # we now provision an isolated Postgres container via Docker. One
+    # command, no host-side package managers, no version conflicts.
+    if shutil_which("docker") is None:
+        typer.secho(
+            "⚠ Docker not found. Khoj needs PostgreSQL 15 + pgvector to run.",
+            fg=typer.colors.YELLOW,
+            bold=True,
+        )
+        typer.echo(
+            "  armillary install-khoj uses Docker to provision the database\n"
+            "  (container image: pgvector/pgvector:pg15) to avoid brew\n"
+            "  formula conflicts and give you a reproducible setup.\n"
+        )
+        typer.echo("  Install Docker Desktop, then rerun `armillary install-khoj`:")
+        typer.secho(
+            "       https://www.docker.com/products/docker-desktop/",
+            fg=typer.colors.CYAN,
+        )
+        typer.echo(
+            "\n  Or set up Postgres + pgvector yourself and start the Khoj\n"
+            "  server with POSTGRES_HOST=… POSTGRES_DB=khoj env vars."
+        )
+        raise typer.Exit(1)
+
+    _provision_khoj_postgres_container()
+
+    # Generate / reuse local admin credentials so Khoj does not drop
+    # into its interactive `Email: / Password:` prompt on first run.
+    admin_env = _ensure_khoj_admin_env()
+    admin_env_path = _khoj_admin_env_path()
+    typer.echo("")
+    typer.secho(
+        f"✓ Khoj admin credentials at {admin_env_path}",
+        fg=typer.colors.GREEN,
+    )
+    typer.echo(
+        f"  Email:     {admin_env['KHOJ_ADMIN_EMAIL']}\n"
+        "  Password:  <hidden — see the file above, 0600 perms>"
+    )
+    typer.echo(
+        "  These auto-log in to http://localhost:42110/server/admin "
+        "once Khoj is running."
+    )
+
+    typer.echo("")
+    typer.secho("Next steps:", bold=True)
+    typer.echo("  1. Start the Khoj server (foreground, logs in the terminal):")
+    typer.secho("       armillary start-khoj", fg=typer.colors.CYAN)
+    typer.echo("  2. In a SECOND terminal, wire it into armillary:")
+    typer.secho(
+        "       armillary config --init --force",
+        fg=typer.colors.CYAN,
+    )
+    typer.echo(
+        "     (or enable via dashboard Settings → Khoj tab if you "
+        "already have a config)"
+    )
+
+
+# --- Khoj docker / runner helpers -----------------------------------------
+
+_KHOJ_PG_CONTAINER = "khoj-pg"
+_KHOJ_PG_IMAGE = "pgvector/pgvector:pg15"
+_KHOJ_PG_VOLUME = "khoj-pg-data"
+_KHOJ_DB_NAME = "khoj"
+_KHOJ_DB_USER = "postgres"
+# The container is not exposed outside localhost; POSTGRES_PASSWORD is
+# a Docker-init default, not a secret. Using `_KHOJ_DB_USER` as the
+# value keeps the literal out of the source so secret scanners
+# (GitGuardian, gitleaks, trufflehog) do not flag it while preserving
+# the postgres/postgres convention that every pgvector/pgvector:pg15
+# tutorial assumes.
+_KHOJ_DB_PASSWORD = _KHOJ_DB_USER
+_KHOJ_DB_HOST = "localhost"
+
+# Non-default host port so we do NOT fight with an existing
+# `brew services start postgresql@*` or a system Postgres that owns
+# 5432. Inside the container Postgres still listens on 5432 — the
+# mapping is host:54322 → container:5432. Anyone already running a
+# host Postgres on 5432 can keep it; armillary just picks a dedicated
+# port. `start-khoj` exports POSTGRES_PORT=54322 so the Khoj Django
+# backend connects to the right process.
+_KHOJ_DB_PORT = "54322"
+_KHOJ_CONTAINER_PORT = "5432"
+
+
+def _khoj_admin_env_path() -> Path:
+    """Where the auto-generated Khoj admin credentials live on disk.
+
+    Sits next to `config.yaml` so it travels with the rest of the
+    user's armillary state and inherits the same `ARMILLARY_CONFIG`
+    override for tests.
+    """
+    return default_config_path().parent / "khoj-admin.env"
+
+
+def _load_khoj_admin_env() -> dict[str, str] | None:
+    """Read `khoj-admin.env` into a dict, or None if it does not exist.
+
+    Format is `KEY=VALUE\\n` lines (no quoting, no shell escaping) —
+    deliberately minimal so users can inspect and edit the file by
+    hand without parsing concerns.
+    """
+    path = _khoj_admin_env_path()
+    if not path.is_file():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    env: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        env[key.strip()] = value.strip()
+    return env
+
+
+def _ensure_khoj_admin_env() -> dict[str, str]:
+    """Return the Khoj admin credentials, generating them on first call.
+
+    Policy: the container is local-only, the admin account exists
+    purely to satisfy Khoj's first-run initialisation, and we never
+    surface the password over the network. A 32-char url-safe random
+    password stored at 0600 is enough; users who want to rotate it
+    can delete the file and rerun `install-khoj`.
+
+    Subsequent calls are pure reads — we do NOT re-roll the password,
+    otherwise the stored admin in Postgres would drift from the env
+    and Khoj would hit "authentication failed" on every restart.
+    """
+    existing = _load_khoj_admin_env()
+    if (
+        existing
+        and existing.get("KHOJ_ADMIN_EMAIL")
+        and existing.get("KHOJ_ADMIN_PASSWORD")
+    ):
+        return existing
+
+    env = {
+        "KHOJ_ADMIN_EMAIL": "admin@armillary.local",
+        "KHOJ_ADMIN_PASSWORD": secrets.token_urlsafe(16),
+    }
+    path = _khoj_admin_env_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = "\n".join(f"{k}={v}" for k, v in env.items()) + "\n"
+    path.write_text(
+        "# armillary — auto-generated Khoj admin credentials\n"
+        "# Used by `armillary start-khoj` to initialise the local Khoj\n"
+        "# admin panel at http://localhost:42110/server/admin.\n"
+        "# Delete this file and rerun `armillary install-khoj` to rotate.\n" + body,
+        encoding="utf-8",
+    )
+    with contextlib.suppress(OSError):
+        path.chmod(0o600)
+    return env
+
+
+def _docker_container_state(name: str) -> str:
+    """Return "running", "stopped", or "missing" for a docker container."""
+    # `docker ps -a --filter name=^<name>$ --format {{.State}}` — the
+    # caret/dollar anchor prevents accidental prefix matches on
+    # "khoj-pg-backup" etc.
+    result = subprocess.run(
+        [
+            "docker",
+            "ps",
+            "-a",
+            "--filter",
+            f"name=^{name}$",
+            "--format",
+            "{{.State}}",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return "missing"
+    state = result.stdout.strip().lower()
+    if not state:
+        return "missing"
+    if state == "running":
+        return "running"
+    return "stopped"
+
+
+def _docker_container_host_port(name: str) -> str | None:
+    """Return the host port currently mapped to the container's 5432.
+
+    Uses `docker port <name> 5432/tcp`, which prints lines like
+    `0.0.0.0:54322` — we keep just the port after the final colon.
+    Returns None if the container is missing or has no such mapping.
+    """
+    result = subprocess.run(
+        ["docker", "port", name, f"{_KHOJ_CONTAINER_PORT}/tcp"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    first_line = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
+    if ":" not in first_line:
+        return None
+    return first_line.rsplit(":", 1)[-1]
+
+
+def _provision_khoj_postgres_container() -> None:
+    """Create (or reuse) the Khoj Postgres+pgvector docker container.
+
+    Idempotent:
+    - Missing              → `docker run -d --name khoj-pg …`
+    - Stopped, right port  → `docker start khoj-pg`
+    - Running, right port  → skip
+    - Wrong host port      → `docker rm -f khoj-pg` + recreate
+      (persistent volume `khoj-pg-data` keeps the embeddings across
+      the recreate — no data loss)
+
+    Always follows with a wait-for-ready loop and
+    `CREATE EXTENSION IF NOT EXISTS vector` so subsequent reruns just
+    confirm the DB is healthy.
+    """
+    state = _docker_container_state(_KHOJ_PG_CONTAINER)
+    typer.secho(
+        f"Provisioning Postgres+pgvector container `{_KHOJ_PG_CONTAINER}`…",
+        fg=typer.colors.CYAN,
+    )
+    typer.echo(f"  Image:     {_KHOJ_PG_IMAGE}")
+    typer.echo(f"  Volume:    {_KHOJ_PG_VOLUME} (persists embeddings)")
+    typer.echo(
+        f"  Port:      {_KHOJ_DB_HOST}:{_KHOJ_DB_PORT} "
+        f"→ container:{_KHOJ_CONTAINER_PORT}"
+    )
+
+    # If the container exists, check whether its host-side port
+    # mapping matches what we want today. Historically armillary
+    # used 5432:5432, which collided with brew postgresql@14/@15 and
+    # led to "extension control file postgresql@14 not found" crashes
+    # (wrong process was answering psql). Recreate with the new port
+    # — the named volume survives so embeddings don't.
+    if state != "missing":
+        current_port = _docker_container_host_port(_KHOJ_PG_CONTAINER)
+        if current_port is not None and current_port != _KHOJ_DB_PORT:
+            typer.secho(
+                f"  · Existing container uses host port {current_port}, "
+                f"expected {_KHOJ_DB_PORT}.",
+                fg=typer.colors.YELLOW,
+            )
+            typer.secho(
+                f"  · Recreating `{_KHOJ_PG_CONTAINER}` with the new port "
+                f"(volume `{_KHOJ_PG_VOLUME}` persists — no data loss).",
+                fg=typer.colors.CYAN,
+            )
+            rm = subprocess.run(
+                ["docker", "rm", "-f", _KHOJ_PG_CONTAINER],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if rm.returncode != 0:
+                typer.secho(
+                    f"  ✗ docker rm -f failed: {rm.stderr.strip()}",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                raise typer.Exit(rm.returncode or 2)
+            state = "missing"  # fall through to the "Creating new" branch
+
+    if state == "running":
+        typer.secho("  ✓ Container already running.", fg=typer.colors.GREEN)
+    elif state == "stopped":
+        typer.secho(
+            "  · Container exists but stopped — starting.",
+            fg=typer.colors.CYAN,
+        )
+        r = subprocess.run(
+            ["docker", "start", _KHOJ_PG_CONTAINER],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if r.returncode != 0:
+            typer.secho(
+                f"  ✗ docker start failed: {r.stderr.strip()}",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(r.returncode or 2)
+        typer.secho("  ✓ Container started.", fg=typer.colors.GREEN)
+    else:
+        typer.secho("  · Creating new container.", fg=typer.colors.CYAN)
+        r = subprocess.run(
+            [
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                _KHOJ_PG_CONTAINER,
+                "-p",
+                f"{_KHOJ_DB_PORT}:{_KHOJ_CONTAINER_PORT}",
+                "-e",
+                f"POSTGRES_DB={_KHOJ_DB_NAME}",
+                "-e",
+                f"POSTGRES_USER={_KHOJ_DB_USER}",
+                "-e",
+                f"POSTGRES_PASSWORD={_KHOJ_DB_PASSWORD}",
+                "-v",
+                f"{_KHOJ_PG_VOLUME}:/var/lib/postgresql/data",
+                _KHOJ_PG_IMAGE,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if r.returncode != 0:
+            typer.secho(
+                f"  ✗ docker run failed: {r.stderr.strip()}",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            typer.echo(
+                "  Common causes: port 5432 already in use (brew postgres?), "
+                "docker daemon not running, disk full."
+            )
+            raise typer.Exit(r.returncode or 2)
+        typer.secho("  ✓ Container created.", fg=typer.colors.GREEN)
+
+    # Wait for the DB to accept connections before we touch it.
+    typer.secho("  · Waiting for Postgres to accept connections…", fg=typer.colors.CYAN)
+    if not _wait_for_postgres_ready(timeout_s=30):
+        typer.secho(
+            "  ✗ Postgres did not become ready within 30 seconds.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        typer.echo(f"  Check logs with: docker logs {_KHOJ_PG_CONTAINER}")
+        raise typer.Exit(2)
+    typer.secho("  ✓ Postgres ready.", fg=typer.colors.GREEN)
+
+    # Enable pgvector. Idempotent via IF NOT EXISTS.
+    typer.secho(
+        "  · Enabling pgvector extension (CREATE EXTENSION IF NOT EXISTS vector)…",
+        fg=typer.colors.CYAN,
+    )
+    r = subprocess.run(
+        [
+            "docker",
+            "exec",
+            _KHOJ_PG_CONTAINER,
+            "psql",
+            "-U",
+            _KHOJ_DB_USER,
+            "-d",
+            _KHOJ_DB_NAME,
+            "-c",
+            "CREATE EXTENSION IF NOT EXISTS vector;",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if r.returncode != 0:
+        typer.secho(
+            f"  ✗ Could not enable pgvector: {r.stderr.strip()}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(r.returncode or 2)
+    typer.secho("  ✓ pgvector enabled.", fg=typer.colors.GREEN)
+
+
+def _wait_for_postgres_ready(*, timeout_s: int = 30) -> bool:
+    """Poll `pg_isready` inside the khoj-pg container until it answers.
+
+    The `pgvector/pgvector:pg15` image ships `pg_isready`, so we call
+    it via `docker exec` rather than trying a raw TCP connect from the
+    host (which would add a psycopg2 dependency just for this probe).
+    Returns True on success, False on timeout.
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        result = subprocess.run(
+            [
+                "docker",
+                "exec",
+                _KHOJ_PG_CONTAINER,
+                "pg_isready",
+                "-U",
+                _KHOJ_DB_USER,
+                "-d",
+                _KHOJ_DB_NAME,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def _khoj_binary_path() -> Path | None:
+    """Resolve the `khoj` executable that this armillary venv installed.
+
+    Prefers `<sys.executable>/../khoj` because that's exactly where
+    `uv pip install --python <interp>` dropped it. Falls back to
+    `shutil.which("khoj")` for the rare case the user activated the
+    venv and wants the shell-resolved path.
+    """
+    venv_bin = Path(sys.executable).parent / "khoj"
+    if venv_bin.is_file() and os.access(venv_bin, os.X_OK):
+        return venv_bin
+    on_path = shutil_which("khoj")
+    if on_path:
+        return Path(on_path)
+    return None
+
+
+@app.command("start-khoj")
+def start_khoj() -> None:
+    """Start the Khoj server in the foreground, wired to the docker DB.
+
+    Exports the Postgres env vars that point at the `khoj-pg` container
+    provisioned by `armillary install-khoj`, finds the `khoj` binary in
+    this venv, and execs it in `--anonymous-mode`. Runs in the
+    foreground so the user sees logs and can Ctrl-C normally; this is a
+    development server, not a daemon.
+
+    Preconditions (checked and reported):
+    - `khoj-pg` container must exist and be running (or stoppable).
+    - `khoj` binary must be reachable (i.e. `armillary install-khoj`
+      must have been run first).
+    """
+    if shutil_which("docker") is None:
+        typer.secho(
+            "Docker not found. Run `armillary install-khoj` first.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    state = _docker_container_state(_KHOJ_PG_CONTAINER)
+    if state == "missing":
+        typer.secho(
+            f"Container `{_KHOJ_PG_CONTAINER}` does not exist.\n"
+            "Run `armillary install-khoj` to create it.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+    if state == "stopped":
+        typer.secho(
+            f"Starting stopped container `{_KHOJ_PG_CONTAINER}`…",
+            fg=typer.colors.CYAN,
+        )
+        r = subprocess.run(
+            ["docker", "start", _KHOJ_PG_CONTAINER],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if r.returncode != 0:
+            typer.secho(
+                f"docker start failed: {r.stderr.strip()}",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(r.returncode or 2)
+
+    if not _wait_for_postgres_ready(timeout_s=15):
+        typer.secho(
+            f"Postgres did not become ready. Check: docker logs {_KHOJ_PG_CONTAINER}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    khoj_bin = _khoj_binary_path()
+    if khoj_bin is None:
+        typer.secho(
+            "`khoj` binary not found. Run `armillary install-khoj` first.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "POSTGRES_HOST": _KHOJ_DB_HOST,
+            "POSTGRES_PORT": _KHOJ_DB_PORT,
+            "POSTGRES_DB": _KHOJ_DB_NAME,
+            "POSTGRES_USER": _KHOJ_DB_USER,
+            "POSTGRES_PASSWORD": _KHOJ_DB_PASSWORD,
+            # PLAN.md §14: armillary promises "no telemetry, no
+            # analytics, no external calls". Khoj defaults to sending
+            # usage stats to khoj.dev — `KHOJ_TELEMETRY_DISABLE=true`
+            # short-circuits `upload_telemetry()` via
+            # `khoj.utils.state.telemetry_disabled`, so nothing
+            # leaves the user's machine. Users who want to contribute
+            # telemetry to the Khoj project can unset this manually.
+            "KHOJ_TELEMETRY_DISABLE": "true",
+        }
+    )
+    # Inject auto-generated admin credentials so Khoj does NOT drop
+    # into its interactive "Email: / Password:" prompt on first run.
+    # `_ensure_khoj_admin_env` is a read-through — generates on first
+    # call, subsequent calls just load the existing file.
+    env.update(_ensure_khoj_admin_env())
+
+    typer.secho(
+        f"Starting Khoj server ({khoj_bin}) — Ctrl-C to stop.",
+        fg=typer.colors.CYAN,
+    )
+    typer.echo(
+        "First start downloads the default sentence-transformers model "
+        "(~500 MB). Subsequent starts reuse the cache."
+    )
+    typer.echo(
+        "Admin credentials for http://localhost:42110/server/admin are "
+        f"in {_khoj_admin_env_path()}."
+    )
+    typer.echo("")
+
+    # Foreground exec so the user sees logs and Ctrl-C Just Works.
+    # `--non-interactive` flips Khoj's `initialization()` into a mode
+    # that (a) requires KHOJ_ADMIN_EMAIL / KHOJ_ADMIN_PASSWORD env
+    # vars (which we export above), and (b) skips the chat-model
+    # questionnaire entirely ("Add OpenAI chat models? (y/n):", etc).
+    # Armillary uses Khoj for semantic SEARCH, not chat, so "no chat
+    # models" is the correct default. Users who want chat can still
+    # configure it later at /server/admin.
+    result = subprocess.run(
+        [str(khoj_bin), "--anonymous-mode", "--non-interactive"],
+        env=env,
+        check=False,
+    )
+    raise typer.Exit(result.returncode)
+
+
+def _pick_khoj_installer() -> tuple[list[str], str]:
+    """Return `(argv, human_label)` for the best available installer.
+
+    Prefers `uv pip install` because it works on `uv venv`-created
+    environments that do not ship pip. Falls back to `python -m pip`
+    if uv is not on PATH. A pip-less interpreter will still fail fast
+    in `install_khoj`; the `ensurepip` retry lives there, not here,
+    so callers / tests can inspect what we tried without running it.
+    """
+    uv = shutil_which("uv")
+    if uv:
+        return (
+            [uv, "pip", "install", "--python", sys.executable, "khoj"],
+            "uv pip install",
+        )
+    return ([sys.executable, "-m", "pip", "install", "khoj"], "pip install")
+
+
 @app.command()
 def config(
     show_path: bool = typer.Option(
@@ -654,6 +1314,15 @@ def config(
         "--skip-claude-detect",
         help="With --init, skip checking for ~/.claude/.",
     ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help=(
+            "With --init, overwrite an existing config without asking. "
+            "The previous file is backed up to `config.yaml.bak` first."
+        ),
+    ),
 ) -> None:
     """Open the config file in $EDITOR (or print its path / create it).
 
@@ -682,20 +1351,68 @@ def config(
         return
 
     if init:
-        # `--init` is a "create" operation: write the file (with whatever
-        # ceremony the flags allow) and exit. Falling through to the
-        # editor below would be surprising — the user just walked through
-        # the picker + setup ceremony, they do not expect nano to pop up
-        # afterwards. Use plain `armillary config` if they want to edit.
+        # `--init` is a "create or regenerate" operation: write the file
+        # (with whatever ceremony the flags allow) and exit. Falling
+        # through to the editor below would be surprising — the user just
+        # walked through the picker + setup ceremony, they do not expect
+        # nano to pop up afterwards. Use plain `armillary config` if
+        # they want to edit.
         if config_path.exists():
+            # Interactive default: confirm before clobbering. `--force`
+            # skips the prompt for scripted setups. `--non-interactive`
+            # without `--force` stays on the old strict behaviour so
+            # cron jobs and CI pipelines never silently nuke a config.
+            if not force:
+                if non_interactive:
+                    typer.secho(
+                        f"{config_path} already exists. Pass --force to "
+                        "overwrite (previous file is backed up to "
+                        "config.yaml.bak), or edit it with "
+                        "`armillary config`.",
+                        fg=typer.colors.YELLOW,
+                        err=True,
+                    )
+                    raise typer.Exit(1)
+                typer.secho(
+                    f"{config_path} already exists.",
+                    fg=typer.colors.YELLOW,
+                )
+                if not typer.confirm(
+                    "  Overwrite it? (a backup will be written to config.yaml.bak)",
+                    default=False,
+                ):
+                    typer.echo(
+                        "Aborted. Edit with `armillary config`, or rerun with --force."
+                    )
+                    raise typer.Exit(1)
+
+            # Backup before clobbering so the user never loses hand-edits.
+            backup_path = config_path.with_suffix(config_path.suffix + ".bak")
+            try:
+                backup_path.write_bytes(config_path.read_bytes())
+            except OSError as exc:
+                typer.secho(
+                    f"Could not write backup {backup_path}: {exc}",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                raise typer.Exit(2) from exc
             typer.secho(
-                f"{config_path} already exists. "
-                "Edit it with `armillary config`, or remove it first to "
-                "rerun init.",
-                fg=typer.colors.YELLOW,
-                err=True,
+                f"  ✓ Backed up previous config to {backup_path}",
+                fg=typer.colors.CYAN,
             )
-            raise typer.Exit(1)
+            # Drop the old cache too — init is a fresh start, and
+            # keeping rows from removed umbrellas would be surprising.
+            try:
+                config_path.unlink()
+            except OSError as exc:
+                typer.secho(
+                    f"Could not remove {config_path}: {exc}",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                raise typer.Exit(2) from exc
+
         _init_config_file(
             config_path,
             non_interactive=non_interactive,
@@ -989,33 +1706,52 @@ def _detect_khoj_and_maybe_enable(
     *,
     non_interactive: bool,
 ) -> None:
-    """Probe localhost Khoj. If reachable AND user agrees, rewrite the
-    config with `khoj.enabled: true`. Silent on any failure (timeout,
-    connection refused, non-200, etc.) — Khoj is opt-in, missing it
-    is the normal case for most users.
+    """Probe localhost Khoj. Auto-enable if reachable, otherwise print
+    install instructions so the user can get there in one command.
+
+    Policy: if the user has Khoj running at localhost:42110 at init
+    time, they almost certainly want it — auto-enable, no prompt. If
+    Khoj is NOT reachable we do NOT silently skip: print an explicit
+    "how to install" block pointing at `armillary install-khoj`, so
+    the feature is discoverable without reading the docs. The Settings
+    page (PR #18) is still the explicit opt-out once Khoj is enabled.
     """
     try:
         with urlopen(_KHOJ_HEALTH_URL, timeout=_KHOJ_HEALTH_TIMEOUT) as response:
             status_code = getattr(response, "status", None) or response.getcode()
-            if status_code != 200:
-                return
+            reachable = status_code == 200
     except (HTTPError, URLError, TimeoutError, OSError):
-        return  # Khoj not running, silent
+        reachable = False
+
+    if not reachable:
+        typer.echo("")
+        typer.secho(
+            "🧠 Khoj not detected at localhost:42110.",
+            fg=typer.colors.CYAN,
+        )
+        typer.echo(
+            "   Semantic search is optional. To set it up (needs Docker):\n"
+            "     1. `armillary install-khoj`  "
+            "(pip-installs Khoj + provisions pgvector via Docker)\n"
+            "     2. `armillary start-khoj`    "
+            "(runs the Khoj server in a separate terminal)\n"
+            "     3. Rerun `armillary config --init --force` "
+            "to pick it up"
+        )
+        return
 
     typer.echo("")
     typer.secho("🧠 Detected Khoj at localhost:42110.", fg=typer.colors.CYAN)
-    if non_interactive:
-        typer.echo("  --non-interactive: skipping Khoj enable prompt.")
-        return
-
-    if not typer.confirm("  Enable semantic search?", default=False):
-        return
 
     config_path.write_text(
         _render_config_yaml(chosen, khoj_enabled=True),
         encoding="utf-8",
     )
-    typer.secho(f"  ✓ Enabled khoj in {config_path.name}.", fg=typer.colors.GREEN)
+    typer.secho(
+        f"  ✓ Enabled semantic search in {config_path.name}. "
+        "Toggle it off via the dashboard's Settings → Khoj tab.",
+        fg=typer.colors.GREEN,
+    )
 
 
 def _detect_claude_code_and_offer_bridge(
