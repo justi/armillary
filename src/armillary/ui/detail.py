@@ -121,19 +121,27 @@ def _render_detail_metric_tiles(project: Project) -> None:
     if md and md.dirty_count is not None:
         metric_cols[3].metric("Dirty files", md.dirty_count)
 
-    # Second row: ahead / behind / size / file count from PR #10.
+    # Second row: commits, work hours, ahead, behind.
     if md and any(
-        x is not None for x in (md.ahead, md.behind, md.size_bytes, md.file_count)
+        x is not None for x in (md.commit_count, md.work_hours, md.ahead, md.behind)
     ):
         row2 = st.columns(4)
+        if md.commit_count is not None:
+            row2[0].metric("Commits", md.commit_count)
+        if md.work_hours is not None:
+            row2[1].metric("Work h", f"{md.work_hours:.1f}")
         if md.ahead is not None:
-            row2[0].metric("Ahead", md.ahead)
+            row2[2].metric("Ahead", md.ahead)
         if md.behind is not None:
-            row2[1].metric("Behind", md.behind)
+            row2[3].metric("Behind", md.behind)
+
+    # Third row: size / file count.
+    if md and any(x is not None for x in (md.size_bytes, md.file_count)):
+        row3 = st.columns(4)
         if md.size_bytes is not None:
-            row2[2].metric("Size", _format_bytes(md.size_bytes))
+            row3[0].metric("Size", _format_bytes(md.size_bytes))
         if md.file_count is not None:
-            row2[3].metric("Files", md.file_count)
+            row3[1].metric("Files", md.file_count)
 
 
 def _render_detail_captions(project: Project) -> None:
