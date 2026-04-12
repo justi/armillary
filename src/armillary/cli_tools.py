@@ -297,9 +297,9 @@ def next_command(
             f"\n{icon} [bold]{s.project.name}[/bold]  [dim]{short_path}[/dim]"
         )
         console.print(f"  {s.reason}")
-
-    typer.echo("")
-    typer.echo("  Skip a project: armillary next --skip <name>")
+        console.print(f"  [dim]→ cd {short_path}[/dim]")
+        if s.category == "forgotten_gold":
+            console.print(f"  [dim]→ armillary next --skip {s.project.name}[/dim]")
 
 
 @app.command("mcp-serve")
