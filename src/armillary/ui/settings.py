@@ -14,22 +14,17 @@ from armillary.ui.settings_editors import (
     render_settings_launchers,
     render_settings_umbrellas,
 )
-from armillary.ui.settings_tabs import (
-    render_settings_integrations,
-    render_settings_khoj,
-)
+from armillary.ui.settings_tabs import render_settings_integrations
 
 _SETTINGS_TOAST_KEY = "_settings_toast"
 
 
 def _render_settings_page() -> None:
-    """In-UI editor for the YAML config — umbrellas, launchers, Khoj.
+    """In-UI editor for the YAML config — umbrellas, launchers, integrations.
 
     Replaces the "edit YAML by hand" workflow per the user-stated rule
-    "what you can't click in the UI doesn't exist". Four tabs, each
-    with its own form + Save button. Inline test affordances for the
-    things that can be tested without leaving the page (launcher PATH
-    check, Khoj health probe).
+    "what you can't click in the UI doesn't exist". Three tabs, each
+    with its own form + Save button.
 
     Loading the page itself is read-only — the only filesystem writes
     happen on explicit "Save" button clicks.
@@ -69,7 +64,6 @@ def _render_settings_page() -> None:
         [
             ":material/folder_open: Umbrellas",
             ":material/launch: Launchers",
-            ":material/psychology: Khoj",
             ":material/extension: Integrations",
         ]
     )
@@ -78,6 +72,4 @@ def _render_settings_page() -> None:
     with tabs[1]:
         render_settings_launchers(cfg)
     with tabs[2]:
-        render_settings_khoj(cfg)
-    with tabs[3]:
         render_settings_integrations()

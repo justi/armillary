@@ -320,7 +320,6 @@ def list_projects(
 
 # Register commands from submodules — must come after `app` is defined.
 import armillary.cli_config  # noqa: F401, E402
-import armillary.cli_khoj  # noqa: F401, E402
 import armillary.cli_tools  # noqa: F401, E402
 
 if __name__ == "__main__":

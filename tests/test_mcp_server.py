@@ -22,7 +22,6 @@ from armillary.mcp_server import (
     _safe_json,
     armillary_projects,
     armillary_search,
-    armillary_semantic,
 )
 from armillary.models import Project, ProjectMetadata, ProjectType, Status
 from armillary.search import SearchHit
@@ -250,28 +249,3 @@ def test_armillary_search_clamps_zero_max_results_before_backend_call(
 
     assert calls == [1]
     assert result == "No matches for 'needle' across 1 projects."
-
-
-def test_armillary_semantic_clamps_negative_max_results_before_backend_call(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[int] = []
-
-    class FakeLiteralSearch:
-        def search(
-            self, query: str, *, root: Path, max_results: int = 50
-        ) -> list[SearchHit]:
-            calls.append(max_results)
-            return []
-
-    monkeypatch.setattr("armillary.mcp_server.load_config", lambda: None)
-    monkeypatch.setattr("armillary.mcp_server.LiteralSearch", FakeLiteralSearch)
-    monkeypatch.setattr(
-        "armillary.mcp_server._get_project_roots",
-        lambda: [("alpha", Path("/tmp/alpha"))],
-    )
-
-    result = armillary_semantic("concept", max_results=-3)
-
-    assert calls == [1]
-    assert result == "No semantic matches for 'concept' across 1 projects."

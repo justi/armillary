@@ -225,7 +225,6 @@ def test_write_config_round_trip(tmp_path: Path) -> None:
     """Build a fully-populated Config, write, reload, assert equal on
     every user-facing field."""
     from armillary.config import (
-        KhojConfigBlock,
         LauncherConfig,
         write_config,
     )
@@ -245,12 +244,6 @@ def test_write_config_round_trip(tmp_path: Path) -> None:
                 terminal=True,
             ),
         },
-        khoj=KhojConfigBlock(
-            enabled=True,
-            api_url="http://localhost:42110",
-            api_key="secret",
-            timeout_seconds=10.0,
-        ),
     )
 
     written = write_config(cfg, target)
@@ -272,12 +265,6 @@ def test_write_config_round_trip(tmp_path: Path) -> None:
     assert "cursor" in reloaded.launchers
     assert reloaded.launchers["cursor"].command == "cursor"
     assert reloaded.launchers["nvim"].terminal is True
-
-    # Khoj
-    assert reloaded.khoj.enabled is True
-    assert reloaded.khoj.api_url == "http://localhost:42110"
-    assert reloaded.khoj.api_key == "secret"
-    assert reloaded.khoj.timeout_seconds == 10.0
 
 
 def test_write_config_is_idempotent(tmp_path: Path) -> None:
@@ -319,8 +306,8 @@ def test_write_config_includes_header_comment(tmp_path: Path) -> None:
 
 
 def test_write_config_empty_sections_serialize_cleanly(tmp_path: Path) -> None:
-    """Config() with default-everything (empty umbrellas, default launchers,
-    Khoj disabled) round-trips without raising."""
+    """Config() with default-everything (empty umbrellas, default launchers)
+    round-trips without raising."""
     from armillary.config import write_config
 
     target = tmp_path / "config.yaml"
@@ -329,7 +316,6 @@ def test_write_config_empty_sections_serialize_cleanly(tmp_path: Path) -> None:
     reloaded = load_config(target)
     assert reloaded.umbrellas == []
     assert "cursor" in reloaded.launchers  # built-in catalogue restored
-    assert reloaded.khoj.enabled is False
 
 
 def test_write_config_atomic_via_tmp_then_replace(

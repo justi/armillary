@@ -104,13 +104,6 @@ Fields not used in WHERE/ORDER go into `metadata_json` blob. New
 fields must NOT require a schema version bump unless they need their
 own SQL column.
 
-## Khoj integration (ADR 0003)
-
-Docker-based: `pgvector/pgvector:pg15` on port 54322, auto admin
-credentials in `~/.config/armillary/khoj-admin.env`, telemetry
-disabled via `KHOJ_TELEMETRY_DISABLE=true`. `start-khoj` redirects
-Khoj logs to file and shows clean ✓/✗ status.
-
 ## Visibility rule
 
 Every user-facing feature must be clickable in the UI or set up during

@@ -1,9 +1,8 @@
 """MCP server — exposes armillary tools for AI agents.
 
-Four tools:
+Three tools:
 - `armillary_next` — what should I work on today? (momentum/zombie/gold)
 - `armillary_search` — ripgrep literal search across all indexed repos
-- `armillary_semantic` — Khoj conceptual search (optional, requires Docker)
 - `armillary_projects` — list all indexed projects with metadata
 
 Run via: `armillary mcp-serve` (stdio transport, configure in
@@ -18,8 +17,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from armillary.cache import Cache
-from armillary.config import ConfigError, load_config
-from armillary.search import KhojConfig, KhojSearch, LiteralSearch, SearchHit
+from armillary.search import LiteralSearch, SearchHit
 
 # Hard limits to prevent MCP responses from exceeding token limits.
 _MAX_RESULTS_CAP = 200
@@ -32,8 +30,7 @@ mcp = FastMCP(
         "armillary indexes all local git repositories and idea folders on "
         "the user's machine. Use `armillary_next` at session start to see "
         "what to work on today. Use `armillary_search` for literal/exact "
-        "code search. Use `armillary_semantic` for conceptual queries "
-        "(requires Khoj). Use `armillary_projects` to list all projects."
+        "code search. Use `armillary_projects` to list all projects."
     ),
 )
 
@@ -138,67 +135,6 @@ def armillary_search(query: str, max_results: int = 20) -> str:
 
     if not results:
         return f"No matches for '{query}' across {len(project_roots)} projects."
-
-    return _safe_json(results[:max_results], total_hits, len(results[:max_results]))
-
-
-@mcp.tool()
-def armillary_semantic(query: str, max_results: int = 10) -> str:
-    """Search code across ALL local repositories using semantic/conceptual search.
-
-    Use this when searching by CONCEPT, not exact text: "authentication
-    patterns", "payment handling", "scraping approaches", "CSV import
-    logic". Understands that devise, bcrypt, JWT are all "authentication".
-
-    Requires Khoj running locally (armillary install-khoj + start-khoj).
-    Falls back to ripgrep if Khoj is unavailable.
-
-    Returns matched snippets with project metadata for reuse decisions.
-
-    Examples:
-    - "authentication patterns" → finds devise, bcrypt, JWT, has_secure_password
-    - "web scraping approaches" → finds BeautifulSoup, Nokogiri, Selenium
-    - "how to handle file uploads" → finds ActiveStorage, CarrierWave, Shrine
-    """
-    max_results = _clamp_max_results(max_results)
-    try:
-        cfg = load_config()
-    except ConfigError:
-        cfg = None
-
-    if cfg and cfg.khoj.enabled:
-        backend = KhojSearch(
-            config=KhojConfig(
-                api_url=cfg.khoj.api_url,
-                api_key=cfg.khoj.api_key,
-                timeout_seconds=cfg.khoj.timeout_seconds,
-            ),
-            fallback=LiteralSearch(),
-        )
-    else:
-        backend = LiteralSearch()
-
-    results: list[dict[str, object]] = []
-    project_roots = _get_project_roots()
-    total_hits = 0
-
-    for name, root in project_roots:
-        if len(results) >= max_results:
-            break
-        remaining = max_results - len(results)
-        try:
-            hits = backend.search(query, root=root, max_results=remaining)
-        except Exception:  # noqa: BLE001
-            continue
-        total_hits += len(hits)
-        if hits:
-            meta = _project_context(name)
-            results.extend(_hit_to_dict(h, meta) for h in hits)
-
-    if not results:
-        return (
-            f"No semantic matches for '{query}' across {len(project_roots)} projects."
-        )
 
     return _safe_json(results[:max_results], total_hits, len(results[:max_results]))
 
