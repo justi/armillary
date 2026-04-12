@@ -187,14 +187,43 @@ def _render_table(rows: list[OverviewRow]) -> None:
         on_select="rerun",
         selection_mode="single-row",
         column_config={
+            "Status": st.column_config.TextColumn(
+                "Status",
+                width="small",
+            ),
             "Name": st.column_config.TextColumn("Name", pinned=True),
+            "Branch": st.column_config.TextColumn(
+                "Branch",
+                width="small",
+            ),
+            "Dirty": st.column_config.NumberColumn(
+                "Dirty",
+                format="%d",
+                width="small",
+                help="Unstaged + staged + untracked files",
+            ),
+            "Commits": st.column_config.ProgressColumn(
+                "Commits",
+                min_value=0,
+                max_value=1000,
+                format="%d",
+                help="Total commits across all branches",
+            ),
+            "Work h": st.column_config.ProgressColumn(
+                "Work h",
+                min_value=0,
+                max_value=500,
+                format="%.0f",
+                help=(
+                    "Estimated active development hours "
+                    "(sum of inter-commit gaps < 4 h)"
+                ),
+            ),
             "Last modified": st.column_config.DatetimeColumn(
                 "Last modified",
-                format="YYYY-MM-DD HH:mm",
+                format="DD MMM YYYY",
             ),
-            "Dirty": st.column_config.NumberColumn("Dirty", format="%d"),
-            "Commits": st.column_config.NumberColumn("Commits", format="%d"),
-            "Work h": st.column_config.NumberColumn("Work h", format="%.1f"),
+            "Type": None,  # hide — almost all are "git"
         },
     )
 
