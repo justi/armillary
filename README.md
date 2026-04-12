@@ -33,7 +33,7 @@
 `armillary` is a **knowledge layer** for solo entrepreneurs and developers who accumulate dozens to hundreds of projects over years. It's not a dashboard for 5 active projects — it's **archaeological memory for your entire codebase history**.
 
 - **Auto-discovers** every project in your umbrella folders (git repos and loose idea folders)
-- **Shows metadata** for each: status, branch, commits, work hours, dirty files, README, notes
+- **Shows metadata** for each: status, branch, commits, work hours, dirty files, README, ADRs, notes
 - **Infers "where it stands"** — ACTIVE / PAUSED / DORMANT / IDEA / IN PROGRESS
 - **Launches** each project into Cursor, VS Code, Zed, Claude Code, Codex, terminal, Finder
 - **Searches** across ALL projects — literal (ripgrep) + optional semantic (Khoj)
