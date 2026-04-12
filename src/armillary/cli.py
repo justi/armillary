@@ -52,8 +52,21 @@ def start(
     no_browser: bool = typer.Option(
         False, "--no-browser", help="Do not open the browser automatically."
     ),
+    no_scan: bool = typer.Option(
+        False,
+        "--no-scan",
+        help="Skip the automatic pre-start scan (just open the dashboard).",
+    ),
 ) -> None:
-    """Launch the dashboard in the browser."""
+    """Launch the dashboard in the browser.
+
+    By default runs a quick scan before opening Streamlit so the
+    dashboard shows fresh data from the first render. The scan reads
+    the umbrellas from config, enriches with git metadata, and
+    persists to the SQLite cache — exactly what `armillary scan`
+    does. Pass `--no-scan` if you want to skip this and open the
+    dashboard instantly (it will show whatever the cache already has).
+    """
     if importlib.util.find_spec("streamlit") is None:
         typer.secho(
             "streamlit is not installed — reinstall armillary "
@@ -62,6 +75,9 @@ def start(
             err=True,
         )
         raise typer.Exit(2)
+
+    if not no_scan:
+        _pre_start_scan()
 
     ui_path = Path(__file__).parent / "ui" / "app.py"
     cmd = [
@@ -84,6 +100,54 @@ def start(
     result = subprocess.run(cmd, check=False)
     if result.returncode != 0:
         raise typer.Exit(result.returncode)
+
+
+def _pre_start_scan() -> None:
+    """Quick scan before opening the dashboard.
+
+    Reads umbrellas from config, runs the full scan + metadata
+    extraction pipeline, and persists to cache. Errors are caught
+    and reported as warnings — a failed pre-scan must never block
+    the dashboard from opening.
+    """
+    try:
+        cfg = load_config()
+    except ConfigError:
+        return
+
+    if not cfg.umbrellas:
+        return
+
+    typer.secho("Scanning before dashboard launch…", fg=typer.colors.CYAN)
+    try:
+        umbrellas = [
+            UmbrellaFolder(path=u.path, max_depth=u.max_depth) for u in cfg.umbrellas
+        ]
+        projects = scan_umbrellas(umbrellas)
+        metadata.extract_all(projects)
+        for project in projects:
+            if project.metadata is None:
+                continue
+            if (
+                project.type is ProjectType.GIT
+                and project.metadata.last_commit_ts is not None
+                and project.metadata.last_commit_ts > project.last_modified
+            ):
+                project.last_modified = project.metadata.last_commit_ts
+            project.metadata.status = status.compute_status(project)
+        with Cache() as cache:
+            cache.upsert(projects, write_metadata=True)
+            cache.prune_stale()
+        typer.secho(
+            f"  ✓ {len(projects)} project(s) indexed.",
+            fg=typer.colors.GREEN,
+        )
+    except Exception as exc:  # noqa: BLE001
+        typer.secho(
+            f"  ⚠ Pre-start scan failed: {exc}",
+            fg=typer.colors.YELLOW,
+        )
+        typer.echo("  Dashboard will show cached data.")
 
 
 @app.command()
