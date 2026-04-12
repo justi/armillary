@@ -1,8 +1,7 @@
 """Tests for `armillary.mcp_server` — MCP tool functions.
 
 Tests the pure logic: project context enrichment, hit-to-dict conversion,
-and the armillary_projects tool output shape. Search tools are integration-
-level (need ripgrep + real repos) so we only test the helpers here.
+armillary_projects tool output, and response size safety guards.
 """
 
 from __future__ import annotations
@@ -10,6 +9,8 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
+
+import pytest
 
 from armillary.cache import Cache
 from armillary.mcp_server import (
@@ -43,16 +44,24 @@ def _project(
     )
 
 
+@pytest.fixture()
+def _use_tmp_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Route all Cache() calls to a temp DB via env var."""
+    db_path = tmp_path / "cache.db"
+    monkeypatch.setenv("ARMILLARY_CACHE_DB", str(db_path))
+    return db_path
+
+
 # --- _project_context ------------------------------------------------------
 
 
-def test_project_context_returns_nulls_for_missing_project(tmp_path: Path) -> None:
-    db_path = tmp_path / "cache.db"
+def test_project_context_returns_nulls_for_missing_project(
+    _use_tmp_cache: Path,
+) -> None:
+    db_path = _use_tmp_cache
     with Cache(db_path=db_path):
         pass  # empty cache
 
-    # Patch default db_path — _project_context uses Cache() without args,
-    # so we test it indirectly via armillary_projects which also uses Cache().
     result = _project_context("nonexistent")
     assert result["path"] is None
     assert result["status"] is None
@@ -60,9 +69,9 @@ def test_project_context_returns_nulls_for_missing_project(tmp_path: Path) -> No
 
 
 def test_project_context_returns_metadata_for_existing_project(
-    tmp_path: Path, monkeypatch: object
+    _use_tmp_cache: Path,
 ) -> None:
-    db_path = tmp_path / "cache.db"
+    db_path = _use_tmp_cache
     md = ProjectMetadata(
         status=Status.ACTIVE,
         readme_excerpt="A quiz app.",
@@ -70,17 +79,7 @@ def test_project_context_returns_metadata_for_existing_project(
     with Cache(db_path=db_path) as cache:
         cache.upsert([_project("quiz", metadata=md)])
 
-    # Monkey-patch Cache to use our test db
-    import armillary.mcp_server as mcp_mod
-
-    original_cache = Cache.__init__
-
-    def patched_init(self: Cache, *, db_path: Path | None = None) -> None:
-        original_cache(self, db_path=tmp_path / "cache.db")
-
-    monkeypatch.setattr(Cache, "__init__", patched_init)  # type: ignore[arg-type]
-
-    result = mcp_mod._project_context("quiz")
+    result = _project_context("quiz")
     assert result["path"] == "/tmp/quiz"
     assert result["status"] == "ACTIVE"
     assert result["description"] == "A quiz app."
@@ -102,87 +101,6 @@ def test_hit_to_dict_merges_meta_and_hit() -> None:
     assert result["file"] == "/tmp/foo/bar.py"
     assert result["line"] == 42
     assert result["preview"] == "def bar():"
-
-
-# --- armillary_projects -----------------------------------------------------
-
-
-def test_armillary_projects_returns_all(tmp_path: Path, monkeypatch: object) -> None:
-    db_path = tmp_path / "cache.db"
-    with Cache(db_path=db_path) as cache:
-        cache.upsert(
-            [
-                _project(
-                    "alpha",
-                    metadata=ProjectMetadata(
-                        status=Status.ACTIVE, readme_excerpt="Alpha app"
-                    ),
-                ),
-                _project("beta", metadata=ProjectMetadata(status=Status.DORMANT)),
-            ]
-        )
-
-    original_cache = Cache.__init__
-
-    def patched_init(self: Cache, *, db_path: Path | None = None) -> None:
-        original_cache(self, db_path=tmp_path / "cache.db")
-
-    monkeypatch.setattr(Cache, "__init__", patched_init)  # type: ignore[arg-type]
-
-    result = json.loads(armillary_projects())
-    assert len(result) == 2
-    paths = {r["path"] for r in result}
-    assert "/tmp/alpha" in paths
-    assert "/tmp/beta" in paths
-    # Check shape
-    for row in result:
-        assert "path" in row
-        assert "status" in row
-        assert "description" in row
-
-
-def test_armillary_projects_filters_by_status(
-    tmp_path: Path, monkeypatch: object
-) -> None:
-    db_path = tmp_path / "cache.db"
-    with Cache(db_path=db_path) as cache:
-        cache.upsert(
-            [
-                _project("active1", metadata=ProjectMetadata(status=Status.ACTIVE)),
-                _project("dormant1", metadata=ProjectMetadata(status=Status.DORMANT)),
-                _project("active2", metadata=ProjectMetadata(status=Status.ACTIVE)),
-            ]
-        )
-
-    original_cache = Cache.__init__
-
-    def patched_init(self: Cache, *, db_path: Path | None = None) -> None:
-        original_cache(self, db_path=tmp_path / "cache.db")
-
-    monkeypatch.setattr(Cache, "__init__", patched_init)  # type: ignore[arg-type]
-
-    result = json.loads(armillary_projects(status_filter="ACTIVE"))
-    assert len(result) == 2
-    assert all(r["status"] == "ACTIVE" for r in result)
-
-
-def test_armillary_projects_empty_cache(tmp_path: Path, monkeypatch: object) -> None:
-    db_path = tmp_path / "cache.db"
-    with Cache(db_path=db_path):
-        pass
-
-    original_cache = Cache.__init__
-
-    def patched_init(self: Cache, *, db_path: Path | None = None) -> None:
-        original_cache(self, db_path=tmp_path / "cache.db")
-
-    monkeypatch.setattr(Cache, "__init__", patched_init)  # type: ignore[arg-type]
-
-    result = json.loads(armillary_projects())
-    assert result == []
-
-
-# --- _hit_to_dict truncation -----------------------------------------------
 
 
 def test_hit_to_dict_truncates_long_preview() -> None:
@@ -211,13 +129,67 @@ def test_hit_to_dict_keeps_short_preview() -> None:
     assert result["preview"] == "short"
 
 
+# --- armillary_projects -----------------------------------------------------
+
+
+def test_armillary_projects_returns_all(_use_tmp_cache: Path) -> None:
+    db_path = _use_tmp_cache
+    with Cache(db_path=db_path) as cache:
+        cache.upsert(
+            [
+                _project(
+                    "alpha",
+                    metadata=ProjectMetadata(
+                        status=Status.ACTIVE, readme_excerpt="Alpha app"
+                    ),
+                ),
+                _project("beta", metadata=ProjectMetadata(status=Status.DORMANT)),
+            ]
+        )
+
+    result = json.loads(armillary_projects())
+    assert len(result) == 2
+    paths = {r["path"] for r in result}
+    assert "/tmp/alpha" in paths
+    assert "/tmp/beta" in paths
+    for row in result:
+        assert "path" in row
+        assert "status" in row
+        assert "description" in row
+
+
+def test_armillary_projects_filters_by_status(_use_tmp_cache: Path) -> None:
+    db_path = _use_tmp_cache
+    with Cache(db_path=db_path) as cache:
+        cache.upsert(
+            [
+                _project("active1", metadata=ProjectMetadata(status=Status.ACTIVE)),
+                _project("dormant1", metadata=ProjectMetadata(status=Status.DORMANT)),
+                _project("active2", metadata=ProjectMetadata(status=Status.ACTIVE)),
+            ]
+        )
+
+    result = json.loads(armillary_projects(status_filter="ACTIVE"))
+    assert len(result) == 2
+    assert all(r["status"] == "ACTIVE" for r in result)
+
+
+def test_armillary_projects_empty_cache(_use_tmp_cache: Path) -> None:
+    db_path = _use_tmp_cache
+    with Cache(db_path=db_path):
+        pass
+
+    result = json.loads(armillary_projects())
+    assert result == []
+
+
 # --- _safe_json truncation --------------------------------------------------
 
 
 def test_safe_json_returns_compact_json() -> None:
     results = [{"a": 1}, {"a": 2}]
     output = _safe_json(results, 2, 2)
-    assert " " not in output  # no indent
+    assert " " not in output
     parsed = json.loads(output)
     assert len(parsed) == 2
 
@@ -233,7 +205,7 @@ def test_safe_json_adds_truncated_marker_when_shown_less_than_total() -> None:
 def test_safe_json_trims_results_when_over_char_limit() -> None:
     big_results = [{"data": "x" * 500, "i": i} for i in range(200)]
     output = _safe_json(big_results, 200, 200)
-    assert len(output) <= _RESPONSE_MAX_CHARS + 100  # small margin for truncated marker
+    assert len(output) <= _RESPONSE_MAX_CHARS + 100
     parsed = json.loads(output)
     assert parsed[-1]["_truncated"] > 0
 

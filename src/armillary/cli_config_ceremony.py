@@ -233,9 +233,11 @@ def install_mcp_config(claude_dir: Path) -> None:
     existing: dict[str, object] = {}
     if mcp_json_path.is_file():
         try:
-            existing = json.loads(mcp_json_path.read_text(encoding="utf-8"))
+            parsed = json.loads(mcp_json_path.read_text(encoding="utf-8"))
+            if isinstance(parsed, dict):
+                existing = parsed
         except (ValueError, OSError):
-            existing = {}
+            pass
 
     # Claude Code expects {"mcpServers": {"name": {...}}} wrapper.
     servers = existing.setdefault("mcpServers", {})

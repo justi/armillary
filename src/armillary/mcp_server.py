@@ -160,7 +160,7 @@ def armillary_semantic(query: str, max_results: int = 10) -> str:
             config=KhojConfig(
                 api_url=cfg.khoj.api_url,
                 api_key=cfg.khoj.api_key,
-                timeout=cfg.khoj.timeout_seconds,
+                timeout_seconds=cfg.khoj.timeout_seconds,
             ),
             fallback=LiteralSearch(),
         )
