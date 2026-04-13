@@ -231,7 +231,20 @@ def _apply_filters(
 
 
 def _render_table(rows: list[OverviewRow]) -> None:
-    """Project list with clickable names linking to detail view."""
+    """Project list with checkboxes + clickable names."""
+    selected_paths: list[str] = []
+
+    # Header row
+    col_cb, col_name, col_summary, col_hours, col_last = st.columns([0.5, 3, 4, 1, 1])
+    with col_name:
+        st.caption("**Name**")
+    with col_summary:
+        st.caption("**Summary**")
+    with col_hours:
+        st.caption("**Hours**")
+    with col_last:
+        st.caption("**Last**")
+
     for r in rows:
         emoji = _STATUS_EMOJI.get(r.status_raw, "·")
 
@@ -262,7 +275,17 @@ def _render_table(rows: list[OverviewRow]) -> None:
 
         hours_str = f"{r.work_hours:.0f}h" if r.work_hours else ""
 
-        col_name, col_summary, col_hours, col_last = st.columns([3, 4, 1, 1])
+        col_cb, col_name, col_summary, col_hours, col_last = st.columns(
+            [0.5, 3, 4, 1, 1]
+        )
+        with col_cb:
+            checked = st.checkbox(
+                "sel",
+                key=f"sel_{r.path}",
+                label_visibility="collapsed",
+            )
+            if checked:
+                selected_paths.append(r.path)
         with col_name:
             if st.button(
                 f"{emoji} {r.name}",
@@ -278,3 +301,27 @@ def _render_table(rows: list[OverviewRow]) -> None:
             st.caption(hours_str)
         with col_last:
             st.caption(last)
+
+    # Bulk actions bar (only when something is selected)
+    if selected_paths:
+        _render_bulk_actions(selected_paths)
+
+
+def _render_bulk_actions(selected_paths: list[str]) -> None:
+    """Action bar for selected projects."""
+    from armillary.exclude_service import exclude_project
+
+    st.markdown("---")
+    col_info, col_exclude = st.columns([3, 1])
+    with col_info:
+        st.caption(f"{len(selected_paths)} project(s) selected")
+    with col_exclude:
+        if st.button(
+            "Exclude selected",
+            icon=":material/visibility_off:",
+            key="bulk_exclude",
+            type="secondary",
+        ):
+            for path in selected_paths:
+                exclude_project(path)
+            st.rerun()
