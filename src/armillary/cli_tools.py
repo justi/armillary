@@ -72,8 +72,11 @@ def search(
     console = Console()
     total_hits = 0
     for project in projects:
+        remaining = max_results - total_hits
+        if remaining <= 0:
+            break
         try:
-            hits = backend.search(query, root=project.path, max_results=max_results)
+            hits = backend.search(query, root=project.path, max_results=remaining)
         except Exception as exc:  # noqa: BLE001 — permission errors, broken files, etc.
             typer.secho(
                 f"Search failed on {project.name}: {exc}",

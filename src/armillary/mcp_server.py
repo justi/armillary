@@ -115,6 +115,8 @@ def armillary_search(query: str, max_results: int = 20) -> str:
     - "def parse_price" → finds price parsing functions
     """
     max_results = _clamp_max_results(max_results)
+    if not LiteralSearch.is_available():
+        return "ripgrep (`rg`) is not installed. Install it: `brew install ripgrep`."
     backend = LiteralSearch()
     results: list[dict[str, object]] = []
     project_roots = _get_project_roots()

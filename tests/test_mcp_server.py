@@ -233,6 +233,10 @@ def test_armillary_search_clamps_zero_max_results_before_backend_call(
     calls: list[int] = []
 
     class FakeLiteralSearch:
+        @staticmethod
+        def is_available() -> bool:
+            return True
+
         def search(
             self, query: str, *, root: Path, max_results: int = 50
         ) -> list[SearchHit]:
