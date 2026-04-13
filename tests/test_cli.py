@@ -1844,3 +1844,68 @@ def test_scan_then_rescan_reflects_removed_projects_after_prune(
     with Cache() as cache:
         names = {p.name for p in cache.list_projects()}
     assert names == {"kept"}
+
+
+# --- `armillary context` -----------------------------------------------------
+
+
+def test_context_shows_project_info(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Successful context retrieval prints the project name and exits 0."""
+    from armillary.context_service import ProjectContext
+
+    fake_ctx = ProjectContext(
+        name="myapp",
+        path=Path("/tmp/myapp"),
+        status="ACTIVE",
+        work_hours=42.0,
+        branch="main",
+        dirty_files=["M  README.md"],
+        dirty_count=1,
+        recent_commits=[],
+        recent_branches=[],
+        is_git=True,
+    )
+    monkeypatch.setattr(
+        "armillary.context_service.get_context",
+        lambda name, **kw: fake_ctx,
+    )
+
+    result = runner.invoke(app, ["context", "myapp"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "myapp" in _strip_ansi(result.stdout)
+
+
+def test_context_ambiguous_name_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ambiguous project name exits 2 with 'Ambiguous' in output."""
+
+    def _raise(name: str, **kw: Any) -> None:
+        raise ValueError("Ambiguous: alpha-one, alpha-two")
+
+    monkeypatch.setattr("armillary.context_service.get_context", _raise)
+
+    result = runner.invoke(app, ["context", "alpha"])
+
+    assert result.exit_code == 2
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
+    assert "Ambiguous" in combined
+
+
+def test_context_not_found_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unknown project name exits 2 with 'No project' in output."""
+    monkeypatch.setattr(
+        "armillary.context_service.get_context",
+        lambda name, **kw: None,
+    )
+
+    result = runner.invoke(app, ["context", "zzz"])
+
+    assert result.exit_code == 2
+    combined = _strip_ansi(result.stdout + (result.stderr or ""))
+    assert "No project" in combined

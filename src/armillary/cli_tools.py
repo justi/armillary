@@ -236,7 +236,7 @@ def context_command(
 
     console = Console()
     status_str = ctx.status or "?"
-    hours_str = f" — {ctx.work_hours:.1f} h" if ctx.work_hours else ""
+    hours_str = f" — {ctx.work_hours:.1f} h" if ctx.work_hours is not None else ""
     short_path = _shorten_home(ctx.path)
 
     branch_str = f" on [cyan]{ctx.branch}[/cyan]" if ctx.branch else ""
@@ -275,7 +275,7 @@ def context_command(
     # Actionable hint
     if ctx.dirty_count > 0:
         console.print(
-            f"\n  [dim]→ {ctx.dirty_count} unstaged change{s}"
+            f"\n  [dim]→ {ctx.dirty_count} uncommitted change{s}"
             f" — commit or stash before switching[/dim]"
         )
 

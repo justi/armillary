@@ -77,7 +77,8 @@ def get_context(
     status = md.status.value if md and md.status else None
     work_hours = md.work_hours if md else None
 
-    if not (project.path / ".git").is_dir():
+    # Detect git repo: .git can be a directory (normal) or file (worktree/submodule)
+    if not (project.path / ".git").exists():
         return ProjectContext(
             name=project.name,
             path=project.path,
@@ -86,22 +87,28 @@ def get_context(
             is_git=False,
         )
 
+    branch = _current_branch(project.path)
+    dirty_files, dirty_count = _dirty_state(project.path)
     return ProjectContext(
         name=project.name,
         path=project.path,
         status=status,
         work_hours=work_hours,
-        branch=_current_branch(project.path),
-        dirty_files=_dirty_files(project.path),
-        dirty_count=_dirty_count(project.path),
+        branch=branch,
+        dirty_files=dirty_files,
+        dirty_count=dirty_count,
         recent_commits=_recent_commits(project.path),
-        recent_branches=_recent_branches(project.path),
+        recent_branches=_recent_branches(project.path, current=branch),
         is_git=True,
     )
 
 
 def _run_git(project_path: Path, *args: str) -> str:
-    """Run a git command and return stdout. Empty string on failure."""
+    """Run a git command and return stdout. Empty string on failure.
+
+    Only strips trailing whitespace — leading spaces are meaningful
+    for commands like `git status --porcelain`.
+    """
     try:
         result = subprocess.run(
             ["git", *args],
@@ -110,29 +117,23 @@ def _run_git(project_path: Path, *args: str) -> str:
             text=True,
             timeout=5,
         )
-        return result.stdout.strip() if result.returncode == 0 else ""
+        return result.stdout.rstrip() if result.returncode == 0 else ""
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return ""
 
 
 def _current_branch(path: Path) -> str | None:
     branch = _run_git(path, "rev-parse", "--abbrev-ref", "HEAD")
-    return branch or None
+    return branch.strip() or None
 
 
-def _dirty_files(path: Path, *, max_show: int = 5) -> list[str]:
+def _dirty_state(path: Path, *, max_show: int = 5) -> tuple[list[str], int]:
+    """Return (file_list, total_count) from a single git status call."""
     output = _run_git(path, "status", "--porcelain", "--no-renames")
     if not output:
-        return []
+        return [], 0
     lines = output.splitlines()
-    return [line.strip() for line in lines[:max_show]]
-
-
-def _dirty_count(path: Path) -> int:
-    output = _run_git(path, "status", "--porcelain", "--no-renames")
-    if not output:
-        return 0
-    return len(output.splitlines())
+    return [line.rstrip() for line in lines[:max_show]], len(lines)
 
 
 def _recent_commits(path: Path, *, count: int = 5) -> list[CommitInfo]:
@@ -158,8 +159,9 @@ def _recent_commits(path: Path, *, count: int = 5) -> list[CommitInfo]:
     return commits
 
 
-def _recent_branches(path: Path, *, count: int = 3) -> list[BranchInfo]:
-    current = _current_branch(path)
+def _recent_branches(
+    path: Path, *, current: str | None = None, count: int = 3
+) -> list[BranchInfo]:
     output = _run_git(
         path,
         "branch",

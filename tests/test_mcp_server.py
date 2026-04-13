@@ -20,6 +20,7 @@ from armillary.mcp_server import (
     _hit_to_dict,
     _project_context,
     _safe_json,
+    armillary_context,
     armillary_projects,
     armillary_search,
 )
@@ -253,3 +254,66 @@ def test_armillary_search_clamps_zero_max_results_before_backend_call(
 
     assert calls == [1]
     assert result == "No matches for 'needle' across 1 projects."
+
+
+# --- armillary_context -------------------------------------------------------
+
+
+def test_armillary_context_returns_json_for_existing_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from armillary.context_service import ProjectContext
+
+    fake_ctx = ProjectContext(
+        name="quiz",
+        path=Path("/tmp/quiz"),
+        status="ACTIVE",
+        work_hours=10.0,
+        branch="main",
+        dirty_files=["M  app.py"],
+        dirty_count=1,
+        recent_commits=[],
+        recent_branches=[],
+        is_git=True,
+    )
+    monkeypatch.setattr(
+        "armillary.context_service.get_context",
+        lambda name, **kw: fake_ctx,
+    )
+
+    result = armillary_context("quiz")
+
+    parsed = json.loads(result)
+    assert parsed["name"] == "quiz"
+    assert parsed["path"] == "/tmp/quiz"
+    assert parsed["status"] == "ACTIVE"
+    assert parsed["branch"] == "main"
+    assert parsed["dirty_count"] == 1
+    assert parsed["is_git"] is True
+
+
+def test_armillary_context_returns_error_for_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "armillary.context_service.get_context",
+        lambda name, **kw: None,
+    )
+
+    result = armillary_context("nonexistent")
+
+    assert "No project" in result
+    assert "nonexistent" in result
+
+
+def test_armillary_context_returns_error_for_ambiguous(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _raise(name: str, **kw: object) -> None:
+        raise ValueError("Ambiguous: alpha-one, alpha-two")
+
+    monkeypatch.setattr("armillary.context_service.get_context", _raise)
+
+    result = armillary_context("alpha")
+
+    assert "Ambiguous" in result
