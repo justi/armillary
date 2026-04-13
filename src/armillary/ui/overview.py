@@ -41,6 +41,8 @@ def _render_overview() -> None:
         _render_empty_cache_state(cfg)
         return
 
+    _render_next_suggestions()
+
     # Top-level search bar — runs ripgrep across cached projects on demand.
     _render_search_section(rows, cfg)
 
@@ -52,6 +54,49 @@ def _render_overview() -> None:
         return
 
     _render_table(filtered)
+
+
+_CATEGORY_ICONS = {"momentum": "🔥", "zombie": "⚠️", "forgotten_gold": "💀"}
+_CATEGORY_LABELS = {
+    "momentum": "Momentum",
+    "zombie": "Zombie — kill or ship?",
+    "forgotten_gold": "Forgotten gold",
+}
+
+
+def _render_next_suggestions() -> None:
+    """Show armillary next suggestions at the top of overview."""
+    from armillary.next_service import get_suggestions
+
+    suggestions = get_suggestions()
+    if not suggestions:
+        return
+
+    with st.expander(
+        "🧭 What should you work on today?",
+        expanded=True,
+        icon=":material/tips_and_updates:",
+    ):
+        for s in suggestions:
+            icon = _CATEGORY_ICONS.get(s.category, "•")
+            label = _CATEGORY_LABELS.get(s.category, s.category)
+            path_str = _shorten_home(s.project.path)
+            col_info, col_action = st.columns([4, 1])
+            with col_info:
+                st.markdown(
+                    f"{icon} **{s.project.name}** — {label}  \n"
+                    f"{s.reason}  \n"
+                    f"`{path_str}`"
+                )
+            with col_action:
+                if st.button(
+                    "Open",
+                    key=f"next_open_{s.project.name}",
+                    icon=":material/open_in_new:",
+                ):
+                    st.query_params["view"] = "detail"
+                    st.query_params["project"] = str(s.project.path)
+                    st.rerun()
 
 
 def _render_empty_cache_state(cfg: Config | None) -> None:

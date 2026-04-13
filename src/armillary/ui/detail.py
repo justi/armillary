@@ -110,6 +110,7 @@ def _render_project_detail(project_path: str) -> None:
             st.markdown(md.readme_excerpt)
 
     if project.type.value == "git":
+        _render_context_section(project)
         st.subheader("Recent commits", anchor=False)
         _render_recent_commits(project.path)
 
@@ -125,6 +126,36 @@ def _render_project_detail(project_path: str) -> None:
         ):
             for adr in md.adr_paths:
                 st.markdown(f"- `{adr.name}` \u2014 `{adr}`")
+
+
+def _render_context_section(project: Project) -> None:
+    """Show dirty files + recent branches from live git state."""
+    from armillary.context_service import get_context
+
+    try:
+        ctx = get_context(project.name)
+    except (ValueError, Exception):  # noqa: BLE001
+        return
+    if ctx is None or not ctx.is_git:
+        return
+
+    if ctx.dirty_count > 0:
+        s = "s" if ctx.dirty_count > 1 else ""
+        st.warning(
+            f"**{ctx.dirty_count} dirty file{s}** — commit or stash before switching",
+            icon=":material/edit_note:",
+        )
+        with st.expander("Dirty files", expanded=ctx.dirty_count <= 5):
+            for f in ctx.dirty_files:
+                st.code(f, language=None)
+            if ctx.dirty_count > len(ctx.dirty_files):
+                more = ctx.dirty_count - len(ctx.dirty_files)
+                st.caption(f"and {more} more")
+
+    if ctx.recent_branches:
+        with st.expander("Recent branches", icon=":material/fork_right:"):
+            for b in ctx.recent_branches:
+                st.markdown(f"- `{b.name}` — {b.relative_time}")
 
 
 def _render_detail_metric_tiles(project: Project) -> None:
