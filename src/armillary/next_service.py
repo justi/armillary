@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .cache import Cache, default_db_path
+from .exclude_service import filter_excluded
 from .models import Project, Status
 
 _SKIP_DURATION_DAYS = 30
@@ -44,6 +45,7 @@ def get_suggestions(
 
     with Cache(db_path=db_path) as cache:
         projects = cache.list_projects()
+    projects = filter_excluded(projects)
 
     skips = _load_skips(db_path)
     active_skips = {

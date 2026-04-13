@@ -12,6 +12,7 @@ import streamlit as st
 
 from armillary.cache import Cache
 from armillary.config import Config
+from armillary.exclude_service import filter_excluded
 from armillary.ui.helpers import (
     _STATUS_EMOJI,
     OverviewRow,
@@ -28,6 +29,7 @@ def _render_overview() -> None:
 
     cfg = _safe_load_config()
     rows = _load_overview_rows()
+    rows = filter_excluded(rows)
 
     filters = _render_sidebar(rows, cfg)
 

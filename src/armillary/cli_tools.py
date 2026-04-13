@@ -12,6 +12,7 @@ from armillary import exporter, launcher
 from armillary.cache import Cache
 from armillary.cli import app
 from armillary.cli_helpers import _safe_load_config
+from armillary.exclude_service import filter_excluded
 from armillary.search import LiteralSearch
 
 
@@ -44,6 +45,7 @@ def search(
 
     with Cache() as cache:
         all_projects = cache.list_projects()
+    all_projects = filter_excluded(all_projects)
 
     if project_filter:
         needle = project_filter.lower()
@@ -206,6 +208,76 @@ def install_claude_bridge(
                 f"  · {claude_md} already imports armillary — left untouched.",
                 fg=typer.colors.CYAN,
             )
+
+
+@app.command("exclude")
+def exclude_command(
+    names: list[str] = typer.Argument(..., help="Project names to exclude."),
+) -> None:
+    """Exclude projects from all armillary output.
+
+    Excluded projects won't appear in next, search, context, overview,
+    or MCP tools. Use `armillary include` to restore.
+    """
+    from armillary.exclude_service import exclude_project
+
+    with Cache() as cache:
+        all_projects = cache.list_projects()
+
+    for name in names:
+        matches = [p for p in all_projects if name.lower() in p.name.lower()]
+        if not matches:
+            typer.secho(f"No project matches '{name}'.", fg=typer.colors.YELLOW)
+            continue
+        if len(matches) > 1:
+            exact = [p for p in matches if p.name.lower() == name.lower()]
+            if len(exact) == 1:
+                matches = exact
+            else:
+                match_names = ", ".join(p.name for p in matches[:5])
+                typer.secho(
+                    f"'{name}' is ambiguous: {match_names}. Be more specific.",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                continue
+        project = matches[0]
+        exclude_project(str(project.path))
+        typer.secho(f"Excluded {project.name}", fg=typer.colors.CYAN)
+
+    typer.echo("Use `armillary include <name>` to restore.")
+
+
+@app.command("include")
+def include_command(
+    names: list[str] = typer.Argument(..., help="Project names to restore."),
+) -> None:
+    """Restore excluded projects back to armillary output."""
+    from armillary.exclude_service import include_project
+
+    with Cache() as cache:
+        all_projects = cache.list_projects()
+
+    for name in names:
+        matches = [p for p in all_projects if name.lower() in p.name.lower()]
+        if not matches:
+            typer.secho(f"No project matches '{name}'.", fg=typer.colors.YELLOW)
+            continue
+        if len(matches) > 1:
+            exact = [p for p in matches if p.name.lower() == name.lower()]
+            if len(exact) == 1:
+                matches = exact
+            else:
+                match_names = ", ".join(p.name for p in matches[:5])
+                typer.secho(
+                    f"'{name}' is ambiguous: {match_names}.",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                continue
+        project = matches[0]
+        include_project(str(project.path))
+        typer.secho(f"Restored {project.name}", fg=typer.colors.GREEN)
 
 
 @app.command("context")

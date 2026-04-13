@@ -18,6 +18,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from armillary.cache import Cache
+from armillary.exclude_service import filter_excluded
 from armillary.search import LiteralSearch, SearchHit
 
 # Hard limits to prevent MCP responses from exceeding token limits.
@@ -94,9 +95,10 @@ def _clamp_max_results(max_results: int) -> int:
 
 
 def _get_project_roots() -> list[tuple[str, Path]]:
-    """Return (name, path) for all cached projects."""
+    """Return (name, path) for all cached projects, excluding hidden ones."""
     with Cache() as cache:
         projects = cache.list_projects()
+    projects = filter_excluded(projects)
     return [(p.name, p.path) for p in projects]
 
 
@@ -160,6 +162,7 @@ def armillary_projects(status_filter: str | None = None) -> str:
     """
     with Cache() as cache:
         projects = cache.list_projects()
+    projects = filter_excluded(projects)
 
     if status_filter:
         status_upper = status_filter.upper()
