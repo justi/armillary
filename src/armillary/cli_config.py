@@ -1,7 +1,7 @@
 """Config command entry point for armillary CLI.
 
-Ceremony helpers (scan, Khoj detection, Claude bridge, YAML rendering)
-live in `cli_config_ceremony` to keep this module under 400 lines.
+Ceremony helpers (scan, Claude bridge, YAML rendering) live in
+`cli_config_ceremony` to keep this module under 400 lines.
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ from armillary.cli import app
 from armillary.cli_config_ceremony import (
     ask_for_candidate_selection,
     detect_claude_code_and_offer_bridge,
-    detect_khoj_and_maybe_enable,
     render_config_yaml,
     run_initial_scan_and_summary,
     show_launcher_availability,
@@ -40,8 +39,8 @@ def config(
         help=(
             "Create a config at the default path. By default scans `~/` for "
             "umbrella folder candidates, asks you to pick, writes the YAML, "
-            "runs an initial scan, and offers to enable Khoj / Claude Code "
-            "bridges if it detects them."
+            "runs an initial scan, and offers to install the Claude Code "
+            "bridge if it detects it."
         ),
     ),
     non_interactive: bool = typer.Option(
@@ -49,7 +48,7 @@ def config(
         "--non-interactive",
         help=(
             "With --init, accept all detected candidates without asking and "
-            "treat Khoj / Claude Code prompts as 'no'."
+            "treat Claude Code prompts as 'no'."
         ),
     ),
     blank: bool = typer.Option(
@@ -69,11 +68,6 @@ def config(
         False,
         "--skip-launcher-check",
         help="With --init, skip listing which launchers are on PATH.",
-    ),
-    skip_khoj_detect: bool = typer.Option(
-        False,
-        "--skip-khoj-detect",
-        help="With --init, skip probing localhost for a running Khoj.",
     ),
     skip_claude_detect: bool = typer.Option(
         False,
@@ -101,9 +95,8 @@ def config(
     2. Runs an initial `armillary scan` to populate the cache
     3. Prints a per-status summary of what was indexed
     4. Lists which configured launchers are on PATH
-    5. Probes localhost for Khoj and offers to enable semantic search
-    6. Detects `~/.claude/` and offers to install the AI bridge
-    7. Prints next-step hints
+    5. Detects `~/.claude/` and offers to install the AI bridge
+    6. Prints next-step hints
 
     Each numbered step has a `--skip-*` flag for scripted setups.
     `--blank` writes the YAML and exits without running the ceremony.
@@ -185,7 +178,6 @@ def config(
             blank=blank,
             skip_scan=skip_scan,
             skip_launcher_check=skip_launcher_check,
-            skip_khoj_detect=skip_khoj_detect,
             skip_claude_detect=skip_claude_detect,
         )
         return
@@ -241,7 +233,6 @@ def _init_config_file(
     blank: bool,
     skip_scan: bool = False,
     skip_launcher_check: bool = False,
-    skip_khoj_detect: bool = False,
     skip_claude_detect: bool = False,
 ) -> None:
     """Discover umbrellas, write config, run setup ceremony.
@@ -251,10 +242,9 @@ def _init_config_file(
       no detection, no ceremony. Escape hatch for users who want to
       hand-edit YAML themselves.
     - `non_interactive=True` accepts every detected candidate without
-      asking the user, and treats Khoj/Claude prompts as 'no'.
+      asking the user, and treats Claude prompts as 'no'.
     - default (no flags) runs the full ceremony: pick → write →
-      scan → summary → launcher check → Khoj detect → Claude
-      detect → final hint.
+      scan → summary → launcher check → Claude detect → final hint.
 
     Each `skip_*` flag short-circuits one ceremony step for scripted
     setups (and tests). `blank=True` implies all skips.
@@ -341,11 +331,6 @@ def _init_config_file(
 
     if not skip_launcher_check:
         show_launcher_availability()
-
-    if not skip_khoj_detect:
-        detect_khoj_and_maybe_enable(
-            config_path, chosen, non_interactive=non_interactive
-        )
 
     if not skip_claude_detect:
         detect_claude_code_and_offer_bridge(

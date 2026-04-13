@@ -12,8 +12,7 @@ from armillary import exporter, launcher
 from armillary.cache import Cache
 from armillary.cli import app
 from armillary.cli_helpers import _safe_load_config
-from armillary.config import Config, default_config_path
-from armillary.search import KhojConfig, KhojSearch, LiteralSearch
+from armillary.search import LiteralSearch
 
 
 @app.command()
@@ -33,22 +32,11 @@ def search(
         max=500,
         help="Maximum number of hits to print.",
     ),
-    use_khoj: bool = typer.Option(
-        False,
-        "--khoj",
-        help=(
-            "Use the Khoj semantic search backend instead of ripgrep. "
-            "Falls back to ripgrep if Khoj is unreachable. Only enabled "
-            "if `khoj.enabled` is true in your config."
-        ),
-    ),
 ) -> None:
-    """Search across indexed project files (literal `ripgrep` by default).
+    """Search across indexed project files using ripgrep.
 
-    Without flags, runs `rg <query>` over every cached project (or a
-    subset filtered by `--project`). With `--khoj`, posts to the Khoj
-    REST API configured in `~/.config/armillary/config.yaml` and falls
-    back to ripgrep on any error so the dashboard never breaks.
+    Runs `rg <query>` over every cached project (or a subset filtered
+    by `--project`).
     """
     cfg = _safe_load_config()
     if cfg is None:
@@ -70,24 +58,34 @@ def search(
         )
         return
 
-    backend = _build_search_backend(cfg, use_khoj=use_khoj)
-    if backend is None:
+    if not LiteralSearch.is_available():
+        typer.secho(
+            "ripgrep (`rg`) is not on PATH. "
+            "Install it (`brew install ripgrep`) to use search.",
+            fg=typer.colors.RED,
+            err=True,
+        )
         raise typer.Exit(2)
+
+    backend = LiteralSearch()
 
     console = Console()
     total_hits = 0
+    errors = 0
     for project in projects:
+        remaining = max_results - total_hits
+        if remaining <= 0:
+            break
         try:
-            hits = backend.search(query, root=project.path, max_results=max_results)
-        except Exception as exc:  # noqa: BLE001 — KhojResponseError, URLError, etc.
+            hits = backend.search(query, root=project.path, max_results=remaining)
+        except Exception as exc:  # noqa: BLE001 — permission errors, broken files, etc.
             typer.secho(
-                f"Search backend ({backend.name}) failed: {exc}. "
-                "Install ripgrep (`brew install ripgrep`) for an automatic "
-                "fallback, or check that the Khoj server is reachable.",
+                f"Search failed on {project.name}: {exc}",
                 fg=typer.colors.RED,
                 err=True,
             )
-            raise typer.Exit(2) from exc
+            errors += 1
+            continue
         if not hits:
             continue
         console.print(
@@ -107,43 +105,10 @@ def search(
             break
 
     if total_hits == 0:
+        if errors == len(projects):
+            typer.secho("Search failed on all projects.", fg=typer.colors.RED)
+            raise typer.Exit(2)
         typer.secho(f"No matches for '{query}'.", fg=typer.colors.YELLOW)
-
-
-def _build_search_backend(
-    cfg: Config, *, use_khoj: bool
-) -> LiteralSearch | KhojSearch | None:
-    if not use_khoj:
-        if not LiteralSearch.is_available():
-            typer.secho(
-                "ripgrep (`rg`) is not on PATH. "
-                "Install it (`brew install ripgrep`) or run with `--khoj`.",
-                fg=typer.colors.RED,
-                err=True,
-            )
-            return None
-        return LiteralSearch()
-
-    if not cfg.khoj.enabled:
-        typer.secho(
-            "Khoj is not enabled. Set `khoj.enabled: true` in "
-            f"{default_config_path()} first.",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        return None
-
-    fallback: LiteralSearch | None = (
-        LiteralSearch() if LiteralSearch.is_available() else None
-    )
-    return KhojSearch(
-        config=KhojConfig(
-            api_url=cfg.khoj.api_url,
-            api_key=cfg.khoj.api_key,
-            timeout_seconds=cfg.khoj.timeout_seconds,
-        ),
-        fallback=fallback,
-    )
 
 
 @app.command("open")
@@ -315,11 +280,10 @@ def next_command(
 def mcp_serve() -> None:
     """Start the MCP server (stdio transport) for AI coding agents.
 
-    Exposes four tools that Claude Code / Cursor / Codex can call:
+    Exposes three tools that Claude Code / Cursor / Codex can call:
 
     - armillary_next — what should I work on today? (momentum/zombie/gold)
     - armillary_search — ripgrep literal search across all repos
-    - armillary_semantic — Khoj conceptual search (optional)
     - armillary_projects — list all indexed projects with metadata
 
     Configure in Claude Code's `.claude/mcp.json`:
