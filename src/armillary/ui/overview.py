@@ -231,20 +231,8 @@ def _apply_filters(
 
 
 def _render_table(rows: list[OverviewRow]) -> None:
-    """Project list with checkboxes + clickable names."""
-    selected_paths: list[str] = []
-
-    # Header row
-    col_cb, col_name, col_summary, col_hours, col_last = st.columns([0.5, 3, 4, 1, 1])
-    with col_name:
-        st.caption("**Name**")
-    with col_summary:
-        st.caption("**Summary**")
-    with col_hours:
-        st.caption("**Hours**")
-    with col_last:
-        st.caption("**Last**")
-
+    """Compact dataframe with multi-select + action bar."""
+    display = []
     for r in rows:
         emoji = _STATUS_EMOJI.get(r.status_raw, "·")
 
@@ -254,7 +242,7 @@ def _render_table(rows: list[OverviewRow]) -> None:
             parts.append(f"{r.commits} commits")
         if r.branch and r.branch != "—":
             parts.append(r.branch)
-        summary = ", ".join(parts) if parts else ""
+        summary = ", ".join(parts) if parts else "—"
 
         # Relative time
         if r.last_modified:
@@ -271,57 +259,87 @@ def _render_table(rows: list[OverviewRow]) -> None:
             else:
                 last = f"{days // 365}y ago"
         else:
-            last = ""
+            last = "—"
 
-        hours_str = f"{r.work_hours:.0f}h" if r.work_hours else ""
-
-        col_cb, col_name, col_summary, col_hours, col_last = st.columns(
-            [0.5, 3, 4, 1, 1]
+        display.append(
+            {
+                "Name": f"{emoji} {r.name}",
+                "Summary": summary,
+                "Hours": r.work_hours or 0,
+                "Last": last,
+            }
         )
-        with col_cb:
-            checked = st.checkbox(
-                "sel",
-                key=f"sel_{r.path}",
-                label_visibility="collapsed",
-            )
-            if checked:
-                selected_paths.append(r.path)
-        with col_name:
-            if st.button(
-                f"{emoji} {r.name}",
-                key=f"row_{r.path}",
-                use_container_width=True,
-            ):
-                st.query_params["view"] = "detail"
-                st.query_params["project"] = r.path
-                st.rerun()
-        with col_summary:
-            st.caption(summary)
-        with col_hours:
-            st.caption(hours_str)
-        with col_last:
-            st.caption(last)
 
-    # Bulk actions bar (only when something is selected)
-    if selected_paths:
-        _render_bulk_actions(selected_paths)
+    event = st.dataframe(
+        display,
+        height=400,
+        width="stretch",
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="multi-row",
+        column_config={
+            "Name": st.column_config.TextColumn("Name", pinned=True),
+            "Summary": st.column_config.TextColumn("Summary"),
+            "Hours": st.column_config.ProgressColumn(
+                "Hours",
+                min_value=0,
+                max_value=500,
+                format="%.0f",
+                help="Estimated work hours (commit gap < 4h)",
+            ),
+            "Last": st.column_config.TextColumn("Last", width="small"),
+        },
+    )
+
+    # Action bar based on selection
+    selection = getattr(event, "selection", None)
+    selected_rows = getattr(selection, "rows", []) if selection else []
+
+    if selected_rows:
+        _render_action_bar(rows, selected_rows)
 
 
-def _render_bulk_actions(selected_paths: list[str]) -> None:
-    """Action bar for selected projects."""
+def _render_action_bar(rows: list[OverviewRow], selected_indices: list[int]) -> None:
+    """Action bar: Open (1 selected) or Exclude (1+ selected)."""
     from armillary.exclude_service import exclude_project
 
-    st.markdown("---")
-    col_info, col_exclude = st.columns([3, 1])
-    with col_info:
-        st.caption(f"{len(selected_paths)} project(s) selected")
-    with col_exclude:
-        if st.button(
-            "Exclude selected",
-            icon=":material/visibility_off:",
-            key="bulk_exclude",
-            type="secondary",
-        ):
-            for path in selected_paths:
-                exclude_project(path)
-            st.rerun()
+    count = len(selected_indices)
+    selected_paths = [rows[i].path for i in selected_indices if i < len(rows)]
+
+    if count == 1:
+        name = rows[selected_indices[0]].name
+        col_info, col_open, col_exclude = st.columns([2, 1, 1])
+        with col_info:
+            st.caption(f"**{name}** selected")
+        with col_open:
+            if st.button(
+                "Open project",
+                icon=":material/open_in_new:",
+                key="action_open",
+                type="primary",
+            ):
+                st.query_params["view"] = "detail"
+                st.query_params["project"] = selected_paths[0]
+                st.rerun()
+        with col_exclude:
+            if st.button(
+                "Exclude",
+                icon=":material/visibility_off:",
+                key="action_exclude",
+            ):
+                for p in selected_paths:
+                    exclude_project(p)
+                st.rerun()
+    else:
+        col_info, col_exclude = st.columns([3, 1])
+        with col_info:
+            st.caption(f"**{count}** project(s) selected")
+        with col_exclude:
+            if st.button(
+                "Exclude selected",
+                icon=":material/visibility_off:",
+                key="action_bulk_exclude",
+            ):
+                for p in selected_paths:
+                    exclude_project(p)
+                st.rerun()
