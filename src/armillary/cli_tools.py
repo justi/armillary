@@ -71,6 +71,7 @@ def search(
 
     console = Console()
     total_hits = 0
+    errors = 0
     for project in projects:
         remaining = max_results - total_hits
         if remaining <= 0:
@@ -83,6 +84,7 @@ def search(
                 fg=typer.colors.RED,
                 err=True,
             )
+            errors += 1
             continue
         if not hits:
             continue
@@ -103,6 +105,9 @@ def search(
             break
 
     if total_hits == 0:
+        if errors == len(projects):
+            typer.secho("Search failed on all projects.", fg=typer.colors.RED)
+            raise typer.Exit(2)
         typer.secho(f"No matches for '{query}'.", fg=typer.colors.YELLOW)
 
 
