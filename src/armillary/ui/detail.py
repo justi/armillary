@@ -1,4 +1,8 @@
-"""Project detail page — single-project view with metadata and actions."""
+"""Project detail page — narrative layout per ADR 0014.
+
+Hierarchy: Name+Status+Open → Dirty/Clean → Branch+LastCommit →
+           Recent Commits → Branches → Reference (README, Notes, ADRs, Details).
+"""
 
 from __future__ import annotations
 
@@ -10,7 +14,7 @@ import streamlit as st
 
 from armillary import launcher as launcher_mod
 from armillary.config import Config, LauncherConfig
-from armillary.models import Project
+from armillary.models import Project, Status
 from armillary.ui.actions import go_to_overview
 from armillary.ui.helpers import (
     _STATUS_EMOJI,
@@ -34,10 +38,7 @@ class LauncherOption:
 def build_launcher_options(
     launchers: dict[str, LauncherConfig],
 ) -> tuple[list[LauncherOption], list[str], list[str], list[str]]:
-    """Filter terminal launchers, detect availability, build display options.
-
-    Returns ``(available, missing_labels, terminal_only_labels, app_labels)``.
-    """
+    """Filter terminal launchers, detect availability, build display options."""
     available: list[LauncherOption] = []
     missing_labels: list[str] = []
     terminal_only_labels: list[str] = []
@@ -94,25 +95,51 @@ def _render_project_detail(project_path: str) -> None:
 
     md = project.metadata
 
-    st.title(project.name)
+    # --- Row 1: Name + Status + Launcher (top-right) ---
+    _render_header_with_launcher(project)
 
-    _render_detail_metric_tiles(project)
-    _render_detail_captions(project)
+    # --- Row 2: Dirty/Clean signal ---
+    import contextlib
 
-    # "Open in..." dropdown wired to the launcher catalogue.
-    cfg = _safe_load_config()
-    if cfg is not None:
-        st.subheader("Open in\u2026", anchor=False)
-        _render_launcher_dropdown(project, cfg)
+    from armillary.context_service import get_context
+
+    ctx = None
+    if project.type.value == "git":
+        with contextlib.suppress(ValueError, Exception):
+            ctx = get_context(project.name)
+
+    if ctx and ctx.is_git:
+        _render_dirty_or_clean(ctx)
+
+    # --- Row 3: Branch + Last commit narrative ---
+    if ctx and ctx.is_git:
+        _render_narrative_context(ctx)
+
+    # --- Section: What I was working on ---
+    if project.type.value == "git":
+        st.markdown("---")
+        st.subheader("What I was working on", anchor=False)
+        _render_recent_commits(project.path)
+        if ctx and ctx.recent_branches:
+            with st.expander(
+                "Recent branches", icon=":material/fork_right:", expanded=False
+            ):
+                for b in ctx.recent_branches:
+                    st.markdown(f"- `{b.name}` — {b.relative_time}")
+
+    # --- Section: Reference ---
+    st.markdown("---")
+    st.subheader("Reference", anchor=False)
+
+    is_dormant = md and md.status in (Status.DORMANT, Status.PAUSED)
 
     if md and md.readme_excerpt:
-        with st.expander("README", icon=":material/description:", expanded=True):
+        with st.expander(
+            "README",
+            icon=":material/description:",
+            expanded=bool(is_dormant),
+        ):
             st.markdown(md.readme_excerpt)
-
-    if project.type.value == "git":
-        _render_context_section(project)
-        st.subheader("Recent commits", anchor=False)
-        _render_recent_commits(project.path)
 
     if md and md.note_paths:
         with st.expander(f"Notes ({len(md.note_paths)})", icon=":material/note:"):
@@ -121,158 +148,63 @@ def _render_project_detail(project_path: str) -> None:
 
     if md and md.adr_paths:
         with st.expander(
-            f"Architecture decision records ({len(md.adr_paths)})",
+            f"ADRs ({len(md.adr_paths)})",
             icon=":material/architecture:",
         ):
             for adr in md.adr_paths:
                 st.markdown(f"- `{adr.name}` \u2014 `{adr}`")
 
-
-def _render_context_section(project: Project) -> None:
-    """Show dirty files + recent branches from live git state."""
-    from armillary.context_service import get_context
-
-    try:
-        ctx = get_context(project.name)
-    except (ValueError, Exception):  # noqa: BLE001
-        return
-    if ctx is None or not ctx.is_git:
-        return
-
-    if ctx.dirty_count > 0:
-        s = "s" if ctx.dirty_count > 1 else ""
-        st.warning(
-            f"**{ctx.dirty_count} dirty file{s}** — commit or stash before switching",
-            icon=":material/edit_note:",
-        )
-        with st.expander("Dirty files", expanded=ctx.dirty_count <= 5):
-            for f in ctx.dirty_files:
-                st.code(f, language=None)
-            if ctx.dirty_count > len(ctx.dirty_files):
-                more = ctx.dirty_count - len(ctx.dirty_files)
-                st.caption(f"and {more} more")
-
-    if ctx.recent_branches:
-        with st.expander("Recent branches", icon=":material/fork_right:"):
-            for b in ctx.recent_branches:
-                st.markdown(f"- `{b.name}` — {b.relative_time}")
+    # --- Collapsed details (path, umbrella, stats) ---
+    _render_details_expander(project)
 
 
-def _render_detail_metric_tiles(project: Project) -> None:
+def _render_header_with_launcher(project: Project) -> None:
+    """Name + status badge + launcher dropdown in top-right."""
     md = project.metadata
+    status_str = ""
+    if md and md.status:
+        emoji = _STATUS_EMOJI.get(md.status.value, "\u00b7")
+        status_str = f" — {emoji} {md.status.value}"
 
-    with st.container(horizontal=True):
-        if md and md.status:
-            emoji = _STATUS_EMOJI.get(md.status.value, "\u00b7")
-            st.metric("Status", f"{emoji} {md.status.value}", border=True)
-        else:
-            st.metric("Status", "\u2014", border=True)
-        st.metric("Type", project.type.value, border=True)
-        if md and md.branch:
-            st.metric("Branch", md.branch, border=True)
-        if md and md.dirty_count is not None:
-            st.metric("Dirty files", md.dirty_count, border=True)
-
-    # Second row: commits, work hours, ahead, behind.
-    if md and any(
-        x is not None for x in (md.commit_count, md.work_hours, md.ahead, md.behind)
-    ):
-        with st.container(horizontal=True):
-            if md.commit_count is not None:
-                st.metric("Commits", md.commit_count, border=True)
-            if md.work_hours is not None:
-                st.metric("Work h", f"{md.work_hours:.1f}", border=True)
-            if md.ahead is not None:
-                st.metric("Ahead", md.ahead, border=True)
-            if md.behind is not None:
-                st.metric("Behind", md.behind, border=True)
-
-    # Third row: size / file count.
-    if md and any(x is not None for x in (md.size_bytes, md.file_count)):
-        with st.container(horizontal=True):
-            if md.size_bytes is not None:
-                st.metric("Size", _format_bytes(md.size_bytes), border=True)
-            if md.file_count is not None:
-                st.metric("Files", md.file_count, border=True)
+    col_title, col_launcher = st.columns([5, 2])
+    with col_title:
+        st.title(f"{project.name}{status_str}")
+    with col_launcher:
+        cfg = _safe_load_config()
+        if cfg is not None and cfg.launchers:
+            _render_launcher_compact(project, cfg)
 
 
-def _render_detail_captions(project: Project) -> None:
-    md = project.metadata
-    st.caption(f":material/folder: `{project.path}`")
-    st.caption(f":material/inventory_2: Umbrella: `{_shorten_home(project.umbrella)}`")
-    st.caption(
-        f":material/schedule: Last modified: "
-        f"{project.last_modified.strftime('%Y-%m-%d %H:%M')}"
-    )
-    if md and md.last_commit_ts:
-        commit_line = (
-            f":material/commit: Last commit: "
-            f"{md.last_commit_ts.strftime('%Y-%m-%d %H:%M')}"
-        )
-        if md.last_commit_author:
-            commit_line += f" by {md.last_commit_author}"
-        if md.last_commit_sha:
-            commit_line += f" ({md.last_commit_sha[:8]})"
-        st.caption(commit_line)
-
-
-def _render_launcher_dropdown(project: Project, cfg: Config) -> None:
-    """'Open in...' dropdown per project, driven by yaml config.
-
-    Each non-terminal entry from `cfg.launchers` is shown with its
-    label/icon. Click -> calls `launcher.launch()` and surfaces
-    success/error inline.
-
-    **Terminal launchers are excluded** from the dashboard. Their
-    `subprocess.run()` path inherits the parent's stdio (necessary
-    for interactive `codex` / `claude-code` sessions) which would
-    block the Streamlit server thread and commandeer the terminal
-    that hosts the dashboard process. Use them from the CLI instead
-    via `armillary open <name> -t <target>`.
-    """
-    if not cfg.launchers:
-        st.caption("No launchers configured.")
-        return
-
+def _render_launcher_compact(project: Project, cfg: Config) -> None:
+    """Compact launcher: selectbox + Open button, top-right."""
     available, missing_labels, terminal_only_labels, app_labels = (
         build_launcher_options(cfg.launchers)
     )
 
-    # P2.8: Surface terminal-only info ABOVE the dropdown so it is not
-    # buried below the fold.
     if terminal_only_labels:
         st.caption(
-            f"Terminal-only launchers ({', '.join(terminal_only_labels)}) "
-            "are interactive \u2014 use `armillary open <name> -t <id>` "
-            "from your terminal."
+            f"Terminal: {', '.join(terminal_only_labels)} "
+            "\u2014 use CLI `armillary open`"
         )
 
     if not available:
-        st.warning(
-            "No GUI launchers were detected. armillary checks both CLI tools on PATH "
-            "and known macOS app bundles."
-        )
-        if missing_labels:
-            st.caption(f"Configured but missing: {', '.join(missing_labels)}")
         return
 
     options_map = {opt.target_id: opt.label for opt in available}
-    col_select, col_btn = st.columns([3, 1])
-    with col_select:
-        target_id = st.selectbox(
-            "Launcher",
-            options=list(options_map),
-            format_func=lambda tid: options_map[tid],
-            label_visibility="collapsed",
-            key=f"launcher_pick_{project.path}",
-        )
-    with col_btn:
-        clicked = st.button(
-            "Open",
-            icon=":material/launch:",
-            width="stretch",
-            key=f"launcher_open_{project.path}",
-        )
+    target_id = st.selectbox(
+        "Launcher",
+        options=list(options_map),
+        format_func=lambda tid: options_map[tid],
+        label_visibility="collapsed",
+        key=f"launcher_pick_{project.path}",
+    )
+    clicked = st.button(
+        "Open",
+        icon=":material/launch:",
+        width="stretch",
+        key=f"launcher_open_{project.path}",
+        type="primary",
+    )
 
     if clicked:
         result = launcher_mod.launch(project, target_id, launchers=cfg.launchers)
@@ -281,29 +213,95 @@ def _render_launcher_dropdown(project: Project, cfg: Config) -> None:
         else:
             st.error(result.error or "Launch failed.")
 
-    if app_labels:
-        st.caption(f"Detected via macOS app bundle: {', '.join(app_labels)}")
-    if missing_labels:
-        st.caption(f"Still not detected: {', '.join(missing_labels)}")
+
+def _render_dirty_or_clean(ctx: object) -> None:
+    """Full-width dirty warning or clean success signal."""
+    if ctx.dirty_count > 0:
+        s = "s" if ctx.dirty_count > 1 else ""
+        st.warning(
+            f"**{ctx.dirty_count} dirty file{s}** "
+            "\u2014 commit or stash before switching",
+            icon=":material/edit_note:",
+        )
+        with st.expander("Dirty files", expanded=ctx.dirty_count <= 5):
+            for f in ctx.dirty_files:
+                st.code(f, language=None)
+            if ctx.dirty_count > len(ctx.dirty_files):
+                more = ctx.dirty_count - len(ctx.dirty_files)
+                st.caption(f"and {more} more")
+    else:
+        st.success("Clean working tree", icon=":material/check_circle:")
+
+
+def _render_narrative_context(ctx: object) -> None:
+    """Branch + last commit as narrative lines (not metric tiles)."""
+    if ctx.branch:
+        st.markdown(f"Branch: `{ctx.branch}`")
+    if ctx.recent_commits:
+        c = ctx.recent_commits[0]
+        st.markdown(
+            f"Last: {c.relative_time} \u2014 `{c.short_hash}` \u201c{c.subject}\u201d"
+        )
+
+
+def _render_details_expander(project: Project) -> None:
+    """Collapsed details: path, umbrella, commits, work hours, size."""
+    md = project.metadata
+    parts = [f"`{_shorten_home(project.path)}`"]
+    if md and md.commit_count is not None:
+        parts.append(f"{md.commit_count} commits")
+    if md and md.work_hours is not None:
+        parts.append(f"{md.work_hours:.1f}h work")
+    label = "Details (" + ", ".join(parts[1:]) + ")" if len(parts) > 1 else "Details"
+
+    with st.expander(label, icon=":material/info:"):
+        st.caption(f":material/folder: `{project.path}`")
+        st.caption(
+            f":material/inventory_2: Umbrella: `{_shorten_home(project.umbrella)}`"
+        )
+        st.caption(
+            f":material/schedule: Last modified: "
+            f"{project.last_modified.strftime('%Y-%m-%d %H:%M')}"
+        )
+        if md and md.last_commit_ts:
+            commit_line = (
+                f":material/commit: Last commit: "
+                f"{md.last_commit_ts.strftime('%Y-%m-%d %H:%M')}"
+            )
+            if md.last_commit_author:
+                commit_line += f" by {md.last_commit_author}"
+            if md.last_commit_sha:
+                commit_line += f" ({md.last_commit_sha[:8]})"
+            st.caption(commit_line)
+        if md:
+            with st.container(horizontal=True):
+                if md.commit_count is not None:
+                    st.metric("Commits", md.commit_count, border=True)
+                if md.work_hours is not None:
+                    st.metric("Work h", f"{md.work_hours:.1f}", border=True)
+                if md.ahead and md.ahead > 0:
+                    st.metric("Ahead", md.ahead, border=True)
+                if md.behind and md.behind > 0:
+                    st.metric("Behind", md.behind, border=True)
+                if md.size_bytes is not None:
+                    st.metric("Size", _format_bytes(md.size_bytes), border=True)
+                if md.file_count is not None:
+                    st.metric("Files", md.file_count, border=True)
 
 
 def _render_recent_commits(repo_path: Path, limit: int = 5) -> None:
-    """Show the last `limit` commits as a markdown list.
-
-    Calls `git log` directly via subprocess — much cheaper than going
-    through GitPython for a one-off display, and we already have a
-    timeout pattern from `LiteralSearch`.
-    """
+    """Show the last commits in an expanded expander."""
     commits = _git_log_recent(repo_path, limit=limit)
     if not commits:
         st.caption("_No commit history available._")
         return
 
-    for commit in commits:
-        st.markdown(
-            f"- **`{commit['sha']}`** — {commit['message']}  \n"
-            f"  _{commit['date']} · {commit['author']}_"
-        )
+    with st.expander("Recent commits", expanded=True):
+        for commit in commits:
+            st.markdown(
+                f"- **`{commit['sha']}`** \u2014 {commit['message']}  \n"
+                f"  _{commit['date']} \u00b7 {commit['author']}_"
+            )
 
 
 def _git_log_recent(repo_path: Path, *, limit: int = 5) -> list[dict[str, str]]:

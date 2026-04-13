@@ -25,6 +25,7 @@ project:
     open: built                   # launch in Cursor/VS Code/Zed
     scan: built                   # refresh all metadata
     dashboard: built              # Streamlit overview + detail + settings
+    detail_redesign: planned      # ADR 0014 — narrative layout, action buttons top, noise reduction
 
   ai_integration:
     mcp_server: built             # armillary_next, armillary_search, armillary_projects, armillary_context
