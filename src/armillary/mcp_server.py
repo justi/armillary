@@ -102,8 +102,8 @@ def armillary_search(query: str, max_results: int = 20) -> str:
     """Search code across ALL local repositories using ripgrep (literal/exact match).
 
     Use this when you know the exact term: function name, class name,
-    variable, error message, import path. Fast (<10ms), always available,
-    works offline.
+    variable, error message, import path. Fast (<10ms), works offline.
+    Requires ripgrep (`rg`) on PATH.
 
     Returns matched lines with file paths, line numbers, and project
     metadata (path, status, description) so you can assess whether

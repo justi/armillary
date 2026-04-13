@@ -19,8 +19,8 @@ class SearchHit:
     """A single match across all indexed projects.
 
     `path` is the absolute file the match came from. `line` is the
-    1-based line number. `preview` is the matched line — kept short
-    enough to render in a dashboard table cell.
+    1-based line number (None when unavailable). `preview` is the
+    matched line — kept short enough to render in a table cell.
     """
 
     path: Path
