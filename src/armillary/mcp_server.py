@@ -1,9 +1,10 @@
 """MCP server — exposes armillary tools for AI agents.
 
-Three tools:
+Four tools:
 - `armillary_next` — what should I work on today? (momentum/zombie/gold)
 - `armillary_search` — ripgrep literal search across all indexed repos
 - `armillary_projects` — list all indexed projects with metadata
+- `armillary_context` — where was I? project state for re-entry
 
 Run via: `armillary mcp-serve` (stdio transport, configure in
 Claude Code's `.claude/mcp.json`).
@@ -29,8 +30,10 @@ mcp = FastMCP(
     instructions=(
         "armillary indexes all local git repositories and idea folders on "
         "the user's machine. Use `armillary_next` at session start to see "
-        "what to work on today. Use `armillary_search` for literal/exact "
-        "code search. Use `armillary_projects` to list all projects."
+        "what to work on today. Use `armillary_context` when switching to "
+        "a project to get branch, dirty files, and recent commits. Use "
+        "`armillary_search` for literal code search. Use "
+        "`armillary_projects` to list all projects."
     ),
 )
 
@@ -212,6 +215,60 @@ def armillary_next() -> str:
             }
         )
     return _safe_json(rows, len(rows), len(rows))
+
+
+@mcp.tool()
+def armillary_context(project_name: str) -> str:
+    """Where was I? Get project state for instant re-entry.
+
+    Returns branch, dirty files, recent commits, and recent branches
+    so you can resume work on a project without re-reading code.
+
+    Call this when the user says "switch to X", "where was I on X",
+    or "what's the state of X". NOT auto-triggered on directory change.
+
+    Examples:
+    - armillary_context("pdf_to_quiz") → branch, 1 dirty file, last 5 commits
+    - armillary_context("speak-faster") → dormant, last commit 3 months ago
+    """
+    from armillary.context_service import get_context
+
+    try:
+        ctx = get_context(project_name)
+    except ValueError as exc:
+        return f"Ambiguous project name: {exc}"
+
+    if ctx is None:
+        return f"No project matches '{project_name}'. Run `armillary scan` first."
+
+    result: dict[str, object] = {
+        "name": ctx.name,
+        "path": str(ctx.path),
+        "status": ctx.status,
+        "work_hours": ctx.work_hours,
+        "is_git": ctx.is_git,
+    }
+
+    if ctx.is_git:
+        result["branch"] = ctx.branch
+        result["dirty_count"] = ctx.dirty_count
+        if ctx.dirty_files:
+            result["dirty_files"] = ctx.dirty_files
+        if ctx.recent_commits:
+            result["recent_commits"] = [
+                {
+                    "hash": c.short_hash,
+                    "time": c.relative_time,
+                    "subject": c.subject,
+                }
+                for c in ctx.recent_commits
+            ]
+        if ctx.recent_branches:
+            result["recent_branches"] = [
+                {"name": b.name, "time": b.relative_time} for b in ctx.recent_branches
+            ]
+
+    return json.dumps(result, separators=(",", ":"), default=str)
 
 
 def run_server() -> None:
