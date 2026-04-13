@@ -231,18 +231,19 @@ def _apply_filters(
 
 
 def _render_table(rows: list[OverviewRow]) -> None:
-    """4-column narrative table: Name, Summary, Hours, Last."""
-    display = []
+    """Project list with clickable names linking to detail view."""
     for r in rows:
-        # Build prose summary
+        emoji = _STATUS_EMOJI.get(r.status_raw, "·")
+
+        # Summary prose
         parts = []
         if r.commits is not None:
             parts.append(f"{r.commits} commits")
-        if r.branch:
+        if r.branch and r.branch != "—":
             parts.append(r.branch)
-        summary = ", ".join(parts) if parts else "—"
+        summary = ", ".join(parts) if parts else ""
 
-        # Relative "Last" time
+        # Relative time
         if r.last_modified:
             delta = datetime.now() - r.last_modified
             days = delta.days
@@ -257,43 +258,23 @@ def _render_table(rows: list[OverviewRow]) -> None:
             else:
                 last = f"{days // 365}y ago"
         else:
-            last = "—"
+            last = ""
 
-        display.append(
-            {
-                "Name": f"{_STATUS_EMOJI.get(r.status_raw, '·')} {r.name}",
-                "Summary": summary,
-                "Hours": r.work_hours or 0,
-                "Last": last,
-            }
-        )
+        hours_str = f"{r.work_hours:.0f}h" if r.work_hours else ""
 
-    event = st.dataframe(
-        display,
-        width="stretch",
-        hide_index=True,
-        on_select="rerun",
-        selection_mode="single-row",
-        column_config={
-            "Name": st.column_config.TextColumn("Name", pinned=True),
-            "Summary": st.column_config.TextColumn("Summary"),
-            "Hours": st.column_config.ProgressColumn(
-                "Hours",
-                min_value=0,
-                max_value=500,
-                format="%.0f",
-                help="Estimated work hours (commit gap < 4h)",
-            ),
-            "Last": st.column_config.TextColumn(
-                "Last",
-                width="small",
-            ),
-        },
-    )
-
-    selection = getattr(event, "selection", None)
-    selected_rows = getattr(selection, "rows", []) if selection else []
-    if selected_rows:
-        idx = selected_rows[0]
-        st.query_params["project"] = rows[idx].path
-        st.rerun()
+        col_name, col_summary, col_hours, col_last = st.columns([3, 4, 1, 1])
+        with col_name:
+            if st.button(
+                f"{emoji} {r.name}",
+                key=f"row_{r.path}",
+                use_container_width=True,
+            ):
+                st.query_params["view"] = "detail"
+                st.query_params["project"] = r.path
+                st.rerun()
+        with col_summary:
+            st.caption(summary)
+        with col_hours:
+            st.caption(hours_str)
+        with col_last:
+            st.caption(last)
