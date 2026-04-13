@@ -312,7 +312,7 @@ def _git_log_recent(repo_path: Path, *, limit: int = 5) -> list[dict[str, str]]:
                 "log",
                 f"-{limit}",
                 "--no-merges",
-                "--format=%h\x1f%s\x1f%ci\x1f%an",
+                "--format=%h\x1f%s\x1f%ar\x1f%an",
             ],
             cwd=str(repo_path),
             capture_output=True,
