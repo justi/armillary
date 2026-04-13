@@ -1,9 +1,8 @@
-"""Sidebar with filters, reload, scan, and settings navigation.
+"""Sidebar — navigation + status filter + scan.
 
 Two variants:
-- ``_render_sidebar`` — full version with filter widgets for the overview page
-- ``_render_nav_sidebar`` — minimal version for detail/settings pages with
-  just the navigation buttons so the user can always get back, reload, or scan
+- ``_render_sidebar`` — overview page: navigation + status filter + scan
+- ``_render_nav_sidebar`` — detail/settings pages: navigation + scan only
 """
 
 from __future__ import annotations
@@ -14,7 +13,6 @@ from armillary.config import Config
 from armillary.ui.actions import (
     go_to_overview,
     go_to_settings,
-    refresh_cache,
     run_scan_with_feedback,
 )
 from armillary.ui.helpers import OverviewRow, _safe_load_config
@@ -23,61 +21,56 @@ from armillary.ui.helpers import OverviewRow, _safe_load_config
 def _render_sidebar(
     rows: list[OverviewRow], cfg: Config | None
 ) -> dict[str, list[str] | str]:
-    """Full sidebar for the overview page — filters + actions."""
+    """Sidebar for overview: navigation + status filter + scan."""
     status_pick: list[str] = []
-    type_pick: list[str] = []
-    umbrella_pick: list[str] = []
-    name_substring = ""
 
     with st.sidebar:
-        if rows:
-            st.header("Filters")
-            statuses = sorted({r.status_raw for r in rows if r.status_raw})
-            types = sorted({r.type for r in rows})
-            umbrellas = sorted({r.umbrella for r in rows})
+        st.header(":material/explore: armillary")
 
+        # Navigation
+        if st.button(
+            "Overview",
+            icon=":material/explore:",
+            width="stretch",
+            key="sidebar_overview",
+        ):
+            go_to_overview()
+        if st.button(
+            "Settings",
+            icon=":material/settings:",
+            width="stretch",
+            key="sidebar_settings",
+        ):
+            go_to_settings()
+
+        # Status filter
+        if rows:
+            st.markdown("---")
+            statuses = sorted({r.status_raw for r in rows if r.status_raw})
             status_pick = st.pills(
                 "Status",
                 statuses,
                 selection_mode="multi",
                 default=None,
             )
-            type_pick = st.pills(
-                "Type",
-                types,
-                selection_mode="multi",
-                default=None,
-            )
-            umbrella_pick = st.multiselect("Folder", umbrellas)
-            name_substring = st.text_input(
-                "Name contains",
-                placeholder="quick filter\u2026",
-            )
 
-            st.caption(f"{len(rows)} projects in cache")
-        else:
-            st.header("armillary")
-            st.caption("Cache is empty \u2014 scan filesystem to populate.")
-
-        _render_sidebar_actions(cfg)
+        # Scan
+        st.markdown("---")
+        _render_scan_button(cfg)
 
     return {
         "status": status_pick,
-        "type": type_pick,
-        "umbrella": umbrella_pick,
-        "name_substring": name_substring,
+        "type": [],
+        "umbrella": [],
+        "name_substring": "",
     }
 
 
 def _render_nav_sidebar() -> None:
-    """Minimal navigation sidebar for detail and settings pages.
-
-    Always visible so the user is never stranded without a way to get
-    back to the overview, reload the cache, or trigger a scan.
-    """
+    """Minimal navigation sidebar for detail and settings pages."""
     cfg = _safe_load_config()
     with st.sidebar:
-        st.header("armillary")
+        st.header(":material/explore: armillary")
         if st.button(
             "Overview",
             icon=":material/explore:",
@@ -85,25 +78,25 @@ def _render_nav_sidebar() -> None:
             key="sidebar_back_overview",
         ):
             go_to_overview()
-        _render_sidebar_actions(cfg)
+        if st.button(
+            "Settings",
+            icon=":material/settings:",
+            width="stretch",
+            key="sidebar_settings",
+        ):
+            go_to_settings()
+        st.markdown("---")
+        _render_scan_button(cfg)
 
 
-def _render_sidebar_actions(cfg: Config | None) -> None:
-    """Shared action buttons rendered in every sidebar variant."""
-    if st.button(
-        "Reload from cache",
-        icon=":material/refresh:",
-        width="stretch",
-        key="sidebar_reload",
-    ):
-        refresh_cache()
-
+def _render_scan_button(cfg: Config | None) -> None:
+    """Scan filesystem button — shared across sidebar variants."""
     scan_disabled = cfg is None or not cfg.umbrellas
     scan_help = None
     if scan_disabled:
         scan_help = "No umbrellas in config. Run `armillary config --init`."
     if st.button(
-        "Scan filesystem now",
+        "Scan now",
         icon=":material/sync:",
         width="stretch",
         disabled=scan_disabled,
@@ -111,11 +104,3 @@ def _render_sidebar_actions(cfg: Config | None) -> None:
         key="sidebar_scan",
     ):
         run_scan_with_feedback(cfg)
-
-    if st.button(
-        "Settings",
-        icon=":material/settings:",
-        width="stretch",
-        key="sidebar_settings",
-    ):
-        go_to_settings()
