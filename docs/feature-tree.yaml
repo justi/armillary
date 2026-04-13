@@ -1,0 +1,42 @@
+# armillary feature tree — root: PROJECT
+# Pitch: "Total recall for everything you've ever built."
+# Status: built / planned / deferred / killed
+# Priority: #N for build order
+
+project:
+  metadata:
+    status: built                 # ACTIVE/PAUSED/DORMANT/IDEA/IN_PROGRESS
+    git: built                    # branch, last_commit_ts, dirty_count, commit_count, work_hours
+    readme: built                 # readme_excerpt, adr_paths, note_paths
+
+  discovery:
+    search: built                 # ripgrep across all repos (CLI + MCP)
+    list: built                   # filtered terminal table
+    export: planned               # JSON output — formalize what bridge already does
+
+  decisions:
+    next: built                   # momentum / zombie / forgotten gold (CLI + MCP)
+    skip: built                   # hide from next for 30 days
+    context: built                # ADR 0013 — "where was I?" per project (CLI + MCP)
+    decide: planned               # keep / pivot / kill — three buttons, minimal
+    archive: planned              # just a status value — ARCHIVED
+
+  actions:
+    open: built                   # launch in Cursor/VS Code/Zed
+    scan: built                   # refresh all metadata
+    dashboard: built              # Streamlit overview + detail + settings
+
+  ai_integration:
+    mcp_server: built             # armillary_next, armillary_search, armillary_projects, armillary_context
+    claude_bridge: built          # compact repos-index.md (ACTIVE/PAUSED only, 15 max)
+
+  deferred:
+    launch_window: "revisit when users ask — 5% of projects launch"
+    reuse: "search already covers cross-repo code discovery"
+
+  killed:
+    tags: "grep covers it"
+    embeddings: "too heavy, ripgrep is enough"
+    digest: "productivity theater — next + MCP covers daily use"
+    integrations: "zero built, speculative scope, maintenance trap"
+    project_lineage: "v2/v3/v4 pattern is auto-gen tool, not user behavior"

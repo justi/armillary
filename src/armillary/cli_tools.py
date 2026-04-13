@@ -208,6 +208,80 @@ def install_claude_bridge(
             )
 
 
+@app.command("context")
+def context_command(
+    project_name: str = typer.Argument(..., help="Project name (substring match)."),
+) -> None:
+    """Where was I? Show project state for instant re-entry.
+
+    Displays branch, dirty files, recent commits, and recent branches
+    so you can resume work without re-reading code. Sub-second response.
+    """
+    from armillary.cli_helpers import _shorten_home
+    from armillary.context_service import get_context
+
+    try:
+        ctx = get_context(project_name)
+    except ValueError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(2) from exc
+
+    if ctx is None:
+        typer.secho(
+            f"No project matches '{project_name}'. Run `armillary scan` first.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    console = Console()
+    status_str = ctx.status or "?"
+    hours_str = f" — {ctx.work_hours:.1f} h" if ctx.work_hours is not None else ""
+    short_path = _shorten_home(ctx.path)
+
+    branch_str = f" on [cyan]{ctx.branch}[/cyan]" if ctx.branch else ""
+    console.print(f"\n  [bold]{ctx.name}[/bold]{branch_str} — {status_str}{hours_str}")
+    console.print(f"  [dim]{short_path}[/dim]")
+
+    if not ctx.is_git:
+        console.print("\n  [dim]Not a git repo — no commit history.[/dim]")
+        return
+
+    if ctx.dirty_count > 0:
+        s = "s" if ctx.dirty_count > 1 else ""
+        console.print(f"\n  [bold yellow]{ctx.dirty_count} dirty file{s}[/bold yellow]")
+        for f in ctx.dirty_files:
+            console.print(f"    [yellow]{f}[/yellow]")
+        if ctx.dirty_count > len(ctx.dirty_files):
+            more = ctx.dirty_count - len(ctx.dirty_files)
+            console.print(f"    [dim]and {more} more[/dim]")
+
+    if ctx.recent_commits:
+        console.print("\n  [bold]Last commits[/bold]")
+        for c in ctx.recent_commits:
+            console.print(
+                f"  [dim]{c.short_hash}[/dim]  "
+                f"[cyan]{c.relative_time:>13}[/cyan]   "
+                f"{c.subject}"
+            )
+    else:
+        console.print("\n  [dim]No commits yet.[/dim]")
+
+    if ctx.recent_branches:
+        console.print("\n  [bold]Recent branches[/bold]")
+        for b in ctx.recent_branches:
+            console.print(f"  {b.name:<30} [dim]{b.relative_time}[/dim]")
+
+    # Actionable hint
+    if ctx.dirty_count > 0:
+        console.print(
+            f"\n  [dim]→ {ctx.dirty_count} uncommitted change{s}"
+            f" — commit or stash before switching[/dim]"
+        )
+
+    console.print("")
+
+
 _CATEGORY_ICONS = {"momentum": "🔥", "zombie": "⚠️", "forgotten_gold": "💀"}
 
 
