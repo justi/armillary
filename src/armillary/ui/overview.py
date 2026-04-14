@@ -261,9 +261,16 @@ def _render_table(rows: list[OverviewRow]) -> None:
         else:
             last = "—"
 
+        from urllib.parse import quote
+
+        detail_url = (
+            f"/?view=detail"
+            f"&project={quote(r.path, safe='')}"
+            f"&n={quote(f'{emoji} {r.name}', safe='')}"
+        )
         display.append(
             {
-                "Name": f"{emoji} {r.name}",
+                "Name": detail_url,
                 "Summary": summary,
                 "Hours": r.work_hours or 0,
                 "Last": last,
@@ -278,7 +285,11 @@ def _render_table(rows: list[OverviewRow]) -> None:
         on_select="rerun",
         selection_mode="multi-row",
         column_config={
-            "Name": st.column_config.TextColumn("Name", pinned=True),
+            "Name": st.column_config.LinkColumn(
+                "Name",
+                pinned=True,
+                display_text=r".*n=(.*)",
+            ),
             "Summary": st.column_config.TextColumn("Summary"),
             "Hours": st.column_config.ProgressColumn(
                 "Hours",
