@@ -161,17 +161,19 @@ def _render_exclusion_row(project: object, *, action: str) -> None:
     hours = md.work_hours if md else None
     author = md.last_commit_author if md else None
 
-    # Build info line
-    parts = []
+    # Always show hours prominently — this is what the list is sorted by
+    hours_display = f"{hours:.0f}h" if hours is not None else "0h"
+    commits_display = f"{commits} commits" if commits else "no commits"
+
+    # Fork signal
+    fork_tag = ""
     if commits is not None and commits > 0 and (hours is None or hours == 0):
-        parts.append("⚠️ fork — zero your commits")
-    if commits is not None:
-        parts.append(f"{commits} commits")
-    if hours is not None:
-        parts.append(f"{hours:.0f}h yours")
+        fork_tag = " · ⚠️ fork"
+
+    # Author if not you
+    author_tag = ""
     if author and author != "Justyna Wojtczak":
-        parts.append(f"by {author}")
-    info = " · ".join(parts) if parts else ""
+        author_tag = f" · by {author}"
 
     # Description hint
     desc = ""
@@ -180,9 +182,8 @@ def _render_exclusion_row(project: object, *, action: str) -> None:
 
     col_info, col_btn = st.columns([5, 1])
     with col_info:
-        st.markdown(f"{emoji} **{project.name}**")
-        if info:
-            st.caption(info)
+        st.markdown(f"{emoji} **{project.name}** — {hours_display}")
+        st.caption(f"{commits_display}{fork_tag}{author_tag}")
         if desc:
             st.caption(f"_{desc}_")
     with col_btn:
