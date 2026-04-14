@@ -6,6 +6,16 @@
 - Tests: `.venv/bin/python -m pytest -q` (ALWAYS run before completing a task)
 - Lint: `.venv/bin/ruff check .` + `.venv/bin/ruff format --check .`
 - Dashboard at `src/armillary/ui/` — Streamlit, routed via `st.query_params`
+- Streamlit skills installed at `.claude/skills/` — ALWAYS read relevant skill files before writing Streamlit code:
+  - `displaying-streamlit-data.md` — dataframe, column_config, LinkColumn, charts
+  - `choosing-streamlit-selection-widgets.md` — pills, selectbox, toggle, forms
+  - `using-streamlit-layouts.md` — columns, containers, dialogs, spacing
+  - `building-streamlit-dashboards.md` — metrics, cards, KPI rows, dashboard composition
+  - `using-streamlit-session-state.md` — state management patterns
+  - `optimizing-streamlit-performance.md` — caching, fragments
+  - `using-streamlit-markdown.md` — markdown rendering
+  - `organizing-streamlit-code.md` — code structure patterns
+  - `creating-streamlit-themes.md` — theming
 
 ## Architecture rules (ADR 0001)
 
