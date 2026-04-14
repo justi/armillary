@@ -141,20 +141,12 @@ def _render_settings_exclusions() -> None:
                 _render_exclusion_row(p, action="include")
 
 
-def _ownership_score(project: object) -> tuple[int, str]:
-    """Score for sorting: forks first, then empty, then yours.
-
-    Hard rule: work_hours=0 + commits>0 = fork (zero of YOUR commits).
-    No heuristics.
-    """
+def _ownership_score(project: object) -> float:
+    """Sort by your work hours ascending. 0h = top (likely exclude)."""
     md = project.metadata
     if md is None:
-        return (1, project.name.lower())  # unknown
-    commits = md.commit_count or 0
-    hours = md.work_hours or 0
-    if commits > 0 and hours == 0:
-        return (0, project.name.lower())  # fork — zero your work
-    return (2, project.name.lower())  # yours
+        return 0.0
+    return md.work_hours or 0.0
 
 
 def _render_exclusion_row(project: object, *, action: str) -> None:
