@@ -106,6 +106,7 @@ def _render_settings_exclusions() -> None:
 
     with col_left:
         st.markdown(f"**Included** ({len(included)})")
+        st.caption("Sorted by your hours — likely candidates for exclusion at top")
         incl_filter = st.text_input(
             "Filter included",
             placeholder="Type to filter…",
@@ -149,6 +150,26 @@ def _ownership_score(project: object) -> float:
     return md.work_hours or 0.0
 
 
+def _git_user_name() -> str:
+    """Read git user.name from global config. Cached per session."""
+    key = "_git_user_name_cache"
+    if key not in st.session_state:
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                ["git", "config", "user.name"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            name = result.stdout.strip() if result.returncode == 0 else ""
+            st.session_state[key] = name
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            st.session_state[key] = ""
+    return st.session_state[key]
+
+
 def _render_exclusion_row(project: object, *, action: str) -> None:
     """Render one project row with decision-helping info."""
     from armillary.exclude_service import exclude_project, include_project
@@ -168,11 +189,11 @@ def _render_exclusion_row(project: object, *, action: str) -> None:
     # Fork signal
     fork_tag = ""
     if commits is not None and commits > 0 and (hours is None or hours == 0):
-        fork_tag = " · ⚠️ fork"
+        fork_tag = " · ⚠️ not yours?"
 
     # Author if not you
     author_tag = ""
-    if author and author != "Justyna Wojtczak":
+    if author and author != _git_user_name():
         author_tag = f" · by {author}"
 
     # Description hint

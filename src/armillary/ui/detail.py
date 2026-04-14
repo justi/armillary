@@ -127,7 +127,9 @@ def _render_project_detail(project_path: str) -> None:
     if project.type.value == "git":
         st.markdown("---")
         st.subheader("What I was working on", anchor=False)
-        _render_recent_commits(project.path)
+        # Skip first commit — already shown in narrative context above
+        skip_first = bool(ctx and ctx.recent_commits)
+        _render_recent_commits(project.path, skip_first=skip_first)
         if ctx and ctx.recent_branches:
             with st.expander(
                 "Recent branches", icon=":material/fork_right:", expanded=False
@@ -297,9 +299,13 @@ def _render_details_expander(project: Project) -> None:
                     st.metric("Files", md.file_count, border=True)
 
 
-def _render_recent_commits(repo_path: Path, limit: int = 5) -> None:
+def _render_recent_commits(
+    repo_path: Path, limit: int = 5, *, skip_first: bool = False
+) -> None:
     """Show the last commits in an expanded expander."""
-    commits = _git_log_recent(repo_path, limit=limit)
+    commits = _git_log_recent(repo_path, limit=limit + (1 if skip_first else 0))
+    if skip_first:
+        commits = commits[1:]
     if not commits:
         st.caption("_No commit history available._")
         return

@@ -282,7 +282,7 @@ def _render_table(rows: list[OverviewRow]) -> None:
             "Hours": st.column_config.ProgressColumn(
                 "Hours",
                 min_value=0,
-                max_value=500,
+                max_value=max((r.work_hours or 0 for r in rows), default=100),
                 format="%.0f",
                 help="Estimated work hours (commit gap < 4h)",
             ),
