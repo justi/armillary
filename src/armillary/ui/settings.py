@@ -141,21 +141,25 @@ def _render_settings_exclusions() -> None:
                 _render_exclusion_row(p, action="include")
 
 
-def _ownership_score(project: object) -> float:
-    """Score for sorting: low = likely foreign (show first for exclusion).
+def _ownership_score(project: object) -> tuple[int, float]:
+    """Score for sorting: likely forks first, then low ownership, then yours.
 
-    Foreign repos have many commits but few work hours (cloned, not yours).
-    Your repos have proportional commits-to-hours ratio.
+    Returns (tier, ratio) where tier 0 = likely fork, 1 = low ownership,
+    2 = empty/unknown, 3 = yours. Within tier, sorted by ratio ascending.
     """
     md = project.metadata
     if md is None:
-        return 0.5
+        return (2, 0.0)
     commits = md.commit_count or 0
     hours = md.work_hours or 0
     if commits == 0:
-        return 0.5
-    # Ratio: your hours per commit. Low = likely fork.
-    return hours / commits
+        return (2, 0.0)
+    ratio = hours / commits
+    if ratio < 0.05 and commits > 100:
+        return (0, ratio)  # likely fork
+    if ratio < 0.1 and commits > 50:
+        return (1, ratio)  # low ownership
+    return (3, ratio)  # yours
 
 
 def _render_exclusion_row(project: object, *, action: str) -> None:
