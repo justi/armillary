@@ -82,8 +82,6 @@ def _render_settings_exclusions() -> None:
     """Two-column view: all projects (left) ↔ excluded projects (right)."""
     from armillary.cache import Cache
     from armillary.exclude_service import (
-        exclude_project,
-        include_project,
         load_excluded,
     )
 
@@ -100,6 +98,10 @@ def _render_settings_exclusions() -> None:
     included = [p for p in all_projects if str(p.path) not in excluded_paths]
     excluded = [p for p in all_projects if str(p.path) in excluded_paths]
 
+    # Sort: likely-foreign first (high commits, low work hours = fork)
+    included.sort(key=lambda p: _ownership_score(p))
+    excluded.sort(key=lambda p: p.name.lower())
+
     col_left, col_right = st.columns(2)
 
     with col_left:
@@ -115,19 +117,9 @@ def _render_settings_exclusions() -> None:
             if incl_filter
             else included
         )
-        with st.container(height=400):
+        with st.container(height=500):
             for p in filtered_incl:
-                col_name, col_btn = st.columns([4, 1])
-                with col_name:
-                    st.caption(p.name)
-                with col_btn:
-                    if st.button(
-                        "→",
-                        key=f"excl_{p.path}",
-                        help=f"Exclude {p.name}",
-                    ):
-                        exclude_project(str(p.path))
-                        st.rerun()
+                _render_exclusion_row(p, action="exclude")
 
     with col_right:
         st.markdown(f"**Excluded** ({len(excluded)})")
@@ -142,18 +134,77 @@ def _render_settings_exclusions() -> None:
             if excl_filter
             else excluded
         )
-        with st.container(height=400):
+        with st.container(height=500):
             if not filtered_excl:
                 st.caption("No excluded projects.")
             for p in filtered_excl:
-                col_name, col_btn = st.columns([4, 1])
-                with col_name:
-                    st.caption(p.name)
-                with col_btn:
-                    if st.button(
-                        "←",
-                        key=f"incl_{p.path}",
-                        help=f"Restore {p.name}",
-                    ):
-                        include_project(str(p.path))
-                        st.rerun()
+                _render_exclusion_row(p, action="include")
+
+
+def _ownership_score(project: object) -> float:
+    """Score for sorting: low = likely foreign (show first for exclusion).
+
+    Foreign repos have many commits but few work hours (cloned, not yours).
+    Your repos have proportional commits-to-hours ratio.
+    """
+    md = project.metadata
+    if md is None:
+        return 0.5
+    commits = md.commit_count or 0
+    hours = md.work_hours or 0
+    if commits == 0:
+        return 0.5
+    # Ratio: your hours per commit. Low = likely fork.
+    return hours / commits
+
+
+def _render_exclusion_row(project: object, *, action: str) -> None:
+    """Render one project row with decision-helping info."""
+    from armillary.exclude_service import exclude_project, include_project
+    from armillary.ui.helpers import _STATUS_EMOJI
+
+    md = project.metadata
+    status = md.status.value if md and md.status else "?"
+    emoji = _STATUS_EMOJI.get(status, "·")
+    commits = md.commit_count if md else None
+    hours = md.work_hours if md else None
+    author = md.last_commit_author if md else None
+
+    # Build info line
+    parts = []
+    if hours is not None and commits is not None and commits > 0:
+        ratio = hours / commits
+        if ratio < 0.05 and commits > 100:
+            parts.append("⚠️ likely fork")
+        elif ratio < 0.1 and commits > 50:
+            parts.append("🔍 low ownership")
+    if commits is not None:
+        parts.append(f"{commits} commits")
+    if hours is not None:
+        parts.append(f"{hours:.0f}h yours")
+    if author and author != "Justyna Wojtczak":
+        parts.append(f"by {author}")
+    info = " · ".join(parts) if parts else ""
+
+    # Description hint
+    desc = ""
+    if md and md.readme_excerpt:
+        desc = md.readme_excerpt[:60]
+
+    col_info, col_btn = st.columns([5, 1])
+    with col_info:
+        st.markdown(f"{emoji} **{project.name}**")
+        if info:
+            st.caption(info)
+        if desc:
+            st.caption(f"_{desc}_")
+    with col_btn:
+        btn_label = "→" if action == "exclude" else "←"
+        btn_key = f"{'excl' if action == 'exclude' else 'incl'}_{project.path}"
+        btn_help = f"{'Exclude' if action == 'exclude' else 'Restore'} {project.name}"
+        if st.button(btn_label, key=btn_key, help=btn_help):
+            if action == "exclude":
+                exclude_project(str(project.path))
+            else:
+                include_project(str(project.path))
+            st.rerun()
