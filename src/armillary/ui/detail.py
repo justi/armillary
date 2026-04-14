@@ -95,6 +95,14 @@ def _render_project_detail(project_path: str) -> None:
 
     md = project.metadata
 
+    # Back navigation in content area (not just sidebar)
+    if st.button(
+        "← Overview",
+        key="detail_back",
+        type="tertiary",
+    ):
+        go_to_overview()
+
     # --- Row 1: Name + Status + Launcher (top-right) ---
     _render_header_with_launcher(project)
 

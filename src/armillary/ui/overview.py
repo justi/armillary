@@ -118,7 +118,7 @@ def _render_next_suggestions() -> None:
         return
 
     with st.expander(
-        "🧭 What should you work on today?",
+        "What should you work on today?",
         expanded=True,
         icon=":material/tips_and_updates:",
     ):
@@ -139,7 +139,6 @@ def _render_next_suggestions() -> None:
                     key=f"next_open_{s.project.name}",
                     icon=":material/open_in_new:",
                 ):
-                    st.query_params["view"] = "detail"
                     st.query_params["project"] = str(s.project.path)
                     st.rerun()
 
@@ -297,6 +296,5 @@ def _render_table(rows: list[OverviewRow]) -> None:
     if selected_indices:
         idx = selected_indices[0]
         if idx < len(rows):
-            st.query_params["view"] = "detail"
             st.query_params["project"] = rows[idx].path
             st.rerun()

@@ -104,32 +104,56 @@ def _render_settings_exclusions() -> None:
 
     with col_left:
         st.markdown(f"**Included** ({len(included)})")
-        for p in included:
-            col_name, col_btn = st.columns([4, 1])
-            with col_name:
-                st.caption(p.name)
-            with col_btn:
-                if st.button(
-                    "→",
-                    key=f"excl_{p.path}",
-                    help=f"Exclude {p.name}",
-                ):
-                    exclude_project(str(p.path))
-                    st.rerun()
+        incl_filter = st.text_input(
+            "Filter included",
+            placeholder="Type to filter…",
+            key="excl_filter_included",
+            label_visibility="collapsed",
+        )
+        filtered_incl = (
+            [p for p in included if incl_filter.lower() in p.name.lower()]
+            if incl_filter
+            else included
+        )
+        with st.container(height=400):
+            for p in filtered_incl:
+                col_name, col_btn = st.columns([4, 1])
+                with col_name:
+                    st.caption(p.name)
+                with col_btn:
+                    if st.button(
+                        "→",
+                        key=f"excl_{p.path}",
+                        help=f"Exclude {p.name}",
+                    ):
+                        exclude_project(str(p.path))
+                        st.rerun()
 
     with col_right:
         st.markdown(f"**Excluded** ({len(excluded)})")
-        if not excluded:
-            st.caption("No excluded projects.")
-        for p in excluded:
-            col_name, col_btn = st.columns([4, 1])
-            with col_name:
-                st.caption(p.name)
-            with col_btn:
-                if st.button(
-                    "←",
-                    key=f"incl_{p.path}",
-                    help=f"Restore {p.name}",
-                ):
-                    include_project(str(p.path))
-                    st.rerun()
+        excl_filter = st.text_input(
+            "Filter excluded",
+            placeholder="Type to filter…",
+            key="excl_filter_excluded",
+            label_visibility="collapsed",
+        )
+        filtered_excl = (
+            [p for p in excluded if excl_filter.lower() in p.name.lower()]
+            if excl_filter
+            else excluded
+        )
+        with st.container(height=400):
+            if not filtered_excl:
+                st.caption("No excluded projects.")
+            for p in filtered_excl:
+                col_name, col_btn = st.columns([4, 1])
+                with col_name:
+                    st.caption(p.name)
+                with col_btn:
+                    if st.button(
+                        "←",
+                        key=f"incl_{p.path}",
+                        help=f"Restore {p.name}",
+                    ):
+                        include_project(str(p.path))
+                        st.rerun()
