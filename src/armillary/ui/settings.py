@@ -64,6 +64,7 @@ def _render_settings_page() -> None:
         [
             ":material/folder_open: Umbrellas",
             ":material/launch: Launchers",
+            ":material/visibility_off: Exclusions",
             ":material/extension: Integrations",
         ]
     )
@@ -72,4 +73,63 @@ def _render_settings_page() -> None:
     with tabs[1]:
         render_settings_launchers(cfg)
     with tabs[2]:
+        _render_settings_exclusions()
+    with tabs[3]:
         render_settings_integrations()
+
+
+def _render_settings_exclusions() -> None:
+    """Two-column view: all projects (left) ↔ excluded projects (right)."""
+    from armillary.cache import Cache
+    from armillary.exclude_service import (
+        exclude_project,
+        include_project,
+        load_excluded,
+    )
+
+    st.subheader("Project exclusions")
+    st.caption(
+        "Excluded projects are hidden from overview, search, next, "
+        "and MCP tools. They remain in the cache and can be restored."
+    )
+
+    with Cache() as cache:
+        all_projects = cache.list_projects()
+
+    excluded_paths = load_excluded()
+    included = [p for p in all_projects if str(p.path) not in excluded_paths]
+    excluded = [p for p in all_projects if str(p.path) in excluded_paths]
+
+    col_left, col_right = st.columns(2)
+
+    with col_left:
+        st.markdown(f"**Included** ({len(included)})")
+        for p in included:
+            col_name, col_btn = st.columns([4, 1])
+            with col_name:
+                st.caption(p.name)
+            with col_btn:
+                if st.button(
+                    "→",
+                    key=f"excl_{p.path}",
+                    help=f"Exclude {p.name}",
+                ):
+                    exclude_project(str(p.path))
+                    st.rerun()
+
+    with col_right:
+        st.markdown(f"**Excluded** ({len(excluded)})")
+        if not excluded:
+            st.caption("No excluded projects.")
+        for p in excluded:
+            col_name, col_btn = st.columns([4, 1])
+            with col_name:
+                st.caption(p.name)
+            with col_btn:
+                if st.button(
+                    "←",
+                    key=f"incl_{p.path}",
+                    help=f"Restore {p.name}",
+                ):
+                    include_project(str(p.path))
+                    st.rerun()

@@ -276,7 +276,7 @@ def _render_table(rows: list[OverviewRow]) -> None:
         width="stretch",
         hide_index=True,
         on_select="rerun",
-        selection_mode="multi-row",
+        selection_mode="single-row",
         column_config={
             "Name": st.column_config.TextColumn("Name", pinned=True),
             "Summary": st.column_config.TextColumn("Summary"),
@@ -291,38 +291,12 @@ def _render_table(rows: list[OverviewRow]) -> None:
         },
     )
 
-    # Selection handling
+    # Single row click → navigate to detail
     selection = getattr(event, "selection", None)
     selected_indices = getattr(selection, "rows", []) if selection else []
-
-    if len(selected_indices) == 1:
-        # Single row click → navigate to detail (same tab)
+    if selected_indices:
         idx = selected_indices[0]
         if idx < len(rows):
             st.query_params["view"] = "detail"
             st.query_params["project"] = rows[idx].path
-            st.rerun()
-    elif len(selected_indices) > 1:
-        # Multi-select → bulk actions
-        _render_bulk_action_bar(rows, selected_indices)
-
-
-def _render_bulk_action_bar(
-    rows: list[OverviewRow], selected_indices: list[int]
-) -> None:
-    """Bulk action bar for multi-selected projects."""
-    from armillary.exclude_service import exclude_project
-
-    selected_paths = [rows[i].path for i in selected_indices if i < len(rows)]
-    col_info, col_exclude = st.columns([3, 1])
-    with col_info:
-        st.caption(f"**{len(selected_paths)}** project(s) selected")
-    with col_exclude:
-        if st.button(
-            "Exclude selected",
-            icon=":material/visibility_off:",
-            key="action_bulk_exclude",
-        ):
-            for p in selected_paths:
-                exclude_project(p)
             st.rerun()
