@@ -141,25 +141,20 @@ def _render_settings_exclusions() -> None:
                 _render_exclusion_row(p, action="include")
 
 
-def _ownership_score(project: object) -> tuple[int, float]:
-    """Score for sorting: likely forks first, then low ownership, then yours.
+def _ownership_score(project: object) -> tuple[int, str]:
+    """Score for sorting: forks first, then empty, then yours.
 
-    Returns (tier, ratio) where tier 0 = likely fork, 1 = low ownership,
-    2 = empty/unknown, 3 = yours. Within tier, sorted by ratio ascending.
+    Hard rule: work_hours=0 + commits>0 = fork (zero of YOUR commits).
+    No heuristics.
     """
     md = project.metadata
     if md is None:
-        return (2, 0.0)
+        return (1, project.name.lower())  # unknown
     commits = md.commit_count or 0
     hours = md.work_hours or 0
-    if commits == 0:
-        return (2, 0.0)
-    ratio = hours / commits
-    if ratio < 0.05 and commits > 100:
-        return (0, ratio)  # likely fork
-    if ratio < 0.1 and commits > 50:
-        return (1, ratio)  # low ownership
-    return (3, ratio)  # yours
+    if commits > 0 and hours == 0:
+        return (0, project.name.lower())  # fork — zero your work
+    return (2, project.name.lower())  # yours
 
 
 def _render_exclusion_row(project: object, *, action: str) -> None:
@@ -176,12 +171,8 @@ def _render_exclusion_row(project: object, *, action: str) -> None:
 
     # Build info line
     parts = []
-    if hours is not None and commits is not None and commits > 0:
-        ratio = hours / commits
-        if ratio < 0.05 and commits > 100:
-            parts.append("⚠️ likely fork")
-        elif ratio < 0.1 and commits > 50:
-            parts.append("🔍 low ownership")
+    if commits is not None and commits > 0 and (hours is None or hours == 0):
+        parts.append("⚠️ fork — zero your commits")
     if commits is not None:
         parts.append(f"{commits} commits")
     if hours is not None:
