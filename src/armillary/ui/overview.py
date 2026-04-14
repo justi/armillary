@@ -291,43 +291,55 @@ def _render_table(rows: list[OverviewRow]) -> None:
         },
     )
 
-    # Handle selection
+    # Action bar based on selection
     selection = getattr(event, "selection", None)
-    selected_indices = getattr(selection, "rows", []) if selection else []
+    selected_rows = getattr(selection, "rows", []) if selection else []
 
-    if len(selected_indices) == 1:
-        # Single click → auto-navigate to detail view
-        idx = selected_indices[0]
-        if idx < len(rows):
-            st.query_params["view"] = "detail"
-            st.query_params["project"] = rows[idx].path
-            st.rerun()
-    elif len(selected_indices) > 1:
-        # Multi-select → bulk action bar
-        _render_bulk_action_bar(rows, selected_indices)
-
-    st.caption(
-        ":material/info: Click a row to open project. "
-        "Shift-click to select multiple for bulk actions."
-    )
+    if selected_rows:
+        _render_action_bar(rows, selected_rows)
 
 
-def _render_bulk_action_bar(
-    rows: list[OverviewRow], selected_indices: list[int]
-) -> None:
-    """Bulk action bar for multi-selected projects."""
+def _render_action_bar(rows: list[OverviewRow], selected_indices: list[int]) -> None:
+    """Action bar: Open (1 selected) or Exclude (1+ selected)."""
     from armillary.exclude_service import exclude_project
 
+    count = len(selected_indices)
     selected_paths = [rows[i].path for i in selected_indices if i < len(rows)]
-    col_info, col_exclude = st.columns([3, 1])
-    with col_info:
-        st.caption(f"**{len(selected_paths)}** project(s) selected")
-    with col_exclude:
-        if st.button(
-            "Exclude selected",
-            icon=":material/visibility_off:",
-            key="action_bulk_exclude",
-        ):
-            for p in selected_paths:
-                exclude_project(p)
-            st.rerun()
+
+    if count == 1:
+        name = rows[selected_indices[0]].name
+        col_info, col_open, col_exclude = st.columns([2, 1, 1])
+        with col_info:
+            st.caption(f"**{name}** selected")
+        with col_open:
+            if st.button(
+                "Open project",
+                icon=":material/open_in_new:",
+                key="action_open",
+                type="primary",
+            ):
+                st.query_params["view"] = "detail"
+                st.query_params["project"] = selected_paths[0]
+                st.rerun()
+        with col_exclude:
+            if st.button(
+                "Exclude",
+                icon=":material/visibility_off:",
+                key="action_exclude",
+            ):
+                for p in selected_paths:
+                    exclude_project(p)
+                st.rerun()
+    else:
+        col_info, col_exclude = st.columns([3, 1])
+        with col_info:
+            st.caption(f"**{count}** project(s) selected")
+        with col_exclude:
+            if st.button(
+                "Exclude selected",
+                icon=":material/visibility_off:",
+                key="action_bulk_exclude",
+            ):
+                for p in selected_paths:
+                    exclude_project(p)
+                st.rerun()
