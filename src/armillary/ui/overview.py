@@ -267,20 +267,26 @@ def _render_dying_metric(
 ) -> None:
     """'Projects needing a decision' — excludes projects already in next.
 
-    Zombie = ACTIVE but no activity in >3 days (losing momentum).
+    Zombie = ACTIVE with dead velocity (zero commits in 4 weeks).
     Forgotten WIP = PAUSED with dirty files and >10h invested.
     """
-    from datetime import datetime, timedelta
-
     skip = exclude_paths or set()
-    stale_cutoff = datetime.now() - timedelta(days=3)
+
+    # Load velocity data from cache for zombie detection
+    dead_velocity_paths: set[str] = set()
+    with Cache() as cache:
+        for p in cache.list_projects():
+            md = p.metadata
+            if md and md.velocity_trend == "dead":
+                dead_velocity_paths.add(str(p.path))
+
     zombies = [
         r
         for r in rows
         if r.status_raw == "ACTIVE"
         and r.work_hours
         and r.work_hours > 10
-        and r.last_modified < stale_cutoff
+        and r.path in dead_velocity_paths
         and r.path not in skip
     ]
     forgotten_wip = [
