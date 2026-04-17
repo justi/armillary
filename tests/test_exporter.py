@@ -39,7 +39,7 @@ def _project(
 
 
 def test_render_empty_cache() -> None:
-    out = render_repos_index([], generated_at=_NOW)
+    out, _ = render_repos_index([], generated_at=_NOW)
     assert "# armillary — projects index" in out
     assert "Cache is empty" in out
 
@@ -53,7 +53,7 @@ def test_render_shows_only_active_and_paused() -> None:
             "idea1", type=ProjectType.IDEA, metadata=ProjectMetadata(status=Status.IDEA)
         ),
     ]
-    out = render_repos_index(projects, generated_at=_NOW)
+    out, _ = render_repos_index(projects, generated_at=_NOW)
     assert "**2** ACTIVE/STALLED project(s)" in out
     assert "/tmp/active1" in out
     assert "/tmp/paused1" in out
@@ -66,7 +66,7 @@ def test_render_caps_at_15_rows() -> None:
         _project(f"proj-{i}", metadata=ProjectMetadata(status=Status.ACTIVE))
         for i in range(20)
     ]
-    out = render_repos_index(projects, generated_at=_NOW)
+    out, _ = render_repos_index(projects, generated_at=_NOW)
     assert "**15** ACTIVE/STALLED project(s)" in out
     assert "/tmp/proj-14" in out
     assert "/tmp/proj-15" not in out
@@ -80,7 +80,7 @@ def test_render_shows_hidden_count_with_mcp_hint() -> None:
         _project("dormant", metadata=ProjectMetadata(status=Status.DORMANT)),
         _project("idea", metadata=ProjectMetadata(status=Status.IDEA)),
     ]
-    out = render_repos_index(projects, generated_at=_NOW)
+    out, _ = render_repos_index(projects, generated_at=_NOW)
     assert "+2 hidden" in out
     assert "1 DORMANT" in out
     assert "1 IDEA" in out
@@ -97,7 +97,7 @@ def test_render_shortens_home_paths() -> None:
             metadata=ProjectMetadata(status=Status.ACTIVE),
         ),
     ]
-    out = render_repos_index(projects, generated_at=_NOW)
+    out, _ = render_repos_index(projects, generated_at=_NOW)
     assert "~/Projects/myproj" in out
     assert str(home) not in out
 
@@ -106,7 +106,7 @@ def test_render_has_status_and_path_columns() -> None:
     projects = [
         _project("x", metadata=ProjectMetadata(status=Status.ACTIVE)),
     ]
-    out = render_repos_index(projects, generated_at=_NOW)
+    out, _ = render_repos_index(projects, generated_at=_NOW)
     assert "| Status | Path |" in out
     assert "| ACTIVE |" in out
     # No old columns
@@ -118,7 +118,7 @@ def test_render_has_status_and_path_columns() -> None:
 
 def test_render_includes_generated_timestamp() -> None:
     projects = [_project("x", metadata=ProjectMetadata(status=Status.ACTIVE))]
-    out = render_repos_index(projects, generated_at=_NOW)
+    out, _ = render_repos_index(projects, generated_at=_NOW)
     assert "2026-04-11 12:00:00" in out
 
 
@@ -126,7 +126,7 @@ def test_render_no_hidden_footer_when_all_visible() -> None:
     projects = [
         _project("a", metadata=ProjectMetadata(status=Status.ACTIVE)),
     ]
-    out = render_repos_index(projects, generated_at=_NOW)
+    out, _ = render_repos_index(projects, generated_at=_NOW)
     assert "DORMANT/IDEA" not in out
 
 
@@ -149,7 +149,7 @@ def test_write_roundtrip_through_real_cache(tmp_path: Path) -> None:
     output = tmp_path / "out" / "repos-index.md"
     written = write_repos_index(output, db_path=db_path)
 
-    assert written == 2  # total in cache
+    assert written == 1  # visible ACTIVE/STALLED count, not total
     assert output.exists()
     text = output.read_text(encoding="utf-8")
     assert "**1** ACTIVE/STALLED project(s)" in text

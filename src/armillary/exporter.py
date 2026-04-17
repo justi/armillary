@@ -35,12 +35,14 @@ def render_repos_index(
     *,
     title: str = "armillary — projects index",
     generated_at: datetime | None = None,
-) -> str:
+) -> tuple[str, int]:
     """Render a compact markdown table for the Claude Code bridge.
 
     Only ACTIVE/STALLED projects are shown (up to 15). Paths are
     shortened with ``~``. A footer notes hidden projects and points
     to the MCP tool for the full list.
+
+    Returns (markdown_text, visible_count).
     """
     generated_at = generated_at or datetime.now()
     lines: list[str] = []
@@ -63,7 +65,7 @@ def render_repos_index(
             "_Cache is empty. Run `armillary scan` to populate it, then re-export._"
         )
         lines.append("")
-        return "\n".join(lines)
+        return "\n".join(lines), 0
 
     lines.append(f"**{len(visible)}** ACTIVE/STALLED project(s).")
     lines.append("")
@@ -88,7 +90,7 @@ def render_repos_index(
         )
 
     lines.append("")
-    return "\n".join(lines)
+    return "\n".join(lines), len(visible)
 
 
 def write_repos_index(
@@ -108,11 +110,9 @@ def write_repos_index(
     projects = filter_archived(projects)
     output_path = output_path.expanduser()
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        render_repos_index(projects, title=title),
-        encoding="utf-8",
-    )
-    return len(projects)
+    text, visible_count = render_repos_index(projects, title=title)
+    output_path.write_text(text, encoding="utf-8")
+    return visible_count
 
 
 # --- Claude Code bridge ---------------------------------------------------
