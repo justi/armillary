@@ -154,6 +154,11 @@ _BUILTIN_LAUNCHERS: dict[str, LauncherConfig] = {
         "iTerm + OpenCode", "cd {path} && opencode", icon="🟢"
     ),
     "iterm-codex": _iterm_launcher("iTerm + Codex", "cd {path} && codex", icon="⚡"),
+    "iterm-codex-yolo": _iterm_launcher(
+        "iTerm + Codex (full-auto)",
+        "cd {path} && codex --full-auto",
+        icon="⚡",
+    ),
     "finder": LauncherConfig(
         label="Finder",
         command="open",
