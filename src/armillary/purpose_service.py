@@ -57,3 +57,40 @@ def clear_purpose(project_path: str) -> None:
     purposes = load_purposes()
     purposes.pop(project_path, None)
     _save_purposes(purposes)
+
+
+# --- Archive reasons (ADR 0019) ---
+
+_REASONS_FILENAME = "archive-reasons.json"
+
+
+def _reasons_path() -> Path:
+    return default_db_path().parent / _REASONS_FILENAME
+
+
+def load_archive_reasons() -> dict[str, str]:
+    """Load {project_path: reason} from disk."""
+    path = _reasons_path()
+    if not path.exists():
+        return {}
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(parsed, dict):
+            return {k: v for k, v in parsed.items() if isinstance(v, str)}
+    except (ValueError, OSError):
+        pass
+    return {}
+
+
+def set_archive_reason(project_path: str, reason: str) -> None:
+    """Record why a project was archived."""
+    reasons = load_archive_reasons()
+    reasons[project_path] = reason.strip()
+    path = _reasons_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(reasons, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def get_archive_reason(project_path: str) -> str | None:
+    """Get the archive reason for a project."""
+    return load_archive_reasons().get(project_path)

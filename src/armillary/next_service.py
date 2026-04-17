@@ -195,6 +195,25 @@ def _evaluate(project: Project, now: datetime) -> Suggestion | None:
             score=score,
         )
 
+    # Archive candidate: low-effort project with dead velocity (ADR 0019)
+    velocity = md.velocity_trend
+    if (
+        status in (Status.ACTIVE, Status.PAUSED, Status.DORMANT)
+        and velocity == "dead"
+        and hours < _GOLD_MIN_HOURS
+        and dirty == 0
+    ):
+        reason = (
+            f"{hours:.0f}h invested, zero activity in 4 weeks, "
+            f"clean tree — archive this?"
+        )
+        return Suggestion(
+            project=project,
+            category="archive_candidate",
+            reason=reason,
+            score=hours * 0.1,
+        )
+
     return None
 
 

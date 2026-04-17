@@ -285,6 +285,12 @@ def include_command(
 @app.command("archive")
 def archive_command(
     names: list[str] = typer.Argument(..., help="Project name(s) to archive."),
+    reason: str | None = typer.Option(
+        None,
+        "--reason",
+        "-r",
+        help="Why you're archiving (e.g. 'no traction', 'finished').",
+    ),
 ) -> None:
     """Archive a project — mark it as consciously done.
 
@@ -292,6 +298,7 @@ def archive_command(
     but their code stays on disk. Use `armillary activate` to restore.
     """
     from armillary.models import Status
+    from armillary.purpose_service import set_archive_reason
     from armillary.status_override import get_override, set_override
 
     with Cache() as cache:
@@ -320,6 +327,8 @@ def archive_command(
             typer.secho(f"{project.name} is already archived.", fg=typer.colors.YELLOW)
             continue
         set_override(str(project.path), Status.ARCHIVED)
+        if reason:
+            set_archive_reason(str(project.path), reason)
         msg = (
             f"Archived {project.name}. "
             f"Use `armillary activate {project.name}` to restore."
@@ -622,7 +631,12 @@ def context_command(
     console.print("")
 
 
-_CATEGORY_ICONS = {"momentum": "🔥", "zombie": "⚠️", "forgotten_gold": "💀"}
+_CATEGORY_ICONS = {
+    "momentum": "🔥",
+    "zombie": "⚠️",
+    "forgotten_gold": "💀",
+    "archive_candidate": "📦",
+}
 
 
 @app.command("next")

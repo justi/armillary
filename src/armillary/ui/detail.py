@@ -123,11 +123,16 @@ def _render_project_detail(project_path: str) -> None:
 
     if is_archived:
         # Tombstone: minimal view, no work context
-        st.info(
+        from armillary.purpose_service import get_archive_reason
+
+        archive_reason = get_archive_reason(str(project.path))
+        tombstone_msg = (
             "This project is **archived** \u2014 code is on disk but "
-            "hidden from next, search, and overview.",
-            icon=":material/archive:",
+            "hidden from next, search, and overview."
         )
+        if archive_reason:
+            tombstone_msg += f"\n\nReason: *{archive_reason}*"
+        st.info(tombstone_msg, icon=":material/archive:")
         if st.button(
             "Reactivate",
             key="detail_activate",

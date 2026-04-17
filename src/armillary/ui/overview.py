@@ -112,11 +112,17 @@ def _render_header() -> None:
         st.caption(" · ".join(parts))
 
 
-_CATEGORY_ICONS = {"momentum": "🔥", "zombie": "⚠️", "forgotten_gold": "💀"}
+_CATEGORY_ICONS = {
+    "momentum": "🔥",
+    "zombie": "⚠️",
+    "forgotten_gold": "💀",
+    "archive_candidate": "📦",
+}
 _CATEGORY_LABELS = {
     "momentum": "Momentum",
     "zombie": "Zombie — kill or ship?",
     "forgotten_gold": "Forgotten gold",
+    "archive_candidate": "Archive this?",
 }
 
 
