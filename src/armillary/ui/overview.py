@@ -80,6 +80,9 @@ def _render_overview() -> None:
     # Search bar below table
     _render_search_section([r for r in rows if r.status_raw != "ARCHIVED"], cfg)
 
+    # Weekly pulse (ADR 0018) — collapsible
+    _render_pulse_section()
+
     # Activity heatmap (ADR 0020) — collapsible at bottom
     _render_activity_heatmap()
 
@@ -376,6 +379,33 @@ def _apply_filters(
     filters: dict[str, list[str] | str],
 ) -> list[OverviewRow]:
     return apply_status_filter(rows, filters["status"])
+
+
+def _render_pulse_section() -> None:
+    """Weekly pulse — what changed this week (ADR 0018)."""
+    from armillary.pulse_service import generate_pulse
+
+    pulse = generate_pulse()
+    if not pulse.worked_on and not pulse.went_dormant and not pulse.aging_wip:
+        return
+
+    with st.expander(
+        "Weekly pulse",
+        icon=":material/monitoring:",
+        expanded=False,
+    ):
+        if pulse.worked_on:
+            st.markdown("**Worked on this week**")
+            for e in pulse.worked_on:
+                st.markdown(f"- {e.icon} **{e.project_name}** \u2014 {e.message}")
+        if pulse.went_dormant:
+            st.markdown("**Went dormant**")
+            for e in pulse.went_dormant:
+                st.markdown(f"- {e.icon} **{e.project_name}** \u2014 {e.message}")
+        if pulse.aging_wip:
+            st.markdown("**Uncommitted work**")
+            for e in pulse.aging_wip:
+                st.markdown(f"- {e.icon} **{e.project_name}** \u2014 {e.message}")
 
 
 def _render_activity_heatmap() -> None:
