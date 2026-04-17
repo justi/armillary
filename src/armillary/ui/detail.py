@@ -211,8 +211,13 @@ def _render_header_with_launcher(project: Project) -> None:
         if cfg is not None and cfg.launchers:
             _render_launcher_compact(project, cfg)
 
-    # Trend + days since + sparkline in one info row
+    # Sunk cost + sparkline + trend + days since in one info row
     info_parts: list[str] = []
+    if md and md.work_hours is not None:
+        info_parts.append(f"**{md.work_hours:.0f}h** invested")
+    if md and md.monthly_commits and any(c > 0 for c in md.monthly_commits):
+        spark = _sparkline_text(md.monthly_commits)
+        info_parts.append(f"Activity {spark} (6mo)")
     if trend_str:
         info_parts.append(trend_str)
     if md and md.last_commit_ts:
@@ -223,9 +228,6 @@ def _render_header_with_launcher(project: Project) -> None:
             info_parts.append(f":material/error: **{days_ago}d** since last commit")
         elif days_ago > 30:
             info_parts.append(f":material/warning: **{days_ago}d** since last commit")
-    if md and md.monthly_commits and any(c > 0 for c in md.monthly_commits):
-        spark = _sparkline_text(md.monthly_commits)
-        info_parts.append(f"Activity {spark} (6mo)")
     if info_parts:
         st.caption(" \u00b7 ".join(info_parts))
 
@@ -276,15 +278,15 @@ def _render_dirty_or_clean(ctx: object) -> None:
         # S3: dirty file age
         age_hint = ""
         if ctx.dirty_max_age_seconds is not None:
-            age_hint = f" \u2014 oldest {_format_age(ctx.dirty_max_age_seconds)}"
+            age_hint = f" \u2014 {_format_age(ctx.dirty_max_age_seconds)} stale"
         st.warning(
-            f"**{ctx.dirty_count} dirty file{s}{age_hint}** "
+            f"**{ctx.dirty_count} uncommitted file{s}{age_hint}** "
             "\u2014 commit or stash before switching",
             icon=":material/edit_note:",
         )
         with st.expander("Dirty files", expanded=ctx.dirty_count <= 5):
             for f in ctx.dirty_files:
-                st.code(f, language=None)
+                st.code(_humanize_porcelain(f), language=None)
             if ctx.dirty_count > len(ctx.dirty_files):
                 more = ctx.dirty_count - len(ctx.dirty_files)
                 st.caption(f"and {more} more")
@@ -310,9 +312,11 @@ def _render_narrative_context(ctx: object) -> None:
             dur_str = f"{dur / 60:.0f}min"
         else:
             dur_str = "<1min"
+        n = ctx.last_session.commit_count
+        c_word = "commit" if n == 1 else "commits"
         st.markdown(
             f"Last session: **{dur_str}**, "
-            f"{ctx.last_session.commit_count} commit(s), "
+            f"{n} {c_word}, "
             f"{ctx.last_session.ended_relative}"
         )
     # S6: branch count + remote warning
@@ -426,6 +430,28 @@ def _git_log_recent(repo_path: Path, *, limit: int = 5) -> list[dict[str, str]]:
     return commits
 
 
+_PORCELAIN_MAP = {
+    "??": "new     ",
+    " M": "modified",
+    "M ": "staged  ",
+    " D": "deleted ",
+    "D ": "deleted ",
+    "A ": "added   ",
+    "MM": "modified",
+    "AM": "added   ",
+}
+
+
+def _humanize_porcelain(line: str) -> str:
+    """Translate git status porcelain prefixes to human-readable labels."""
+    if len(line) >= 3:
+        prefix = line[:2]
+        path = line[3:]
+        label = _PORCELAIN_MAP.get(prefix, prefix)
+        return f"{label} {path}"
+    return line
+
+
 _SPARK_CHARS = " \u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
 
 
@@ -494,7 +520,7 @@ def _render_project_age(md: object | None) -> None:
         if span_days >= 30:
             span_months = span_days / 30.44
             intensity = md.work_hours / span_months
-            intensity_str = f" \u00b7 {intensity:.1f} h/mo"
+            intensity_str = f" \u00b7 {intensity:.0f} h/mo"
     st.caption(f"Age {age_str}{intensity_str}")
 
 

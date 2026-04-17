@@ -437,7 +437,7 @@ def context_command(
                     if span_days >= 30:
                         span_months = span_days / 30.44
                         intensity = ctx.work_hours / span_months
-                        intensity_str = f" · {intensity:.1f} h/mo"
+                        intensity_str = f" · {intensity:.0f} h/mo"
                 console.print(f"  [dim]Age {age_str}{intensity_str}[/dim]")
         except (ValueError, TypeError):
             pass
@@ -470,10 +470,9 @@ def context_command(
         s = "s" if ctx.dirty_count > 1 else ""
         age_hint = ""
         if ctx.dirty_max_age_seconds is not None:
-            age_hint = f" — oldest {_format_age(ctx.dirty_max_age_seconds)}"
-        console.print(
-            f"\n  [bold yellow]{ctx.dirty_count} dirty file{s}{age_hint}[/bold yellow]"
-        )
+            age_hint = f" — {_format_age(ctx.dirty_max_age_seconds)} stale"
+        msg = f"{ctx.dirty_count} uncommitted file{s}{age_hint}"
+        console.print(f"\n  [bold yellow]{msg}[/bold yellow]")
         for f in ctx.dirty_files:
             console.print(f"    [yellow]{f}[/yellow]")
         if ctx.dirty_count > len(ctx.dirty_files):
@@ -488,9 +487,11 @@ def context_command(
             dur_str = f"{dur / 60:.0f}min"
         else:
             dur_str = "<1min"
+        n = ctx.last_session.commit_count
+        c_word = "commit" if n == 1 else "commits"
         console.print(
             f"\n  [bold]Last session[/bold]  "
-            f"{dur_str}, {ctx.last_session.commit_count} commit(s), "
+            f"{dur_str}, {n} {c_word}, "
             f"{ctx.last_session.ended_relative}"
         )
 
