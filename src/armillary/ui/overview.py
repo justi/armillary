@@ -54,29 +54,28 @@ def _render_overview() -> None:
 
     _render_dormant_banner(rows, exploring=dormant_explore)
 
-    # Apply filters (before search, so search excludes ARCHIVED by default)
+    # Apply filters
     filtered = _apply_filters(rows, filters=filters)
-
-    # Search bar (uses filtered rows for project dropdown)
-    _render_search_section(filtered, cfg)
 
     if dormant_explore:
         filtered = [r for r in filtered if r.status_raw == "DORMANT"]
         filtered.sort(key=lambda r: r.work_hours or 0, reverse=True)
 
-    # Subtitle
+    # Subtitle — simple count of what's visible
     if dormant_explore:
         total_hours = sum(r.work_hours or 0 for r in filtered)
-        st.caption(f"{len(filtered)} dormant projects · {total_hours:.0f}h total")
+        st.caption(f"{len(filtered)} dormant projects \u00b7 {total_hours:.0f}h total")
     else:
-        active_count = sum(1 for r in filtered if r.status_raw == "ACTIVE")
-        st.caption(f"{active_count} active of {len(filtered)} projects shown")
+        st.caption(f"{len(filtered)} projects")
 
     if not filtered:
         st.warning("No projects match the current filters.")
         return
 
     _render_table(filtered)
+
+    # Search bar below table — utility, not hero
+    _render_search_section(filtered, cfg)
 
 
 def _render_header() -> None:
@@ -335,8 +334,8 @@ def _apply_filters(
     if filters["status"]:
         out = [r for r in out if r.status_raw in filters["status"]]
     else:
-        # Hide ARCHIVED by default — user must explicitly select it in pills
-        out = [r for r in out if r.status_raw != "ARCHIVED"]
+        # Default: show only ACTIVE + PAUSED (panel 3/3: "176 is noise")
+        out = [r for r in out if r.status_raw in ("ACTIVE", "PAUSED")]
     return out
 
 
