@@ -318,3 +318,22 @@ def test_expired_skip_shows_history_in_reason(_use_tmp_cache: Path) -> None:
     assert len(returning) == 1
     assert "skipped 2x" in returning[0].reason
     assert "still waiting" in returning[0].reason
+
+
+def test_archived_project_excluded_from_suggestions(_use_tmp_cache: Path) -> None:
+    """ARCHIVED projects must not appear in next suggestions."""
+    db_path = _use_tmp_cache
+    with Cache(db_path=db_path) as cache:
+        cache.upsert(
+            [
+                _project(
+                    "archived-proj",
+                    status=Status.ARCHIVED,
+                    work_hours=200,
+                    last_commit_ts=_NOW - timedelta(days=60),
+                ),
+            ]
+        )
+
+    results = get_suggestions(db_path=db_path, now=_NOW)
+    assert not any(s.project.name == "archived-proj" for s in results)

@@ -48,6 +48,9 @@ class Status(StrEnum):
     IN_PROGRESS = "IN_PROGRESS"
     """Idea folder with an open `[ ]` checkbox in TODO.md."""
 
+    ARCHIVED = "ARCHIVED"
+    """Consciously closed — code is reusable but project is done."""
+
 
 class UmbrellaFolder(BaseModel):
     """A top-level folder under which armillary looks for projects.

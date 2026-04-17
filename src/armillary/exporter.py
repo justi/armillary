@@ -18,6 +18,7 @@ from pathlib import Path
 from .cache import Cache
 from .exclude_service import filter_excluded
 from .models import Project, Status
+from .status_override import filter_archived
 
 _COLUMNS: tuple[tuple[str, str], ...] = (
     ("Status", "status"),
@@ -104,6 +105,7 @@ def write_repos_index(
     with Cache(db_path=db_path) as cache:
         projects = cache.list_projects()
     projects = filter_excluded(projects)
+    projects = filter_archived(projects)
     output_path = output_path.expanduser()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(

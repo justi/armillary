@@ -31,7 +31,16 @@ def compute_status(
     active_days: int = DEFAULT_ACTIVE_DAYS,
     paused_days: int = DEFAULT_PAUSED_DAYS,
 ) -> Status:
-    """Classify a single project."""
+    """Classify a single project.
+
+    Manual overrides (e.g. ARCHIVED) take precedence over heuristics.
+    """
+    from .status_override import get_override
+
+    override = get_override(str(project.path))
+    if override is not None:
+        return override
+
     now = now or datetime.now()
 
     if project.type is ProjectType.IDEA:

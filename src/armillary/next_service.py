@@ -18,6 +18,7 @@ from pathlib import Path
 from .cache import Cache, default_db_path
 from .exclude_service import filter_excluded
 from .models import Project, Status
+from .status_override import filter_archived
 
 _SKIP_DURATION_DAYS = 30
 _ZOMBIE_THRESHOLD_DAYS = 7
@@ -46,6 +47,7 @@ def get_suggestions(
     with Cache(db_path=db_path) as cache:
         projects = cache.list_projects()
     projects = filter_excluded(projects)
+    projects = filter_archived(projects)
 
     skips = _load_skips(db_path)
     active_skips = {

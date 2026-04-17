@@ -14,6 +14,7 @@ from armillary.cli import app
 from armillary.cli_helpers import _safe_load_config
 from armillary.exclude_service import filter_excluded
 from armillary.search import LiteralSearch
+from armillary.status_override import filter_archived
 
 
 @app.command()
@@ -46,6 +47,7 @@ def search(
     with Cache() as cache:
         all_projects = cache.list_projects()
     all_projects = filter_excluded(all_projects)
+    all_projects = filter_archived(all_projects)
 
     if project_filter:
         needle = project_filter.lower()
@@ -278,6 +280,96 @@ def include_command(
         project = matches[0]
         include_project(str(project.path))
         typer.secho(f"Restored {project.name}", fg=typer.colors.GREEN)
+
+
+@app.command("archive")
+def archive_command(
+    names: list[str] = typer.Argument(..., help="Project name(s) to archive."),
+) -> None:
+    """Archive a project — mark it as consciously done.
+
+    Archived projects are hidden from next, search, and overview
+    but their code stays on disk. Use `armillary activate` to restore.
+    """
+    from armillary.models import Status
+    from armillary.status_override import get_override, set_override
+
+    with Cache() as cache:
+        projects = cache.list_projects()
+
+    for name in names:
+        matches = [p for p in projects if name.lower() in p.name.lower()]
+        if not matches:
+            typer.secho(f"No project matches '{name}'.", fg=typer.colors.RED, err=True)
+            continue
+        if len(matches) > 1:
+            exact = [p for p in matches if p.name.lower() == name.lower()]
+            if len(exact) == 1:
+                matches = exact
+            else:
+                match_names = ", ".join(p.name for p in matches[:5])
+                typer.secho(
+                    f"'{name}' is ambiguous: {match_names}.",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                continue
+        project = matches[0]
+        existing = get_override(str(project.path))
+        if existing == Status.ARCHIVED:
+            typer.secho(f"{project.name} is already archived.", fg=typer.colors.YELLOW)
+            continue
+        set_override(str(project.path), Status.ARCHIVED)
+        msg = (
+            f"Archived {project.name}. "
+            f"Use `armillary activate {project.name}` to restore."
+        )
+        typer.secho(msg, fg=typer.colors.CYAN)
+
+
+@app.command("activate")
+def activate_command(
+    names: list[str] = typer.Argument(..., help="Project name(s) to activate."),
+) -> None:
+    """Restore a project from archived — return to auto-computed status.
+
+    Clears any manual status override so the project's status is
+    determined by git activity again.
+    """
+    from armillary.status_override import clear_override, get_override
+
+    with Cache() as cache:
+        projects = cache.list_projects()
+
+    for name in names:
+        matches = [p for p in projects if name.lower() in p.name.lower()]
+        if not matches:
+            typer.secho(f"No project matches '{name}'.", fg=typer.colors.RED, err=True)
+            continue
+        if len(matches) > 1:
+            exact = [p for p in matches if p.name.lower() == name.lower()]
+            if len(exact) == 1:
+                matches = exact
+            else:
+                match_names = ", ".join(p.name for p in matches[:5])
+                typer.secho(
+                    f"'{name}' is ambiguous: {match_names}.",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                continue
+        project = matches[0]
+        if get_override(str(project.path)) is None:
+            typer.secho(
+                f"{project.name} has no manual override — already auto-computed.",
+                fg=typer.colors.YELLOW,
+            )
+            continue
+        clear_override(str(project.path))
+        typer.secho(
+            f"Activated {project.name} — status is now auto-computed.",
+            fg=typer.colors.GREEN,
+        )
 
 
 @app.command("purpose")

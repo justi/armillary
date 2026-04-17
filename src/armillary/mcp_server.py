@@ -20,6 +20,7 @@ from mcp.server.fastmcp import FastMCP
 from armillary.cache import Cache
 from armillary.exclude_service import filter_excluded
 from armillary.search import LiteralSearch, SearchHit
+from armillary.status_override import filter_archived
 
 # Hard limits to prevent MCP responses from exceeding token limits.
 _MAX_RESULTS_CAP = 200
@@ -99,6 +100,7 @@ def _get_project_roots() -> list[tuple[str, Path]]:
     with Cache() as cache:
         projects = cache.list_projects()
     projects = filter_excluded(projects)
+    projects = filter_archived(projects)
     return [(p.name, p.path) for p in projects]
 
 
@@ -163,6 +165,7 @@ def armillary_projects(status_filter: str | None = None) -> str:
     with Cache() as cache:
         projects = cache.list_projects()
     projects = filter_excluded(projects)
+    projects = filter_archived(projects)
 
     if status_filter:
         status_upper = status_filter.upper()

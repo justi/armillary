@@ -99,7 +99,14 @@ def get_context(
 
     project = matches[0]
     md = project.metadata
-    status = md.status.value if md and md.status else None
+    # Check manual override before cached status
+    from .status_override import get_override
+
+    override = get_override(str(project.path))
+    if override is not None:
+        status = override.value
+    else:
+        status = md.status.value if md and md.status else None
     work_hours = md.work_hours if md else None
 
     # Cached decision signals (ADR 0017)

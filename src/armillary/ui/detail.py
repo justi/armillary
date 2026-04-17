@@ -103,42 +103,66 @@ def _render_project_detail(project_path: str) -> None:
     ):
         go_to_overview()
 
+    is_archived = md and md.status == Status.ARCHIVED
+
     # --- Row 1: Name + Status + Launcher (top-right) ---
-    _render_header_with_launcher(project)
+    if is_archived:
+        _render_header_tombstone(project)
+    else:
+        _render_header_with_launcher(project)
 
     # --- Skip history (S2) ---
     _render_skip_history(project)
 
-    # --- Row 2: Dirty/Clean signal ---
-    import contextlib
+    if is_archived:
+        # Tombstone: minimal view, no work context
+        st.info(
+            "This project is **archived** — code is on disk but "
+            "hidden from next, search, and overview.",
+            icon=":material/archive:",
+        )
+        if st.button(
+            "Activate — return to auto-computed status",
+            key="detail_activate",
+            icon=":material/unarchive:",
+            type="primary",
+        ):
+            from armillary.status_override import clear_override
 
-    from armillary.context_service import get_context
+            clear_override(str(project.path))
+            st.rerun()
+    else:
+        # --- Row 2: Dirty/Clean signal ---
+        import contextlib
 
-    ctx = None
-    if project.type.value == "git":
-        with contextlib.suppress(ValueError, Exception):
-            ctx = get_context(project.name)
+        from armillary.context_service import get_context
 
-    if ctx and ctx.is_git:
-        _render_dirty_or_clean(ctx)
+        ctx = None
+        if project.type.value == "git":
+            with contextlib.suppress(ValueError, Exception):
+                ctx = get_context(project.name)
 
-    # --- Row 3: Branch + Last commit narrative ---
-    if ctx and ctx.is_git:
-        _render_narrative_context(ctx)
+        if ctx and ctx.is_git:
+            _render_dirty_or_clean(ctx)
 
-    # --- Section: What I was working on ---
-    if project.type.value == "git":
-        st.markdown("---")
-        st.subheader("What I was working on", anchor=False)
-        # Skip first commit — already shown in narrative context above
-        skip_first = bool(ctx and ctx.recent_commits)
-        _render_recent_commits(project.path, skip_first=skip_first)
-        if ctx and ctx.recent_branches:
-            with st.expander(
-                "Recent branches", icon=":material/fork_right:", expanded=False
-            ):
-                for b in ctx.recent_branches:
-                    st.markdown(f"- `{b.name}` — {b.relative_time}")
+        # --- Row 3: Branch + Last commit narrative ---
+        if ctx and ctx.is_git:
+            _render_narrative_context(ctx)
+
+        # --- Section: What I was working on ---
+        if project.type.value == "git":
+            st.markdown("---")
+            st.subheader("What I was working on", anchor=False)
+            skip_first = bool(ctx and ctx.recent_commits)
+            _render_recent_commits(project.path, skip_first=skip_first)
+            if ctx and ctx.recent_branches:
+                with st.expander(
+                    "Recent branches",
+                    icon=":material/fork_right:",
+                    expanded=False,
+                ):
+                    for b in ctx.recent_branches:
+                        st.markdown(f"- `{b.name}` — {b.relative_time}")
 
     # --- Section: Reference ---
     st.markdown("---")
@@ -169,6 +193,32 @@ def _render_project_detail(project_path: str) -> None:
 
     # --- Collapsed details (path, umbrella, stats) ---
     _render_details_expander(project)
+
+
+def _render_header_tombstone(project: Project) -> None:
+    """Minimal header for ARCHIVED projects — no launcher."""
+    md = project.metadata
+    st.title(f"{project.name} \u2014 :material/archive: ARCHIVED")
+    # Purpose or README
+    from armillary.purpose_service import get_purpose
+
+    purpose = get_purpose(str(project.path))
+    if purpose:
+        st.caption(f"*{purpose}*")
+    elif md and md.readme_excerpt:
+        excerpt = md.readme_excerpt
+        dot = excerpt.find(". ")
+        oneliner = excerpt[: dot + 1] if 0 < dot < 80 else excerpt[:80]
+        st.caption(f"*{oneliner}*")
+    # Sunk cost summary
+    parts: list[str] = []
+    if md and md.work_hours is not None:
+        parts.append(f"**{md.work_hours:.0f}h** invested")
+    if md and md.commit_count is not None:
+        parts.append(f"{md.commit_count} commits")
+    _render_project_age(md)
+    if parts:
+        st.caption(" \u00b7 ".join(parts))
 
 
 def _render_header_with_launcher(project: Project) -> None:

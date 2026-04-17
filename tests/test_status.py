@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from armillary.models import Project, ProjectMetadata, ProjectType, Status
 from armillary.status import compute_status
 
@@ -169,3 +171,27 @@ def test_custom_paused_days_overrides_default() -> None:
     assert compute_status(p, now=NOW) is Status.DORMANT
     # extended cutoff → PAUSED
     assert compute_status(p, now=NOW, paused_days=60) is Status.PAUSED
+
+
+def test_manual_override_takes_precedence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ARCHIVED override must survive regardless of git activity."""
+    db_path = tmp_path / "cache.db"
+    monkeypatch.setenv("ARMILLARY_CACHE_DB", str(db_path))
+
+    from armillary.status_override import clear_override, set_override
+
+    # Active project by heuristic (commit 1 hour ago)
+    md = ProjectMetadata(last_commit_ts=NOW - timedelta(hours=1))
+    p = _git_project(path=tmp_path / "proj", metadata=md)
+
+    assert compute_status(p, now=NOW) is Status.ACTIVE
+
+    # Set ARCHIVED override
+    set_override(str(p.path), Status.ARCHIVED)
+    assert compute_status(p, now=NOW) is Status.ARCHIVED
+
+    # Clear override — returns to auto
+    clear_override(str(p.path))
+    assert compute_status(p, now=NOW) is Status.ACTIVE

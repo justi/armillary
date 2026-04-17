@@ -30,8 +30,8 @@ project:
     next: built                   # momentum / zombie / forgotten gold (CLI + MCP) — enriched by S1, S3
     skip: built                   # hide from next for 30 days — enriched by S2 (reason + count)
     context: built                # ADR 0013 — "where was I?" per project (CLI + MCP) — enriched by S3, S4, S5, S6
-    decide: planned               # keep / pivot / kill — signals S1, S5, S6 ready
-    archive: planned              # just a status value — ARCHIVED — signal S6 safety check ready
+    decide: built                 # archive/activate commands — manual status override
+    archive: built                # ARCHIVED status + tombstone detail view + filtering from all lists
 
   actions:
     open: built                   # launch in Cursor/VS Code/Zed
