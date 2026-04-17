@@ -162,17 +162,15 @@ def _evaluate(project: Project, now: datetime) -> Suggestion | None:
     # Momentum: ACTIVE + committed recently
     if status == Status.ACTIVE and days_since <= _ZOMBIE_THRESHOLD_DAYS:
         score = hours * (1 / max(days_since, 0.1))
+        recency = "today" if days_since < 1 else f"{days_since:.0f}d ago"
         if dirty > 0:
             s = "s" if dirty > 1 else ""
             reason = (
                 f"{hours:.0f}h invested, {dirty} uncommitted file{s}, "
-                f"last commit {days_since:.0f}d ago — momentum is here."
+                f"last commit {recency} — momentum is here."
             )
         else:
-            reason = (
-                f"{hours:.0f}h invested, "
-                f"last commit {days_since:.0f}d ago — keep shipping."
-            )
+            reason = f"{hours:.0f}h invested, last commit {recency} — keep shipping."
         return Suggestion(
             project=project, category="momentum", reason=reason, score=score
         )

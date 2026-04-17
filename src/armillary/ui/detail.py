@@ -168,6 +168,7 @@ def _render_project_detail(project_path: str) -> None:
             )
         )
         if show_archive_top:
+            st.caption("Why are you archiving?")
             reason = st.text_input(
                 "Why are you archiving?",
                 placeholder="e.g. no traction, finished, pivoted",
@@ -323,6 +324,7 @@ def _render_header_with_launcher(project: Project) -> None:
         from armillary.purpose_service import get_purpose, set_purpose
 
         purpose = get_purpose(str(project.path))
+        st.caption("Purpose:")
         new_purpose = st.text_input(
             "Purpose",
             value=purpose or "",
@@ -382,24 +384,27 @@ def _render_header_with_launcher(project: Project) -> None:
     )
 
     last_convo = get_last_conversation(str(project.path))
-    st.caption("Last talked to user:")
-    new_convo = st.text_input(
-        "Last talked to user",
-        value=last_convo or "",
-        placeholder="YYYY-MM-DD",
+    import contextlib as _ctx
+    from datetime import date as _date
+
+    parsed_date = None
+    if last_convo:
+        with _ctx.suppress(ValueError):
+            parsed_date = _date.fromisoformat(last_convo)
+    new_date = st.date_input(
+        "Last discussed with user",
+        value=parsed_date,
         key=f"last_convo_{project.path}",
-        label_visibility="collapsed",
     )
-    if new_convo != (last_convo or "") and new_convo:
-        set_last_conversation(str(project.path), new_convo)
+    new_str = new_date.isoformat() if new_date else None
+    if new_str and new_str != (last_convo or ""):
+        set_last_conversation(str(project.path), new_str)
         st.rerun()
 
-    # Revenue/MRR (ADR 0022 M2)
+    # Revenue/MRR (ADR 0022 M2) — shown in info row when >0
     from armillary.purpose_service import get_revenue, set_revenue
 
     current_rev = get_revenue(str(project.path))
-    if current_rev is not None:
-        st.caption(f"Revenue: ${current_rev}/mo")
     with st.expander("Set revenue", expanded=False):
         new_rev = st.number_input(
             "Monthly revenue (USD)",
@@ -411,7 +416,6 @@ def _render_header_with_launcher(project: Project) -> None:
         if st.button("Save", key=f"save_rev_{project.path}"):
             set_revenue(str(project.path), int(new_rev))
             st.rerun()
-        st.rerun()
 
 
 def _render_launcher_compact(project: Project, cfg: Config) -> None:

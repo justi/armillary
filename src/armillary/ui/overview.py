@@ -681,8 +681,6 @@ def _render_table(rows: list[OverviewRow]) -> None:
         },
     )
 
-    st.caption("Select multiple rows to bulk archive")
-
     selection = getattr(event, "selection", None)
     selected_indices = getattr(selection, "rows", []) if selection else []
 
