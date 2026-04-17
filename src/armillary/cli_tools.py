@@ -763,6 +763,41 @@ def _print_yesterday(console: Console, suggestions: list) -> None:
         console.print(f"[dim]Yesterday: {names}{more}[/dim]")
 
 
+def _print_zombie_alert(console: Console) -> None:
+    """Warn about ACTIVE projects with no commit in >14 days."""
+    from datetime import datetime, timedelta
+
+    from armillary.cache import Cache
+    from armillary.exclude_service import filter_excluded
+    from armillary.status_override import filter_archived
+
+    cutoff = datetime.now() - timedelta(days=14)
+
+    with Cache() as cache:
+        projects = cache.list_projects()
+    projects = filter_excluded(projects)
+    projects = filter_archived(projects)
+
+    zombies = [
+        p
+        for p in projects
+        if p.metadata
+        and p.metadata.status
+        and p.metadata.status.value == "ACTIVE"
+        and p.metadata.last_commit_ts
+        and p.metadata.last_commit_ts < cutoff
+        and (p.metadata.work_hours or 0) > 10
+    ]
+    if zombies:
+        names = ", ".join(p.name for p in zombies[:3])
+        more = f" +{len(zombies) - 3}" if len(zombies) > 3 else ""
+        console.print(
+            f"[bold yellow]⚠ {len(zombies)} zombie"
+            f"{'s' if len(zombies) > 1 else ''}: "
+            f"{names}{more} — no commit in 14+ days[/bold yellow]"
+        )
+
+
 _CATEGORY_ICONS = {
     "momentum": "🔥",
     "zombie": "⚠️",
@@ -837,6 +872,9 @@ def next_command(
 
     # Yesterday's activity — retention hook (panel 2/3)
     _print_yesterday(console, suggestions)
+
+    # Zombie alert — ACTIVE projects going stale (M3)
+    _print_zombie_alert(console)
 
     for s in suggestions:
         icon = _CATEGORY_ICONS.get(s.category, "•")

@@ -64,8 +64,8 @@ project:
     shareable_card: built         # heatmap export as HTML card — CLI armillary card + dashboard download
 
     # M3 "Nag" — proactive + polish
-    zombie_alert: planned         # terminal warning when ACTIVE has no commit 14d
-    status_layouts: planned       # DORMANT=rediscovery, ACTIVE=resume layouts
+    zombie_alert: built           # terminal warning in next when ACTIVE has no commit 14d
+    status_layouts: built         # DORMANT/STALLED=README expanded, ACTIVE=collapsed, ARCHIVED=tombstone
 
   deferred:
     launch_window: "revisit when users ask — 5% of projects launch"
