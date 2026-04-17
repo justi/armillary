@@ -294,3 +294,34 @@ class TestBulkArchive:
         assert "c" not in names
         assert "b" in names
         assert "d" in names
+
+
+# --- archive reason roundtrip -----------------------------------------------
+
+
+class TestArchiveReason:
+    def test_set_and_get(self, _use_tmp: Path) -> None:
+        from armillary.purpose_service import get_archive_reason, set_archive_reason
+
+        set_archive_reason("/tmp/proj", "no traction")
+        assert get_archive_reason("/tmp/proj") == "no traction"
+
+    def test_overwrite(self, _use_tmp: Path) -> None:
+        from armillary.purpose_service import get_archive_reason, set_archive_reason
+
+        set_archive_reason("/tmp/proj", "old reason")
+        set_archive_reason("/tmp/proj", "new reason")
+        assert get_archive_reason("/tmp/proj") == "new reason"
+
+
+# --- cache PAUSED → STALLED compat -----------------------------------------
+
+
+class TestStalledCompat:
+    def test_legacy_paused_maps_to_stalled(self, _use_tmp: Path) -> None:
+        from armillary.cache import _safe_status
+
+        assert _safe_status("PAUSED") == Status.STALLED
+        assert _safe_status("STALLED") == Status.STALLED
+        assert _safe_status(None) is None
+        assert _safe_status("BOGUS") is None
