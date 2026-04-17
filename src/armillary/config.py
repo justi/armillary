@@ -61,8 +61,35 @@ class LauncherConfig(BaseModel):
 
 
 # Built-in launcher catalogue. Users can override or extend it via the
-# `launchers:` block in their config.yaml. Keep entries minimal and
-# cross-platform-friendly where possible.
+def _iterm_launcher(label: str, command: str, *, icon: str) -> LauncherConfig:
+    """Build an iTerm launcher that opens a new tab and runs a command."""
+    return LauncherConfig(
+        label=label,
+        command="osascript",
+        args=[
+            "-e",
+            'tell application "iTerm"',
+            "-e",
+            "activate",
+            "-e",
+            "tell current window",
+            "-e",
+            "create tab with default profile",
+            "-e",
+            "tell current session",
+            "-e",
+            f'write text "{command}"',
+            "-e",
+            "end tell",
+            "-e",
+            "end tell",
+            "-e",
+            "end tell",
+        ],
+        icon=icon,
+    )
+
+
 _BUILTIN_LAUNCHERS: dict[str, LauncherConfig] = {
     # `claude` and `codex` are interactive terminal apps. They take their
     # working directory from `cwd=...` so we deliberately do NOT pass
@@ -114,79 +141,13 @@ _BUILTIN_LAUNCHERS: dict[str, LauncherConfig] = {
         args=["-a", "Terminal", "{path}"],
         icon="⌨️",
     ),
-    "iterm": LauncherConfig(
-        label="iTerm",
-        command="osascript",
-        args=[
-            "-e",
-            'tell application "iTerm"',
-            "-e",
-            "activate",
-            "-e",
-            "tell current window",
-            "-e",
-            "create tab with default profile",
-            "-e",
-            "tell current session",
-            "-e",
-            'write text "cd {path}"',
-            "-e",
-            "end tell",
-            "-e",
-            "end tell",
-            "-e",
-            "end tell",
-        ],
-        icon="🖥️",
+    "iterm": _iterm_launcher("iTerm", "cd {path}", icon="🖥️"),
+    "iterm-claude": _iterm_launcher(
+        "iTerm + Claude", "cd {path} && claude -c", icon="🤖"
     ),
-    "iterm-claude": LauncherConfig(
-        label="iTerm + Claude",
-        command="osascript",
-        args=[
-            "-e",
-            'tell application "iTerm"',
-            "-e",
-            "activate",
-            "-e",
-            "tell current window",
-            "-e",
-            "create tab with default profile",
-            "-e",
-            "tell current session",
-            "-e",
-            'write text "cd {path} && claude -c"',
-            "-e",
-            "end tell",
-            "-e",
-            "end tell",
-            "-e",
-            "end tell",
-        ],
-        icon="🤖",
-    ),
-    "iterm-claude-yolo": LauncherConfig(
-        label="iTerm + Claude (skip permissions)",
-        command="osascript",
-        args=[
-            "-e",
-            'tell application "iTerm"',
-            "-e",
-            "activate",
-            "-e",
-            "tell current window",
-            "-e",
-            "create tab with default profile",
-            "-e",
-            "tell current session",
-            "-e",
-            'write text "cd {path} && claude --dangerously-skip-permissions -c"',
-            "-e",
-            "end tell",
-            "-e",
-            "end tell",
-            "-e",
-            "end tell",
-        ],
+    "iterm-claude-yolo": _iterm_launcher(
+        "iTerm + Claude (skip permissions)",
+        "cd {path} && claude --dangerously-skip-permissions -c",
         icon="🔓",
     ),
     "finder": LauncherConfig(
