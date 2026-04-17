@@ -37,11 +37,90 @@ app = typer.Typer(
 
 @app.callback()
 def _default(ctx: typer.Context) -> None:
-    """Run `next` when no subcommand is given."""
+    """Run `next` when no subcommand is given. Auto-bootstrap on first run."""
     if ctx.invoked_subcommand is None:
+        from armillary.config import default_config_path
+
+        if not default_config_path().exists():
+            typer.secho(
+                "No config found. Let's set you up (< 60s).\n",
+                fg=typer.colors.CYAN,
+            )
+            from armillary.cli_config import config as config_cmd
+
+            ctx.invoke(config_cmd, init=True)
+            _print_delight_card()
+            return
+
         from armillary.cli_tools import next_command
 
         ctx.invoke(next_command, skip=None, reason=None)
+
+
+def _print_delight_card() -> None:
+    """Portfolio snapshot after first scan — the wow moment."""
+    from rich.console import Console
+    from rich.panel import Panel
+
+    from armillary.cache import Cache
+
+    with Cache() as cache:
+        projects = cache.list_projects()
+
+    if not projects:
+        return
+
+    from collections import Counter
+    from datetime import datetime
+
+    total = len(projects)
+    total_hours = sum(p.metadata.work_hours or 0 for p in projects if p.metadata)
+    statuses = Counter(
+        p.metadata.status.value for p in projects if p.metadata and p.metadata.status
+    )
+
+    # Find oldest project
+    first_dates = [
+        p.metadata.first_commit_ts
+        for p in projects
+        if p.metadata and p.metadata.first_commit_ts
+    ]
+    span = ""
+    if first_dates:
+        oldest = min(first_dates)
+        years = (datetime.now() - oldest).days / 365
+        span = f" · since {oldest.strftime('%b %Y')}" if years >= 1 else ""
+
+    # Top 2 by hours
+    by_hours = sorted(
+        projects,
+        key=lambda p: p.metadata.work_hours or 0 if p.metadata else 0,
+        reverse=True,
+    )
+    top = ", ".join(
+        f"{p.name} ({p.metadata.work_hours:.0f}h)"
+        for p in by_hours[:2]
+        if p.metadata and p.metadata.work_hours
+    )
+
+    status_line = "  ".join(f"{count} {name}" for name, count in statuses.most_common())
+
+    content = (
+        f"[bold]{total} projects[/bold] · "
+        f"{total_hours:,.0f}h invested{span}\n"
+        f"{status_line}\n"
+    )
+    if top:
+        content += f"Top: {top}\n"
+    content += (
+        "\n[dim]→ armillary       what to work on today[/dim]\n"
+        "[dim]→ armillary start  open dashboard[/dim]"
+    )
+
+    console = Console()
+    console.print()
+    console.print(Panel(content, title="YOUR PORTFOLIO", border_style="green"))
+    console.print()
 
 
 @app.command()
