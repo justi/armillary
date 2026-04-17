@@ -118,35 +118,13 @@ def _render_project_detail(project_path: str) -> None:
     else:
         _render_header_with_launcher(project)
 
-    # --- Archive button (prominent for stale projects) ---
-    show_archive_top = (
-        not is_archived
-        and md
-        and md.status
-        in (
-            Status.PAUSED,
-            Status.DORMANT,
-        )
-    )
-    if show_archive_top and st.button(
-        "Archive this project",
-        key="detail_archive_top",
-        icon=":material/archive:",
-        type="secondary",
-    ):
-        from armillary.status_override import set_override
-
-        set_override(str(project.path), Status.ARCHIVED)
-        st.toast(f"Archived {project.name}")
-        st.rerun()
-
     # --- Skip history (S2) ---
     _render_skip_history(project)
 
     if is_archived:
         # Tombstone: minimal view, no work context
         st.info(
-            "This project is **archived** — code is on disk but "
+            "This project is **archived** \u2014 code is on disk but "
             "hidden from next, search, and overview.",
             icon=":material/archive:",
         )
@@ -161,7 +139,7 @@ def _render_project_detail(project_path: str) -> None:
             clear_override(str(project.path))
             st.rerun()
     else:
-        # --- Row 2: Dirty/Clean signal ---
+        # --- Dirty/Clean signal (BEFORE archive button — informs decision) ---
         import contextlib
 
         from armillary.context_service import get_context
@@ -173,6 +151,28 @@ def _render_project_detail(project_path: str) -> None:
 
         if ctx and ctx.is_git:
             _render_dirty_or_clean(ctx)
+
+        # --- Archive button (after dirty warning — user sees risk first) ---
+        show_archive_top = (
+            not is_archived
+            and md
+            and md.status
+            in (
+                Status.PAUSED,
+                Status.DORMANT,
+            )
+        )
+        if show_archive_top and st.button(
+            "Archive this project",
+            key="detail_archive_top",
+            icon=":material/archive:",
+            type="secondary",
+        ):
+            from armillary.status_override import set_override
+
+            set_override(str(project.path), Status.ARCHIVED)
+            st.toast(f"Archived {project.name}")
+            st.rerun()
 
         # --- Row 3: Branch + Last commit narrative ---
         if ctx and ctx.is_git:
