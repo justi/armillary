@@ -265,31 +265,16 @@ def _render_dying_metric(
     *,
     exclude_paths: set[str] | None = None,
 ) -> None:
-    """'Projects needing a decision' — excludes projects already in next.
+    """'Uncommitted work at risk' — panel consensus 3/3.
 
-    Zombie = ACTIVE with dead velocity (zero commits in 4 weeks).
-    Forgotten WIP = PAUSED with dirty files and >10h invested.
+    Shows PAUSED projects with dirty files and real investment (>10h).
+    These are suspended intentions — the user started something,
+    didn't finish, and the work is at risk (disk crash, brew update).
+
+    ACTIVE = skip (working on it). DORMANT = skip (already decided).
     """
     skip = exclude_paths or set()
-
-    # Load velocity data from cache for zombie detection
-    dead_velocity_paths: set[str] = set()
-    with Cache() as cache:
-        for p in cache.list_projects():
-            md = p.metadata
-            if md and md.velocity_trend == "dead":
-                dead_velocity_paths.add(str(p.path))
-
-    zombies = [
-        r
-        for r in rows
-        if r.status_raw == "ACTIVE"
-        and r.work_hours
-        and r.work_hours > 10
-        and r.path in dead_velocity_paths
-        and r.path not in skip
-    ]
-    forgotten_wip = [
+    at_risk = [
         r
         for r in rows
         if r.status_raw == "PAUSED"
@@ -299,39 +284,33 @@ def _render_dying_metric(
         and r.work_hours > 10
         and r.path not in skip
     ]
-    total = len(zombies) + len(forgotten_wip)
 
-    if total == 0:
+    if not at_risk:
         return
 
-    parts: list[str] = []
-    if zombies:
-        parts.append(
-            f"{len(zombies)} zombie{'s' if len(zombies) > 1 else ''} (active but quiet)"
-        )
-    if forgotten_wip:
-        parts.append(f"{len(forgotten_wip)} with forgotten WIP")
+    at_risk.sort(key=lambda r: r.work_hours or 0, reverse=True)
+    total = len(at_risk)
+    total_hours = sum(r.work_hours or 0 for r in at_risk)
 
     st.warning(
-        f"**{total} project{'s need' if total > 1 else ' needs'} "
-        f"a decision** \u2014 {', '.join(parts)}",
+        f"**{total} project{'s have' if total > 1 else ' has'} "
+        f"uncommitted work** \u2014 {total_hours:.0f}h invested, "
+        f"commit or archive",
         icon=":material/priority_high:",
     )
 
-    # Show the actual projects so user can act
-    all_dying = zombies + forgotten_wip
-    all_dying.sort(key=lambda r: r.work_hours or 0, reverse=True)
     with st.expander(
         f"Show {total} project{'s' if total > 1 else ''}",
         expanded=False,
     ):
-        for r in all_dying:
-            is_zombie = r in zombies
-            tag = "\u26a0\ufe0f zombie" if is_zombie else "\u270f\ufe0f forgotten WIP"
+        for r in at_risk:
             hours = f"{r.work_hours:.0f}h" if r.work_hours else "0h"
+            dirty_label = f"{r.dirty} file{'s' if r.dirty > 1 else ''}"
             col_info, col_act = st.columns([4, 1])
             with col_info:
-                st.markdown(f"**{r.name}** \u2014 {tag} \u00b7 {hours}")
+                st.markdown(
+                    f"**{r.name}** \u2014 {dirty_label} uncommitted \u00b7 {hours}"
+                )
             with col_act:
                 if st.button(
                     "Open",
