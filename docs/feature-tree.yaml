@@ -56,7 +56,7 @@ project:
     # M1 "Memory" — time-series + cleanup
     pulse_history: planned        # 6-month portfolio evolution chart
     last_conversation: planned    # editable "when did I last talk to a user?"
-    bulk_archive: planned         # checkboxes + "Archive selected" in overview
+    bulk_archive: built           # multi-select table + "Archive selected" button
     stalled_rename: built          # PAUSED → STALLED (vocabulary change)
 
     # M2 "Money" — revenue + virality

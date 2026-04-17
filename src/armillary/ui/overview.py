@@ -608,7 +608,7 @@ def _render_table(rows: list[OverviewRow]) -> None:
         width="stretch",
         hide_index=True,
         on_select="rerun",
-        selection_mode="single-row",
+        selection_mode="multi-row",
         column_config={
             "Name": st.column_config.TextColumn("Name", pinned=True),
             "Summary": st.column_config.TextColumn("Summary"),
@@ -623,11 +623,32 @@ def _render_table(rows: list[OverviewRow]) -> None:
         },
     )
 
-    # Single row click → navigate to detail
     selection = getattr(event, "selection", None)
     selected_indices = getattr(selection, "rows", []) if selection else []
-    if selected_indices:
+
+    if len(selected_indices) == 1:
+        # Single click → navigate to detail
         idx = selected_indices[0]
         if idx < len(rows):
             st.query_params["project"] = rows[idx].path
             st.rerun()
+    elif len(selected_indices) > 1:
+        # Multi-select → bulk actions
+        col_info, col_action = st.columns([3, 1])
+        with col_info:
+            st.caption(f"{len(selected_indices)} projects selected")
+        with col_action:
+            if st.button(
+                "Archive selected",
+                key="bulk_archive",
+                icon=":material/archive:",
+                type="secondary",
+            ):
+                from armillary.models import Status
+                from armillary.status_override import set_override
+
+                for i in selected_indices:
+                    if i < len(rows):
+                        set_override(rows[i].path, Status.ARCHIVED)
+                st.toast(f"Archived {len(selected_indices)} projects")
+                st.rerun()
