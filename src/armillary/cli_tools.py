@@ -936,11 +936,9 @@ def pulse_command() -> None:
         format_pulse,
         generate_pulse,
         load_history,
-        take_snapshot,
     )
 
     pulse = generate_pulse()
-    take_snapshot()  # record this week
     console = Console()
     console.print(f"\n{format_pulse(pulse)}")
 

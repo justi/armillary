@@ -490,10 +490,8 @@ def _render_pulse_section() -> None:
                 st.markdown(f"- {e.icon} **{e.project_name}** \u2014 {e.message}")
 
         # Pulse history chart (ADR 0022 M1)
-        from armillary.pulse_service import load_history, take_snapshot
+        from armillary.pulse_service import load_history
 
-        # Take snapshot on view (idempotent per week)
-        take_snapshot()
         history = load_history()
         if len(history) < 2:
             st.caption(
