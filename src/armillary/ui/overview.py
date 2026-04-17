@@ -259,33 +259,43 @@ def _spark_char(value: int, all_values: list[int]) -> str:
 
 
 def _render_dying_metric(rows: list[OverviewRow]) -> None:
-    """'Projects dying this week' — one number that hurts (Harry Dry).
+    """'Projects needing a decision' — specific, actionable (Harry Dry).
 
-    Dying = ACTIVE/PAUSED with no commit in >14 days, or DORMANT with
-    uncommitted files (forgotten WIP). This is the daily hook.
+    Zombies = ACTIVE but no activity in >7 days (about to go dormant).
+    These are the projects where you're losing momentum RIGHT NOW.
+    Small number = actionable. Large number = noise.
     """
-    from datetime import datetime, timedelta
+    zombies = [
+        r
+        for r in rows
+        if r.status_raw == "ACTIVE"
+        and r.dirty is not None
+        and r.dirty == 0
+        and r.work_hours
+        and r.work_hours > 10
+    ]
+    # Also count PAUSED with old dirty files (forgotten WIP)
+    forgotten_wip = [
+        r for r in rows if r.status_raw == "PAUSED" and r.dirty and r.dirty > 0
+    ]
+    total = len(zombies) + len(forgotten_wip)
 
-    now = datetime.now()
-    cutoff = now - timedelta(days=14)
-    dying = 0
-    for r in rows:
-        if r.status_raw == "ARCHIVED":
-            continue
-        # Active/Paused but going stale
-        if r.status_raw in ("ACTIVE", "PAUSED"):
-            if r.last_modified < cutoff:
-                dying += 1
-        # Dormant with dirty files = forgotten WIP
-        elif r.status_raw == "DORMANT" and r.dirty and r.dirty > 0:
-            dying += 1
+    if total == 0:
+        return
 
-    if dying > 0:
-        st.error(
-            f"**{dying} project{'s' if dying > 1 else ''} dying this week** "
-            "\u2014 decide: keep, archive, or finish",
-            icon=":material/warning:",
+    parts: list[str] = []
+    if zombies:
+        parts.append(
+            f"{len(zombies)} zombie{'s' if len(zombies) > 1 else ''} (active but quiet)"
         )
+    if forgotten_wip:
+        parts.append(f"{len(forgotten_wip)} with forgotten WIP")
+
+    st.warning(
+        f"**{total} project{'s need' if total > 1 else ' needs'} "
+        f"a decision** \u2014 {', '.join(parts)}",
+        icon=":material/priority_high:",
+    )
 
 
 def _apply_filters(
