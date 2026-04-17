@@ -592,6 +592,7 @@ def next_command(
         return
 
     from armillary.cli_helpers import _shorten_home
+    from armillary.purpose_service import get_purpose
 
     console = Console()
     for s in suggestions:
@@ -600,7 +601,22 @@ def next_command(
         console.print(
             f"\n{icon} [bold]{s.project.name}[/bold]  [dim]{short_path}[/dim]"
         )
+        # Purpose or README one-liner
+        purpose = get_purpose(str(s.project.path))
+        md = s.project.metadata
+        if purpose:
+            console.print(f"  [italic]{purpose}[/italic]")
+        elif md and md.readme_excerpt:
+            excerpt = md.readme_excerpt
+            dot = excerpt.find(". ")
+            oneliner = excerpt[: dot + 1] if 0 < dot < 80 else excerpt[:80]
+            console.print(f"  [dim italic]{oneliner}[/dim italic]")
         console.print(f"  {s.reason}")
+        # Monthly sparkline
+        if md and md.monthly_commits and any(c > 0 for c in md.monthly_commits):
+            console.print(
+                f"  [dim]Activity  {_sparkline(md.monthly_commits)} (6mo)[/dim]"
+            )
         console.print(f"  [dim]→ cd {short_path}[/dim]")
         if s.category == "forgotten_gold":
             console.print(f"  [dim]→ armillary next --skip {s.project.name}[/dim]")

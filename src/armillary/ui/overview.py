@@ -128,8 +128,22 @@ def _render_next_suggestions() -> None:
             path_str = _shorten_home(s.project.path)
             col_info, col_action = st.columns([4, 1])
             with col_info:
+                # Purpose or README one-liner
+                from armillary.purpose_service import get_purpose
+
+                purpose = get_purpose(str(s.project.path))
+                md = s.project.metadata
+                oneliner = ""
+                if purpose:
+                    oneliner = f"*{purpose}*  \n"
+                elif md and md.readme_excerpt:
+                    excerpt = md.readme_excerpt
+                    dot = excerpt.find(". ")
+                    short = excerpt[: dot + 1] if 0 < dot < 80 else excerpt[:80]
+                    oneliner = f"*{short}*  \n"
                 st.markdown(
                     f"{icon} **{s.project.name}** — {label}  \n"
+                    f"{oneliner}"
                     f"{s.reason}  \n"
                     f"`{path_str}`"
                 )

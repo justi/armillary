@@ -106,6 +106,9 @@ def _render_project_detail(project_path: str) -> None:
     # --- Row 1: Name + Status + Launcher (top-right) ---
     _render_header_with_launcher(project)
 
+    # --- Skip history (S2) ---
+    _render_skip_history(project)
+
     # --- Row 2: Dirty/Clean signal ---
     import contextlib
 
@@ -424,6 +427,24 @@ def _git_log_recent(repo_path: Path, *, limit: int = 5) -> list[dict[str, str]]:
 
 
 _SPARK_CHARS = " \u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
+
+
+def _render_skip_history(project: Project) -> None:
+    """Show skip history if this project was previously skipped."""
+    from armillary.next_service import _load_skips
+
+    skips = _load_skips()
+    entry = skips.get(str(project.path))
+    if not entry:
+        return
+    count = entry.get("count", 0)
+    reason = entry.get("reason")
+    if count <= 0:
+        return
+    parts = [f"Skipped {count}x from suggestions"]
+    if reason:
+        parts.append(f"last reason: *{reason}*")
+    st.info(" \u2014 ".join(parts), icon=":material/skip_next:")
 
 
 def _sparkline_text(values: list[int]) -> str:
