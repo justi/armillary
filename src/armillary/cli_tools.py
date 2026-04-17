@@ -11,15 +11,10 @@ from rich.console import Console
 from armillary import exporter, launcher
 from armillary.cache import Cache
 from armillary.cli import app
-from armillary.cli_helpers import _safe_load_config
+from armillary.cli_helpers import _resolve_project_or_report, _safe_load_config
 from armillary.exclude_service import filter_excluded
 from armillary.search import LiteralSearch
 from armillary.status_override import filter_archived
-from armillary.utils import (
-    find_projects_by_name,
-    resolve_project_by_name,
-    summarize_project_matches,
-)
 
 
 @app.command()
@@ -141,27 +136,16 @@ def open_project(
     with Cache() as cache:
         all_projects = cache.list_projects()
 
-    try:
-        project = resolve_project_by_name(all_projects, project_name)
-    except ValueError:
-        matches = find_projects_by_name(all_projects, project_name)
-        typer.secho(
-            (
-                f"'{project_name}' is ambiguous: "
-                f"{summarize_project_matches(matches)}. Be more specific."
-            ),
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(2) from None
-
+    project = _resolve_project_or_report(
+        all_projects,
+        project_name,
+        missing_message=(
+            "No project in cache matches '{name}'. "
+            "Run `armillary list` to see what is indexed."
+        ),
+        ambiguous_message="'{name}' is ambiguous: {matches}. Be more specific.",
+    )
     if project is None:
-        typer.secho(
-            f"No project in cache matches '{project_name}'. "
-            "Run `armillary list` to see what is indexed.",
-            fg=typer.colors.RED,
-            err=True,
-        )
         raise typer.Exit(2)
     result = launcher.launch(project, target, launchers=cfg.launchers)
 
@@ -234,22 +218,15 @@ def exclude_command(
         all_projects = cache.list_projects()
 
     for name in names:
-        try:
-            project = resolve_project_by_name(all_projects, name)
-        except ValueError:
-            matches = find_projects_by_name(all_projects, name)
-            typer.secho(
-                (
-                    f"'{name}' is ambiguous: "
-                    f"{summarize_project_matches(matches)}. Be more specific."
-                ),
-                fg=typer.colors.RED,
-                err=True,
-            )
-            continue
-
+        project = _resolve_project_or_report(
+            all_projects,
+            name,
+            missing_message="No project matches '{name}'.",
+            ambiguous_message="'{name}' is ambiguous: {matches}. Be more specific.",
+            missing_color=typer.colors.YELLOW,
+            missing_err=False,
+        )
         if project is None:
-            typer.secho(f"No project matches '{name}'.", fg=typer.colors.YELLOW)
             continue
         exclude_project(str(project.path))
         typer.secho(f"Excluded {project.name}", fg=typer.colors.CYAN)
@@ -268,19 +245,15 @@ def include_command(
         all_projects = cache.list_projects()
 
     for name in names:
-        try:
-            project = resolve_project_by_name(all_projects, name)
-        except ValueError:
-            matches = find_projects_by_name(all_projects, name)
-            typer.secho(
-                f"'{name}' is ambiguous: {summarize_project_matches(matches)}.",
-                fg=typer.colors.RED,
-                err=True,
-            )
-            continue
-
+        project = _resolve_project_or_report(
+            all_projects,
+            name,
+            missing_message="No project matches '{name}'.",
+            ambiguous_message="'{name}' is ambiguous: {matches}.",
+            missing_color=typer.colors.YELLOW,
+            missing_err=False,
+        )
         if project is None:
-            typer.secho(f"No project matches '{name}'.", fg=typer.colors.YELLOW)
             continue
         include_project(str(project.path))
         typer.secho(f"Restored {project.name}", fg=typer.colors.GREEN)
@@ -309,19 +282,13 @@ def archive_command(
         projects = cache.list_projects()
 
     for name in names:
-        try:
-            project = resolve_project_by_name(projects, name)
-        except ValueError:
-            matches = find_projects_by_name(projects, name)
-            typer.secho(
-                f"'{name}' is ambiguous: {summarize_project_matches(matches)}.",
-                fg=typer.colors.RED,
-                err=True,
-            )
-            continue
-
+        project = _resolve_project_or_report(
+            projects,
+            name,
+            missing_message="No project matches '{name}'.",
+            ambiguous_message="'{name}' is ambiguous: {matches}.",
+        )
         if project is None:
-            typer.secho(f"No project matches '{name}'.", fg=typer.colors.RED, err=True)
             continue
         existing = get_override(str(project.path))
         if existing == Status.ARCHIVED:
@@ -352,19 +319,13 @@ def activate_command(
         projects = cache.list_projects()
 
     for name in names:
-        try:
-            project = resolve_project_by_name(projects, name)
-        except ValueError:
-            matches = find_projects_by_name(projects, name)
-            typer.secho(
-                f"'{name}' is ambiguous: {summarize_project_matches(matches)}.",
-                fg=typer.colors.RED,
-                err=True,
-            )
-            continue
-
+        project = _resolve_project_or_report(
+            projects,
+            name,
+            missing_message="No project matches '{name}'.",
+            ambiguous_message="'{name}' is ambiguous: {matches}.",
+        )
         if project is None:
-            typer.secho(f"No project matches '{name}'.", fg=typer.colors.RED, err=True)
             continue
         if get_override(str(project.path)) is None:
             typer.secho(
@@ -391,21 +352,13 @@ def purpose_command(
 
     with Cache() as cache:
         projects = cache.list_projects()
-    try:
-        project = resolve_project_by_name(projects, project_name)
-    except ValueError:
-        matches = find_projects_by_name(projects, project_name)
-        typer.secho(
-            f"Ambiguous: {summarize_project_matches(matches)}.",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(2) from None
-
+    project = _resolve_project_or_report(
+        projects,
+        project_name,
+        missing_message="No project matches '{name}'.",
+        ambiguous_message="Ambiguous: {matches}.",
+    )
     if project is None:
-        typer.secho(
-            f"No project matches '{project_name}'.", fg=typer.colors.RED, err=True
-        )
         raise typer.Exit(2)
     path_str = str(project.path)
 
@@ -444,23 +397,13 @@ def talked_command(
 
     with Cache() as cache:
         projects = cache.list_projects()
-    try:
-        project = resolve_project_by_name(projects, project_name)
-    except ValueError:
-        matches = find_projects_by_name(projects, project_name)
-        typer.secho(
-            f"Ambiguous: {summarize_project_matches(matches)}.",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(2) from None
-
+    project = _resolve_project_or_report(
+        projects,
+        project_name,
+        missing_message="No project matches '{name}'.",
+        ambiguous_message="Ambiguous: {matches}.",
+    )
     if project is None:
-        typer.secho(
-            f"No project matches '{project_name}'.",
-            fg=typer.colors.RED,
-            err=True,
-        )
         raise typer.Exit(2)
     date_str = date or date_type.today().isoformat()
     set_last_conversation(str(project.path), date_str)
@@ -480,23 +423,13 @@ def revenue_command(
 
     with Cache() as cache:
         projects = cache.list_projects()
-    try:
-        project = resolve_project_by_name(projects, project_name)
-    except ValueError:
-        matches = find_projects_by_name(projects, project_name)
-        typer.secho(
-            f"Ambiguous: {summarize_project_matches(matches)}.",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(2) from None
-
+    project = _resolve_project_or_report(
+        projects,
+        project_name,
+        missing_message="No project matches '{name}'.",
+        ambiguous_message="Ambiguous: {matches}.",
+    )
     if project is None:
-        typer.secho(
-            f"No project matches '{project_name}'.",
-            fg=typer.colors.RED,
-            err=True,
-        )
         raise typer.Exit(2)
     if amount is not None:
         set_revenue(str(project.path), amount)

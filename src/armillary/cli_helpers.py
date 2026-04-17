@@ -8,8 +8,15 @@ from pathlib import Path
 import typer
 
 from armillary.config import Config, ConfigError, load_config
-from armillary.models import UmbrellaFolder
-from armillary.utils import shorten_home as _shorten_home_from_utils
+from armillary.models import Project, UmbrellaFolder
+from armillary.utils import (
+    find_projects_by_name,
+    resolve_project_by_name,
+    summarize_project_matches,
+)
+from armillary.utils import (
+    shorten_home as _shorten_home_from_utils,
+)
 
 
 def _shorten_home(path: Path) -> str:
@@ -83,3 +90,39 @@ def shutil_which(name: str) -> str | None:
     import shutil
 
     return shutil.which(name)
+
+
+def _resolve_project_or_report(
+    projects: list[Project],
+    project_name: str,
+    *,
+    missing_message: str,
+    ambiguous_message: str,
+    missing_color: str = typer.colors.RED,
+    missing_err: bool = True,
+    ambiguous_err: bool = True,
+) -> Project | None:
+    """Resolve one project and emit a CLI-friendly message on failure."""
+    try:
+        project = resolve_project_by_name(projects, project_name)
+    except ValueError:
+        matches = find_projects_by_name(projects, project_name)
+        typer.secho(
+            ambiguous_message.format(
+                name=project_name,
+                matches=summarize_project_matches(matches),
+            ),
+            fg=typer.colors.RED,
+            err=ambiguous_err,
+        )
+        return None
+
+    if project is None:
+        typer.secho(
+            missing_message.format(name=project_name),
+            fg=missing_color,
+            err=missing_err,
+        )
+        return None
+
+    return project

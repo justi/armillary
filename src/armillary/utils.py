@@ -47,6 +47,16 @@ def load_json_str_list(path: Path) -> list[str]:
     return _load_json(path, default=[], coerce=_coerce_str_list)
 
 
+def read_json_file(path: Path) -> object | None:
+    """Read a JSON file, returning *None* when it is missing or invalid."""
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return None
+
+
 def write_json_file(
     path: Path,
     payload: object,
@@ -99,11 +109,8 @@ def _load_json(
     default: _T,
     coerce: Callable[[object], _T | None],
 ) -> _T:
-    if not path.exists():
-        return default
-    try:
-        parsed = json.loads(path.read_text(encoding="utf-8"))
-    except (ValueError, OSError):
+    parsed = read_json_file(path)
+    if parsed is None:
         return default
     coerced = coerce(parsed)
     return default if coerced is None else coerced

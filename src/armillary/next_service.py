@@ -10,7 +10,6 @@ Skip mechanism: projects can be dismissed for 30 days.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +18,7 @@ from .cache import Cache, default_db_path
 from .exclude_service import filter_excluded
 from .models import Project, Status
 from .status_override import filter_archived
+from .utils import read_json_file, write_json_file
 
 _SKIP_DURATION_DAYS = 30
 _ZOMBIE_THRESHOLD_DAYS = 7
@@ -251,26 +251,19 @@ def _load_skips(db_path: Path | None = None) -> dict[str, dict]:
     {path: {timestamp, reason, count}}, migrating old entries on read.
     """
     path = _skips_path(db_path)
-    if not path.exists():
+    parsed = read_json_file(path)
+    if not isinstance(parsed, dict):
         return {}
-    try:
-        parsed = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(parsed, dict):
-            return {}
-        result: dict[str, dict] = {}
-        for k, v in parsed.items():
-            if isinstance(v, (int, float)):
-                # Migrate old format
-                result[k] = {"timestamp": v, "reason": None, "count": 1}
-            elif isinstance(v, dict) and "timestamp" in v:
-                result[k] = v
-        return result
-    except (ValueError, OSError):
-        return {}
+    result: dict[str, dict] = {}
+    for k, v in parsed.items():
+        if isinstance(v, (int, float)):
+            # Migrate old format
+            result[k] = {"timestamp": v, "reason": None, "count": 1}
+        elif isinstance(v, dict) and "timestamp" in v:
+            result[k] = v
+    return result
 
 
 def _save_skips(skips: dict[str, dict], db_path: Path | None = None) -> None:
     """Persist skips to disk."""
-    path = _skips_path(db_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(skips, indent=2), encoding="utf-8")
+    write_json_file(_skips_path(db_path), skips)

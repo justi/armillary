@@ -18,6 +18,7 @@ from .cache import Cache
 from .exclude_service import filter_excluded
 from .models import Status
 from .status_override import filter_archived
+from .utils import read_json_file, write_json_file
 
 
 @dataclass(frozen=True)
@@ -176,7 +177,6 @@ def take_snapshot(
     now: datetime | None = None,
 ) -> PulseSnapshot:
     """Create a snapshot of current portfolio state."""
-    import json
 
     now = now or datetime.now()
     # Week start = Monday
@@ -230,24 +230,12 @@ def take_snapshot(
     # Keep last 26 weeks (6 months)
     history = history[-26:]
 
-    path = _history_path(db_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(history, indent=2), encoding="utf-8")
+    write_json_file(_history_path(db_path), history)
 
     return snap
 
 
 def load_history(*, db_path: Path | None = None) -> list[dict]:
     """Load pulse history from disk."""
-    import json
-
-    path = _history_path(db_path)
-    if not path.exists():
-        return []
-    try:
-        parsed = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(parsed, list):
-            return parsed
-    except (ValueError, OSError):
-        pass
-    return []
+    parsed = read_json_file(_history_path(db_path))
+    return parsed if isinstance(parsed, list) else []
