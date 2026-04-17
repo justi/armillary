@@ -126,4 +126,4 @@ def _coerce_number_dict(parsed: object) -> dict[str, int | float] | None:
 def _coerce_str_list(parsed: object) -> list[str] | None:
     if not isinstance(parsed, list):
         return None
-    return [str(value) for value in parsed]
+    return [value for value in parsed if isinstance(value, str)]
