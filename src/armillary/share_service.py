@@ -29,10 +29,15 @@ def _portfolio_stats(*, db_path: Path | None = None) -> dict[str, object]:
         p.metadata.status.value for p in projects if p.metadata and p.metadata.status
     )
 
+    # Clamp to 2005 — git did not exist before; older timestamps are
+    # git-svn/cvs imports with backdated author dates.
+    _GIT_EPOCH = datetime(2005, 4, 1)
     first_dates = [
         p.metadata.first_commit_ts
         for p in projects
-        if p.metadata and p.metadata.first_commit_ts
+        if p.metadata
+        and p.metadata.first_commit_ts
+        and p.metadata.first_commit_ts >= _GIT_EPOCH
     ]
     if first_dates:
         oldest = min(first_dates)

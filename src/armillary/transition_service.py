@@ -56,7 +56,12 @@ def detect_transitions(
     """Compare current status vs previous, return list of transitions.
 
     Each transition: {project, path, from_status, to_status}
-    Also updates status-previous.json for next comparison.
+    Also updates status-previous.json for next comparison and records
+    new transitions to the decision journal automatically.
+
+    Idempotent across repeated calls within the same cache state:
+    once current is saved as previous, subsequent calls return []
+    until the cache changes again (i.e. after a scan).
     """
     with Cache(db_path=db_path) as cache:
         projects = cache.list_projects()
@@ -92,6 +97,16 @@ def detect_transitions(
 
     # Save current as previous for next comparison
     _save_json(_previous_path(db_path), current)
+
+    # Auto-record new transitions to the decision journal so the
+    # detail view's "Status transitions" expander has content.
+    for t in transitions:
+        record_journal_entry(
+            t["path"],
+            t["from_status"],
+            t["to_status"],
+            db_path=db_path,
+        )
 
     return transitions
 

@@ -63,9 +63,13 @@ def _print_delight_card() -> None:
     from rich.panel import Panel
 
     from armillary.cache import Cache
+    from armillary.exclude_service import filter_excluded
+    from armillary.status_override import filter_archived
 
     with Cache() as cache:
         projects = cache.list_projects()
+    projects = filter_excluded(projects)
+    projects = filter_archived(projects)
 
     if not projects:
         return
@@ -79,11 +83,14 @@ def _print_delight_card() -> None:
         p.metadata.status.value for p in projects if p.metadata and p.metadata.status
     )
 
-    # Find oldest project
+    # Find oldest project — clamp to 2005 (git did not exist before)
+    _GIT_EPOCH = datetime(2005, 4, 1)
     first_dates = [
         p.metadata.first_commit_ts
         for p in projects
-        if p.metadata and p.metadata.first_commit_ts
+        if p.metadata
+        and p.metadata.first_commit_ts
+        and p.metadata.first_commit_ts >= _GIT_EPOCH
     ]
     span = ""
     if first_dates:
