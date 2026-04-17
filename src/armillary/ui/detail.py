@@ -425,14 +425,25 @@ def _render_narrative_context(ctx: object) -> None:
             f"{n} {c_word}, "
             f"{ctx.last_session.ended_relative}"
         )
-    # S6: branch count + remote warning
+    # S6: branch count + remote + unmerged
     parts: list[str] = []
     if ctx.branch_count is not None and ctx.branch_count > 1:
         parts.append(f"{ctx.branch_count} local branches")
+    if ctx.unmerged_branches:
+        n = len(ctx.unmerged_branches)
+        parts.append(f"**{n} unmerged**")
     if ctx.has_remote is False:
         parts.append("**no remote \u2014 push before archiving**")
     if parts:
         st.caption(" \u00b7 ".join(parts))
+    if ctx.unmerged_branches:
+        with st.expander(
+            f"{len(ctx.unmerged_branches)} unmerged branches",
+            icon=":material/fork_right:",
+            expanded=False,
+        ):
+            for b in ctx.unmerged_branches:
+                st.markdown(f"- `{b}`")
 
 
 def _render_details_expander(project: Project) -> None:

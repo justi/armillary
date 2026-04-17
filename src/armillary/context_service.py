@@ -43,6 +43,9 @@ class ProjectContext:
     branch_count: int | None = None
     has_remote: bool | None = None
 
+    # Live — unmerged branches
+    unmerged_branches: list[str] = field(default_factory=list)
+
     # From cache — for display.
     readme_oneliner: str | None = None
 
@@ -156,6 +159,7 @@ def get_context(
         recent_branches=_recent_branches(project.path, current=branch),
         dirty_max_age_seconds=_dirty_max_age(project.path, dirty_files),
         last_session=_last_session(project.path),
+        unmerged_branches=_unmerged_branches(project.path),
         velocity_trend=velocity_trend,
         commit_velocity=commit_velocity,
         monthly_commits=monthly_commits,
@@ -246,6 +250,14 @@ def _recent_branches(
         if len(branches) >= count:
             break
     return branches
+
+
+def _unmerged_branches(project_path: Path) -> list[str]:
+    """Return names of branches not merged into HEAD."""
+    output = _run_git(project_path, "branch", "--no-merged", "HEAD")
+    if not output:
+        return []
+    return [b.strip().lstrip("* ") for b in output.splitlines() if b.strip()]
 
 
 # --- decision signals (ADR 0017) — live, not cached -------------------------

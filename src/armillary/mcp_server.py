@@ -312,6 +312,8 @@ def armillary_context(project_name: str) -> str:
             result["branch_count"] = ctx.branch_count
         if ctx.has_remote is not None:
             result["has_remote"] = ctx.has_remote
+        if ctx.unmerged_branches:
+            result["unmerged_branches"] = ctx.unmerged_branches
         if ctx.monthly_commits is not None:
             result["monthly_commits"] = ctx.monthly_commits
         if ctx.readme_oneliner:

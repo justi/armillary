@@ -15,7 +15,7 @@ project:
     dirty_file_age: built         # S3 — oldest mtime among uncommitted files, live (NEXT + CONTEXT)
     last_session: built           # S4 — duration of last commit block (<2h gaps), live (CONTEXT)
     first_commit_date: built      # S5 — enables project_age, intensity h/mo over active span (DECIDE)
-    branch_count: built           # S6 — branch count + has_remote, safety for (DECIDE + ARCHIVE)
+    branch_count: built           # S6 — branch count + has_remote + unmerged branches (DECIDE + ARCHIVE)
     monthly_sparkline: built      # 6-month commit activity sparkline — CLI context + next, dashboard, MCP
     days_since_commit: built      # bold warning >30d yellow, >90d red — CLI context, dashboard detail
     purpose: built                # user-editable one-liner ("why this exists"), stored in purposes.json

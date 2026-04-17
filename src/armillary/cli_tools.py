@@ -612,14 +612,20 @@ def context_command(
         for b in ctx.recent_branches:
             console.print(f"  {b.name:<30} [dim]{b.relative_time}[/dim]")
 
-    # S6: branch count + remote safety
+    # S6: branch count + remote safety + unmerged
     hints: list[str] = []
     if ctx.branch_count is not None and ctx.branch_count > 1:
         hints.append(f"{ctx.branch_count} local branches")
+    if ctx.unmerged_branches:
+        n = len(ctx.unmerged_branches)
+        hints.append(f"[yellow]{n} unmerged[/yellow]")
     if ctx.has_remote is False:
         hints.append("[bold red]no remote — push before archiving[/bold red]")
     if hints:
         console.print(f"\n  [dim]{' · '.join(hints)}[/dim]")
+    if ctx.unmerged_branches:
+        for b in ctx.unmerged_branches[:5]:
+            console.print(f"    [dim yellow]{b}[/dim yellow]")
 
     # Actionable hint
     if ctx.dirty_count > 0:
