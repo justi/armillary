@@ -729,6 +729,16 @@ def next_command(
             console.print(f"  [dim]→ armillary next --skip {s.project.name}[/dim]")
 
 
+@app.command("pulse")
+def pulse_command() -> None:
+    """Weekly pulse — what changed across your projects this week."""
+    from armillary.pulse_service import format_pulse, generate_pulse
+
+    pulse = generate_pulse()
+    console = Console()
+    console.print(f"\n{format_pulse(pulse)}\n")
+
+
 @app.command("mcp-serve")
 def mcp_serve() -> None:
     """Start the MCP server (stdio transport) for AI coding agents.

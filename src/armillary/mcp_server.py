@@ -232,6 +232,19 @@ def armillary_next() -> str:
 
 
 @mcp.tool()
+def armillary_pulse() -> str:
+    """Weekly pulse — what changed across your projects this week.
+
+    Shows: what you worked on, what went dormant, uncommitted work.
+    Call this at the start of a Monday session or weekly check-in.
+    """
+    from armillary.pulse_service import format_pulse, generate_pulse
+
+    pulse = generate_pulse()
+    return format_pulse(pulse)
+
+
+@mcp.tool()
 def armillary_context(project_name: str) -> str:
     """Where was I? Get project state for instant re-entry.
 
