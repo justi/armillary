@@ -265,25 +265,8 @@ def _render_dying_metric(
     *,
     exclude_paths: set[str] | None = None,
 ) -> None:
-    """'Uncommitted work at risk' — panel consensus 3/3.
-
-    Shows PAUSED projects with dirty files and real investment (>10h).
-    These are suspended intentions — the user started something,
-    didn't finish, and the work is at risk (disk crash, brew update).
-
-    ACTIVE = skip (working on it). DORMANT = skip (already decided).
-    """
-    skip = exclude_paths or set()
-    at_risk = [
-        r
-        for r in rows
-        if r.status_raw == "PAUSED"
-        and r.dirty
-        and r.dirty > 0
-        and r.work_hours
-        and r.work_hours > 10
-        and r.path not in skip
-    ]
+    """'Uncommitted work at risk' — panel consensus 3/3."""
+    at_risk = find_at_risk_projects(rows, exclude_paths=exclude_paths)
 
     if not at_risk:
         return
@@ -321,18 +304,47 @@ def _render_dying_metric(
                     st.rerun()
 
 
+def apply_status_filter(
+    rows: list[OverviewRow],
+    selected: list[str],
+) -> list[OverviewRow]:
+    """Filter rows by status. No selection = ACTIVE + PAUSED default.
+
+    Pure function — testable without Streamlit.
+    """
+    if selected:
+        return [r for r in rows if r.status_raw in selected]
+    return [r for r in rows if r.status_raw in ("ACTIVE", "PAUSED")]
+
+
+def find_at_risk_projects(
+    rows: list[OverviewRow],
+    *,
+    exclude_paths: set[str] | None = None,
+) -> list[OverviewRow]:
+    """PAUSED + dirty + >10h = uncommitted work at risk.
+
+    Pure function — testable without Streamlit.
+    """
+    skip = exclude_paths or set()
+    return [
+        r
+        for r in rows
+        if r.status_raw == "PAUSED"
+        and r.dirty
+        and r.dirty > 0
+        and r.work_hours
+        and r.work_hours > 10
+        and r.path not in skip
+    ]
+
+
 def _apply_filters(
     rows: list[OverviewRow],
     *,
     filters: dict[str, list[str] | str],
 ) -> list[OverviewRow]:
-    out = rows
-    if filters["status"]:
-        out = [r for r in out if r.status_raw in filters["status"]]
-    else:
-        # Default: show only ACTIVE + PAUSED (panel 3/3: "176 is noise")
-        out = [r for r in out if r.status_raw in ("ACTIVE", "PAUSED")]
-    return out
+    return apply_status_filter(rows, filters["status"])
 
 
 def _render_table(rows: list[OverviewRow]) -> None:
