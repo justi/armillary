@@ -132,6 +132,36 @@ _CATEGORY_LABELS = {
 }
 
 
+def _render_yesterday_line(suggestions: list) -> None:
+    """One-liner: what you worked on yesterday."""
+    from datetime import datetime, timedelta
+
+    yesterday = datetime.now() - timedelta(days=1)
+    start = yesterday.replace(hour=0, minute=0, second=0)
+    end = start + timedelta(days=1)
+
+    with Cache() as cache:
+        projects = cache.list_projects()
+    from armillary.exclude_service import filter_excluded
+
+    projects = filter_excluded(projects)
+    from armillary.status_override import filter_archived
+
+    projects = filter_archived(projects)
+
+    active = [
+        p.name
+        for p in projects
+        if p.metadata
+        and p.metadata.last_commit_ts
+        and start <= p.metadata.last_commit_ts < end
+    ]
+    if active:
+        names = ", ".join(active[:3])
+        more = f" +{len(active) - 3}" if len(active) > 3 else ""
+        st.caption(f"Yesterday: {names}{more}")
+
+
 def _render_next_suggestions() -> None:
     """Hero section — the reason you open armillary every morning."""
     from armillary.next_service import get_suggestions
@@ -145,6 +175,9 @@ def _render_next_suggestions() -> None:
         "What should you work on today?",
         anchor=False,
     )
+
+    # Yesterday's activity — retention hook
+    _render_yesterday_line(suggestions)
 
     for s in suggestions:
         icon = _CATEGORY_ICONS.get(s.category, "\u2022")

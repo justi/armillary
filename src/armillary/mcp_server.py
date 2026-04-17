@@ -219,6 +219,28 @@ def armillary_next() -> str:
     if not suggestions:
         return "No suggestions — cache is empty or all projects are skipped."
 
+    # Yesterday's activity
+    from datetime import datetime, timedelta
+
+    yesterday = datetime.now() - timedelta(days=1)
+    start = yesterday.replace(hour=0, minute=0, second=0)
+    end = start + timedelta(days=1)
+    with Cache() as cache:
+        all_projects = cache.list_projects()
+    all_projects = filter_excluded(all_projects)
+    all_projects = filter_archived(all_projects)
+    active_yesterday = [
+        p.name
+        for p in all_projects
+        if p.metadata
+        and p.metadata.last_commit_ts
+        and start <= p.metadata.last_commit_ts < end
+    ]
+
+    result: dict[str, object] = {}
+    if active_yesterday:
+        result["yesterday"] = active_yesterday
+
     rows = []
     for s in suggestions:
         rows.append(
@@ -229,7 +251,8 @@ def armillary_next() -> str:
                 "reason": s.reason,
             }
         )
-    return _safe_json(rows, len(rows), len(rows))
+    result["suggestions"] = rows
+    return json.dumps(result, separators=(",", ":"), default=str)
 
 
 @mcp.tool()
