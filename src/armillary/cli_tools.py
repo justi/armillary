@@ -637,6 +637,39 @@ def context_command(
     console.print("")
 
 
+def _print_yesterday(console: Console, suggestions: list) -> None:
+    """Show yesterday's activity as a one-liner retention hook."""
+    from datetime import datetime, timedelta
+
+    from armillary.cache import Cache
+    from armillary.exclude_service import filter_excluded
+    from armillary.status_override import filter_archived
+
+    yesterday = datetime.now() - timedelta(days=1)
+    start_of_yesterday = yesterday.replace(hour=0, minute=0, second=0)
+    end_of_yesterday = start_of_yesterday + timedelta(days=1)
+
+    with Cache() as cache:
+        projects = cache.list_projects()
+    projects = filter_excluded(projects)
+    projects = filter_archived(projects)
+
+    active_yesterday = []
+    for p in projects:
+        md = p.metadata
+        if (
+            md
+            and md.last_commit_ts
+            and start_of_yesterday <= md.last_commit_ts < end_of_yesterday
+        ):
+            active_yesterday.append(p.name)
+
+    if active_yesterday:
+        names = ", ".join(active_yesterday[:3])
+        more = f" +{len(active_yesterday) - 3}" if len(active_yesterday) > 3 else ""
+        console.print(f"[dim]Yesterday: {names}{more}[/dim]")
+
+
 _CATEGORY_ICONS = {
     "momentum": "🔥",
     "zombie": "⚠️",
@@ -708,6 +741,10 @@ def next_command(
     from armillary.purpose_service import get_purpose
 
     console = Console()
+
+    # Yesterday's activity — retention hook (panel 2/3)
+    _print_yesterday(console, suggestions)
+
     for s in suggestions:
         icon = _CATEGORY_ICONS.get(s.category, "•")
         short_path = _shorten_home(s.project.path)
