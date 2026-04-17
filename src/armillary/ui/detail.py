@@ -194,10 +194,10 @@ def _render_project_detail(project_path: str) -> None:
         if ctx and ctx.is_git:
             _render_narrative_context(ctx)
 
-        # --- Section: What I was working on ---
+        # --- Section: Recent work ---
         if project.type.value == "git":
             st.markdown("---")
-            st.subheader("What I was working on", anchor=False)
+            st.subheader("Recent work", anchor=False)
             skip_first = bool(ctx and ctx.recent_commits)
             _render_recent_commits(project.path, skip_first=skip_first)
             if ctx and ctx.recent_branches:
@@ -235,6 +235,30 @@ def _render_project_detail(project_path: str) -> None:
         ):
             for adr in md.adr_paths:
                 st.markdown(f"- `{adr.name}` \u2014 `{adr}`")
+
+    # Last discussed with user
+    from armillary.purpose_service import (
+        get_last_conversation,
+        set_last_conversation,
+    )
+
+    last_convo = get_last_conversation(str(project.path))
+    import contextlib as _ctx
+    from datetime import date as _date
+
+    parsed_date = None
+    if last_convo:
+        with _ctx.suppress(ValueError):
+            parsed_date = _date.fromisoformat(last_convo)
+    new_date = st.date_input(
+        "Last discussed with user",
+        value=parsed_date,
+        key=f"last_convo_{project.path}",
+    )
+    new_str = new_date.isoformat() if new_date else None
+    if new_str and new_str != (last_convo or ""):
+        set_last_conversation(str(project.path), new_str)
+        st.rerun()
 
     # --- Collapsed details (path, umbrella, stats) ---
     _render_details_expander(project)
@@ -377,29 +401,7 @@ def _render_header_with_launcher(project: Project) -> None:
     if info_parts:
         st.caption(" \u00b7 ".join(info_parts))
 
-    # Last user conversation (ADR 0022 M1)
-    from armillary.purpose_service import (
-        get_last_conversation,
-        set_last_conversation,
-    )
-
-    last_convo = get_last_conversation(str(project.path))
-    import contextlib as _ctx
-    from datetime import date as _date
-
-    parsed_date = None
-    if last_convo:
-        with _ctx.suppress(ValueError):
-            parsed_date = _date.fromisoformat(last_convo)
-    new_date = st.date_input(
-        "Last discussed with user",
-        value=parsed_date,
-        key=f"last_convo_{project.path}",
-    )
-    new_str = new_date.isoformat() if new_date else None
-    if new_str and new_str != (last_convo or ""):
-        set_last_conversation(str(project.path), new_str)
-        st.rerun()
+    # Last discussed — moved to Reference section (fix #17)
 
     # Revenue/MRR (ADR 0022 M2) — shown in info row when >0
     from armillary.purpose_service import get_revenue, set_revenue
@@ -717,7 +719,7 @@ def _render_project_age(md: object | None) -> None:
         if span_days >= 30:
             span_months = span_days / 30.44
             intensity = md.work_hours / span_months
-            intensity_str = f" \u00b7 {intensity:.0f} h/mo"
+            intensity_str = f" \u00b7 {intensity:.0f} hours/month"
     st.caption(f"Age {age_str}{intensity_str}")
 
 

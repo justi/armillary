@@ -253,7 +253,7 @@ def _render_dormant_banner(rows: list[OverviewRow], *, exploring: bool) -> None:
             st.success(
                 f"Showing {len(dormant)} dormant projects · "
                 f"{total_hours:.0f}h invested",
-                icon=":material/inventory_2:",
+                icon=":material/savings:",
             )
         with col_btn:
             if st.button(
@@ -268,7 +268,7 @@ def _render_dormant_banner(rows: list[OverviewRow], *, exploring: bool) -> None:
         with col_msg:
             st.warning(
                 f"**{len(dormant)} forgotten projects** — {total_hours:.0f}h invested",
-                icon=":material/inventory_2:",
+                icon=":material/savings:",
             )
         with col_btn:
             if st.button(
@@ -364,8 +364,7 @@ def _render_dying_metric(
 
     st.warning(
         f"**{total} project{'s have' if total > 1 else ' has'} "
-        f"uncommitted work** \u2014 {total_hours:.0f}h invested, "
-        f"commit or archive",
+        f"uncommitted work** \u2014 {total_hours:.0f}h across these projects",
         icon=":material/priority_high:",
     )
 
@@ -461,8 +460,11 @@ def _render_pulse_section() -> None:
     if not pulse.worked_on and not pulse.went_dormant and not pulse.aging_wip:
         return
 
+    total_entries = (
+        len(pulse.worked_on) + len(pulse.went_dormant) + len(pulse.aging_wip)
+    )
     with st.expander(
-        "Weekly pulse",
+        f"Weekly pulse ({total_entries} updates)",
         icon=":material/monitoring:",
         expanded=False,
     ):
@@ -485,6 +487,10 @@ def _render_pulse_section() -> None:
         # Take snapshot on view (idempotent per week)
         take_snapshot()
         history = load_history()
+        if len(history) < 2:
+            st.caption(
+                f"Portfolio chart appears after 2 weeks ({len(history)}/2 recorded)"
+            )
         if len(history) >= 2:
             import pandas as pd
 
@@ -578,7 +584,7 @@ def _render_activity_heatmap() -> None:
 
         card_html = export_heatmap_html(activity, summary)
         st.download_button(
-            "Download card",
+            "Download heatmap (HTML)",
             data=card_html,
             file_name="armillary-card.html",
             mime="text/html",

@@ -179,7 +179,7 @@ def _evaluate(project: Project, now: datetime) -> Suggestion | None:
     if status == Status.ACTIVE and days_since > _ZOMBIE_THRESHOLD_DAYS:
         score = hours * 0.5
         reason = (
-            f"{hours:.0f}h invested, no commit in {days_since:.0f} days — kill or ship?"
+            f"{hours:.0f}h invested, no commit in {days_since:.0f}d — kill or ship?"
         )
         return Suggestion(
             project=project, category="zombie", reason=reason, score=score
