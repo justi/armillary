@@ -54,12 +54,12 @@ def _render_overview() -> None:
 
     _render_dormant_banner(rows, exploring=dormant_explore)
 
-    # Apply filters
-    filtered = _apply_filters(rows, filters=filters)
-
+    # Apply filters — dormant explore bypasses default ACTIVE+PAUSED filter
     if dormant_explore:
-        filtered = [r for r in filtered if r.status_raw == "DORMANT"]
+        filtered = [r for r in rows if r.status_raw == "DORMANT"]
         filtered.sort(key=lambda r: r.work_hours or 0, reverse=True)
+    else:
+        filtered = _apply_filters(rows, filters=filters)
 
     # Subtitle — simple count of what's visible
     if dormant_explore:

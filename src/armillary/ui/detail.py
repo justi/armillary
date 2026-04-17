@@ -384,7 +384,7 @@ def _render_dirty_or_clean(ctx: object) -> None:
             "\u2014 commit or stash before switching",
             icon=":material/edit_note:",
         )
-        with st.expander("Dirty files", expanded=ctx.dirty_count <= 5):
+        with st.expander("Uncommitted files", expanded=ctx.dirty_count <= 5):
             for f in ctx.dirty_files:
                 st.code(_humanize_porcelain(f), language=None)
             if ctx.dirty_count > len(ctx.dirty_files):

@@ -154,8 +154,9 @@ def _evaluate(project: Project, now: datetime) -> Suggestion | None:
     if status == Status.ACTIVE and days_since <= _ZOMBIE_THRESHOLD_DAYS:
         score = hours * (1 / max(days_since, 0.1))
         if dirty > 0:
+            s = "s" if dirty > 1 else ""
             reason = (
-                f"{hours:.0f}h invested, {dirty} dirty file(s), "
+                f"{hours:.0f}h invested, {dirty} uncommitted file{s}, "
                 f"last commit {days_since:.0f}d ago — momentum is here."
             )
         else:
@@ -181,10 +182,11 @@ def _evaluate(project: Project, now: datetime) -> Suggestion | None:
     if status in (Status.DORMANT, Status.PAUSED) and hours >= _GOLD_MIN_HOURS:
         months_since = days_since / 30
         score = hours * 0.3 * (1 / max(months_since, 0.1))
+        months_rounded = round(months_since)
+        m_word = "month" if months_rounded == 1 else "months"
         reason = (
-            f"{hours:.0f}h invested, abandoned {months_since:.0f} "
-            f"{'month' if months_since == 1 else 'months'} ago. "
-            f"Finish with AI or archive?"
+            f"{hours:.0f}h invested, abandoned {months_rounded} "
+            f"{m_word} ago. Finish with AI or archive?"
         )
         return Suggestion(
             project=project,
