@@ -429,11 +429,17 @@ def _render_activity_heatmap() -> None:
 
         import altair as alt
 
+        _CELL = 13  # px — square cells like GitHub contributions
+
         chart = (
             alt.Chart(df)
             .mark_rect(cornerRadius=2)
             .encode(
-                x=alt.X("week:O", axis=None),
+                x=alt.X(
+                    "week:O",
+                    axis=None,
+                    scale=alt.Scale(paddingInner=0.2),
+                ),
                 y=alt.Y(
                     "weekday:O",
                     axis=alt.Axis(
@@ -445,20 +451,28 @@ def _render_activity_heatmap() -> None:
                         ),
                         title=None,
                     ),
+                    scale=alt.Scale(paddingInner=0.2),
                 ),
-                color=alt.Color(
-                    "commits:Q",
-                    scale=alt.Scale(scheme="greens"),
-                    legend=None,
+                color=alt.condition(
+                    "datum.commits > 0",
+                    alt.Color(
+                        "commits:Q",
+                        scale=alt.Scale(scheme="greens"),
+                        legend=None,
+                    ),
+                    alt.value("#ebedf0"),  # GitHub-style empty cell
                 ),
                 tooltip=[
                     alt.Tooltip("date:T", title="Date"),
                     alt.Tooltip("commits:Q", title="Commits"),
                 ],
             )
-            .properties(height=120)
+            .properties(
+                width=alt.Step(_CELL),
+                height=alt.Step(_CELL),
+            )
         )
-        st.altair_chart(chart, use_container_width=True)
+        st.altair_chart(chart)
 
 
 def _render_time_grouped_tables(rows: list[OverviewRow]) -> None:
