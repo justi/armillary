@@ -194,6 +194,20 @@ def _render_project_detail(project_path: str) -> None:
     # --- Collapsed details (path, umbrella, stats) ---
     _render_details_expander(project)
 
+    # --- Archive action (non-archived projects only) ---
+    if not is_archived:
+        st.markdown("---")
+        if st.button(
+            "Archive this project",
+            key="detail_archive",
+            icon=":material/archive:",
+            type="secondary",
+        ):
+            from armillary.status_override import set_override
+
+            set_override(str(project.path), Status.ARCHIVED)
+            st.rerun()
+
 
 def _render_header_tombstone(project: Project) -> None:
     """Minimal header for ARCHIVED projects — no launcher."""
