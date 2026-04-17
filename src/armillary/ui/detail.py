@@ -103,7 +103,10 @@ def _render_project_detail(project_path: str) -> None:
     ):
         go_to_overview()
 
-    is_archived = md and md.status == Status.ARCHIVED
+    from armillary.status_override import get_override
+
+    override = get_override(str(project.path))
+    is_archived = override == Status.ARCHIVED or (md and md.status == Status.ARCHIVED)
 
     # --- Row 1: Name + Status + Launcher (top-right) ---
     if is_archived:
