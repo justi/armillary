@@ -837,6 +837,27 @@ def next_command(
             console.print(f"  [dim]→ armillary next --skip {s.project.name}[/dim]")
 
 
+@app.command("share")
+def share_command(
+    tweet: bool = typer.Option(False, "--tweet", help="Generate tweet template."),
+    hn: bool = typer.Option(False, "--hn", help="Generate Show HN post."),
+) -> None:
+    """Generate shareable text from your portfolio data."""
+    from armillary.share_service import generate_hn_post, generate_tweet
+
+    if not tweet and not hn:
+        tweet = True  # default
+
+    console = Console()
+    if tweet:
+        console.print("\n[bold]Tweet:[/bold]\n")
+        console.print(generate_tweet())
+    if hn:
+        console.print("\n[bold]Show HN:[/bold]\n")
+        console.print(generate_hn_post())
+    console.print()
+
+
 @app.command("card")
 def card_command(
     output: str = typer.Option(

@@ -58,6 +58,10 @@ def _render_sidebar(
         st.markdown("---")
         _render_scan_button(cfg)
 
+        # Share
+        st.markdown("---")
+        _render_share_section()
+
     return {
         "status": status_pick,
         "type": [],
@@ -104,3 +108,15 @@ def _render_scan_button(cfg: Config | None) -> None:
         key="sidebar_scan",
     ):
         run_scan_with_feedback(cfg)
+
+
+def _render_share_section() -> None:
+    """Share section — tweet template + download card."""
+    from armillary.share_service import generate_tweet
+
+    st.caption("Share")
+    tweet = generate_tweet()
+    if "Scan more" not in tweet:
+        st.code(tweet, language=None)
+    else:
+        st.caption(tweet)
