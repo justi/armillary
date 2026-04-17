@@ -167,17 +167,27 @@ def _render_project_detail(project_path: str) -> None:
                 Status.DORMANT,
             )
         )
-        if show_archive_top and st.button(
-            "Archive this project",
-            key="detail_archive_top",
-            icon=":material/archive:",
-            type="secondary",
-        ):
-            from armillary.status_override import set_override
+        if show_archive_top:
+            reason = st.text_input(
+                "Why are you archiving?",
+                placeholder="e.g. no traction, finished, pivoted",
+                key="archive_reason_top",
+                label_visibility="collapsed",
+            )
+            if st.button(
+                "Archive this project",
+                key="detail_archive_top",
+                icon=":material/archive:",
+                type="secondary",
+            ):
+                from armillary.purpose_service import set_archive_reason
+                from armillary.status_override import set_override
 
-            set_override(str(project.path), Status.ARCHIVED)
-            st.toast(f"Archived {project.name}")
-            st.rerun()
+                set_override(str(project.path), Status.ARCHIVED)
+                if reason:
+                    set_archive_reason(str(project.path), reason)
+                st.toast(f"Archived {project.name}")
+                st.rerun()
 
         # --- Row 3: Branch + Last commit narrative ---
         if ctx and ctx.is_git:
@@ -239,15 +249,24 @@ def _render_project_detail(project_path: str) -> None:
         )
     ):
         st.markdown("---")
+        reason_bottom = st.text_input(
+            "Why are you archiving?",
+            placeholder="e.g. no traction, finished, pivoted",
+            key="archive_reason_bottom",
+            label_visibility="collapsed",
+        )
         if st.button(
             "Archive this project",
             key="detail_archive",
             icon=":material/archive:",
             type="secondary",
         ):
+            from armillary.purpose_service import set_archive_reason
             from armillary.status_override import set_override
 
             set_override(str(project.path), Status.ARCHIVED)
+            if reason_bottom:
+                set_archive_reason(str(project.path), reason_bottom)
             st.toast(f"Archived {project.name}")
             st.rerun()
 
@@ -301,12 +320,25 @@ def _render_header_with_launcher(project: Project) -> None:
     with col_title:
         st.title(f"{project.name}{status_str}")
         # Purpose or README one-liner
-        from armillary.purpose_service import get_purpose
+        from armillary.purpose_service import get_purpose, set_purpose
 
         purpose = get_purpose(str(project.path))
-        if purpose:
-            st.caption(f"*{purpose}*")
-        elif md and md.readme_excerpt:
+        new_purpose = st.text_input(
+            "Purpose",
+            value=purpose or "",
+            placeholder="Why does this project exist? One sentence.",
+            key=f"purpose_{project.path}",
+            label_visibility="collapsed",
+        )
+        if new_purpose != (purpose or "") and new_purpose:
+            set_purpose(str(project.path), new_purpose)
+            st.rerun()
+        elif not new_purpose and purpose:
+            from armillary.purpose_service import clear_purpose
+
+            clear_purpose(str(project.path))
+            st.rerun()
+        if not purpose and not new_purpose and md and md.readme_excerpt:
             excerpt = md.readme_excerpt
             dot = excerpt.find(". ")
             oneliner = excerpt[: dot + 1] if 0 < dot < 80 else excerpt[:80]
@@ -355,8 +387,9 @@ def _render_launcher_compact(project: Project, cfg: Config) -> None:
         return
 
     options_map = {opt.target_id: opt.label for opt in available}
+    st.caption("Open with:")
     target_id = st.selectbox(
-        "Launcher",
+        "Open with",
         options=list(options_map),
         format_func=lambda tid: options_map[tid],
         label_visibility="collapsed",
@@ -397,7 +430,7 @@ def _render_dirty_or_clean(ctx: object) -> None:
                 more = ctx.dirty_count - len(ctx.dirty_files)
                 st.caption(f"and {more} more")
     else:
-        st.success("Clean working tree", icon=":material/check_circle:")
+        st.success("No uncommitted work", icon=":material/check_circle:")
 
 
 def _render_narrative_context(ctx: object) -> None:

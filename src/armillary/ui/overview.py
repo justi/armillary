@@ -203,7 +203,7 @@ def _render_next_suggestions() -> None:
             )
             spark = f"  \n`{chars}` (6mo)"
 
-        col_info, col_action = st.columns([4, 1])
+        col_info, col_open, col_skip = st.columns([4, 1, 1])
         with col_info:
             st.markdown(
                 f"{icon} **{s.project.name}** \u2014 {label}  \n"
@@ -211,7 +211,7 @@ def _render_next_suggestions() -> None:
                 f"{s.reason}{spark}"
             )
             st.caption(f"`{path_str}`")
-        with col_action:
+        with col_open:
             if st.button(
                 "Open",
                 key=f"next_open_{s.project.name}",
@@ -219,6 +219,17 @@ def _render_next_suggestions() -> None:
                 type="primary",
             ):
                 st.query_params["project"] = str(s.project.path)
+                st.rerun()
+        with col_skip:
+            if st.button(
+                "Skip",
+                key=f"next_skip_{s.project.name}",
+                icon=":material/skip_next:",
+                type="tertiary",
+            ):
+                from armillary.next_service import skip_project
+
+                skip_project(str(s.project.path))
                 st.rerun()
 
     st.markdown("---")

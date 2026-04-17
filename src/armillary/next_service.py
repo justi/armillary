@@ -214,7 +214,7 @@ def _evaluate(project: Project, now: datetime) -> Suggestion | None:
     ):
         reason = (
             f"{hours:.0f}h invested, zero activity in 4 weeks, "
-            f"clean tree — archive this?"
+            f"no uncommitted work — archive this?"
         )
         return Suggestion(
             project=project,
