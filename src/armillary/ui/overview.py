@@ -388,11 +388,17 @@ def _render_time_grouped_tables(rows: list[OverviewRow]) -> None:
         st.caption(f"Last month \u2014 {len(this_month)} projects")
         _render_table(this_month)
     if this_year:
-        st.caption(f"Last year \u2014 {len(this_year)} projects")
-        _render_table(this_year)
+        with st.expander(
+            f"Last year \u2014 {len(this_year)} projects",
+            expanded=False,
+        ):
+            _render_table(this_year)
     if older:
-        st.caption(f"Older \u2014 {len(older)} projects")
-        _render_table(older)
+        with st.expander(
+            f"Older \u2014 {len(older)} projects",
+            expanded=False,
+        ):
+            _render_table(older)
     if not rows:
         st.warning("No projects in cache.")
 
