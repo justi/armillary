@@ -24,6 +24,21 @@ def _use_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 # --- last conversation ------------------------------------------------------
 
 
+class TestPurpose:
+    def test_set_get_and_clear(self, _use_tmp: Path) -> None:
+        from armillary.purpose_service import (
+            clear_purpose,
+            get_purpose,
+            set_purpose,
+        )
+
+        set_purpose("/tmp/proj", "Ship the billing rewrite.")
+        assert get_purpose("/tmp/proj") == "Ship the billing rewrite."
+
+        clear_purpose("/tmp/proj")
+        assert get_purpose("/tmp/proj") is None
+
+
 class TestLastConversation:
     def test_set_and_get(self, _use_tmp: Path) -> None:
         from armillary.purpose_service import (

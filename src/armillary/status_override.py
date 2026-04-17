@@ -9,11 +9,11 @@ Storage: JSON file next to the cache DB, same pattern as excluded.json.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from .cache import default_db_path
 from .models import Status
+from .utils import load_json_str_dict, write_json_file
 
 _OVERRIDES_FILENAME = "status-overrides.json"
 
@@ -24,24 +24,11 @@ def _overrides_path() -> Path:
 
 def load_overrides() -> dict[str, str]:
     """Load {project_path: status_string} from disk."""
-    path = _overrides_path()
-    if not path.exists():
-        return {}
-    try:
-        parsed = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(parsed, dict):
-            return {k: v for k, v in parsed.items() if isinstance(v, str)}
-    except (ValueError, OSError):
-        pass
-    return {}
+    return load_json_str_dict(_overrides_path())
 
 
 def _save_overrides(overrides: dict[str, str]) -> None:
-    path = _overrides_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(overrides, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    write_json_file(_overrides_path(), overrides)
 
 
 def set_override(project_path: str, status: Status) -> None:

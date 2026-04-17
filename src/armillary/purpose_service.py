@@ -6,10 +6,10 @@ Survives re-scans. Keyed by project path.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from .cache import default_db_path
+from .utils import load_json_number_dict, load_json_str_dict, write_json_file
 
 _PURPOSE_FILENAME = "purposes.json"
 
@@ -20,24 +20,11 @@ def _purpose_path() -> Path:
 
 def load_purposes() -> dict[str, str]:
     """Load {project_path: purpose_string} from disk."""
-    path = _purpose_path()
-    if not path.exists():
-        return {}
-    try:
-        parsed = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(parsed, dict):
-            return {k: v for k, v in parsed.items() if isinstance(v, str)}
-    except (ValueError, OSError):
-        pass
-    return {}
+    return load_json_str_dict(_purpose_path())
 
 
 def _save_purposes(purposes: dict[str, str]) -> None:
-    path = _purpose_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(purposes, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    write_json_file(_purpose_path(), purposes)
 
 
 def set_purpose(project_path: str, purpose: str) -> None:
@@ -70,25 +57,14 @@ def _reasons_path() -> Path:
 
 def load_archive_reasons() -> dict[str, str]:
     """Load {project_path: reason} from disk."""
-    path = _reasons_path()
-    if not path.exists():
-        return {}
-    try:
-        parsed = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(parsed, dict):
-            return {k: v for k, v in parsed.items() if isinstance(v, str)}
-    except (ValueError, OSError):
-        pass
-    return {}
+    return load_json_str_dict(_reasons_path())
 
 
 def set_archive_reason(project_path: str, reason: str) -> None:
     """Record why a project was archived."""
     reasons = load_archive_reasons()
     reasons[project_path] = reason.strip()
-    path = _reasons_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(reasons, indent=2, ensure_ascii=False), encoding="utf-8")
+    write_json_file(_reasons_path(), reasons)
 
 
 def get_archive_reason(project_path: str) -> str | None:
@@ -107,25 +83,14 @@ def _conversations_path() -> Path:
 
 def load_conversations() -> dict[str, str]:
     """Load {project_path: ISO date string} from disk."""
-    path = _conversations_path()
-    if not path.exists():
-        return {}
-    try:
-        parsed = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(parsed, dict):
-            return {k: v for k, v in parsed.items() if isinstance(v, str)}
-    except (ValueError, OSError):
-        pass
-    return {}
+    return load_json_str_dict(_conversations_path())
 
 
 def set_last_conversation(project_path: str, date_str: str) -> None:
     """Record when you last talked to a user about this project."""
     convos = load_conversations()
     convos[project_path] = date_str.strip()
-    path = _conversations_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(convos, indent=2, ensure_ascii=False), encoding="utf-8")
+    write_json_file(_conversations_path(), convos)
 
 
 def get_last_conversation(project_path: str) -> str | None:
@@ -144,25 +109,14 @@ def _revenue_path() -> Path:
 
 def load_revenue() -> dict[str, int]:
     """Load {project_path: monthly_revenue_usd} from disk."""
-    path = _revenue_path()
-    if not path.exists():
-        return {}
-    try:
-        parsed = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(parsed, dict):
-            return {k: v for k, v in parsed.items() if isinstance(v, (int, float))}
-    except (ValueError, OSError):
-        pass
-    return {}
+    return load_json_number_dict(_revenue_path())
 
 
 def set_revenue(project_path: str, amount: int) -> None:
     """Set monthly revenue for a project (USD)."""
     rev = load_revenue()
     rev[project_path] = amount
-    path = _revenue_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(rev, indent=2, ensure_ascii=False), encoding="utf-8")
+    write_json_file(_revenue_path(), rev)
 
 
 def get_revenue(project_path: str) -> int | None:

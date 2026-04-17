@@ -625,6 +625,33 @@ def test_open_ambiguous_project_errors_out(tmp_path: Path) -> None:
     assert "alpha-one" in combined or "alpha-two" in combined
 
 
+def test_open_prefers_exact_match_over_substring(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mkrepo(tmp_path / "alpha")
+    _mkrepo(tmp_path / "alpha-one")
+    runner.invoke(app, ["scan", "-u", str(tmp_path)])
+
+    captured: dict[str, Any] = {}
+    from armillary import launcher as launcher_mod
+
+    monkeypatch.setattr(launcher_mod.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def fake_popen(cmd: list[str], **kwargs: Any) -> Any:
+        captured["cmd"] = cmd
+        captured["cwd"] = kwargs.get("cwd")
+        return None
+
+    monkeypatch.setattr(launcher_mod.subprocess, "Popen", fake_popen)
+
+    result = runner.invoke(app, ["open", "alpha", "--target", "cursor"])
+    assert result.exit_code == 0, result.stdout
+    assert captured["cmd"][0] == "cursor"
+    assert str(tmp_path / "alpha") in captured["cmd"][-1]
+    assert captured["cwd"] == str(tmp_path / "alpha")
+
+
 def test_open_invokes_launcher_when_executable_present(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

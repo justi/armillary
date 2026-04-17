@@ -8,10 +8,10 @@ Storage: JSON file next to the cache DB. Survives re-scans.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from .cache import default_db_path
+from .utils import load_json_str_list, write_json_file
 
 _EXCLUDES_FILENAME = "excluded.json"
 
@@ -22,26 +22,12 @@ def _excludes_path() -> Path:
 
 def load_excluded() -> set[str]:
     """Load set of excluded project paths from disk."""
-    path = _excludes_path()
-    if not path.exists():
-        return set()
-    try:
-        parsed = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(parsed, list):
-            return {str(p) for p in parsed}
-    except (ValueError, OSError):
-        pass
-    return set()
+    return set(load_json_str_list(_excludes_path()))
 
 
 def save_excluded(paths: set[str]) -> None:
     """Persist excluded paths to disk."""
-    path = _excludes_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(sorted(paths), indent=2),
-        encoding="utf-8",
-    )
+    write_json_file(_excludes_path(), sorted(paths))
 
 
 def exclude_project(project_path: str) -> None:

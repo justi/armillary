@@ -11,6 +11,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .cache import Cache
+from .utils import (
+    find_projects_by_name,
+    resolve_project_by_name,
+    summarize_project_matches,
+)
 
 
 @dataclass(frozen=True)
@@ -87,20 +92,14 @@ def get_context(
     with Cache(db_path=db_path) as cache:
         projects = cache.list_projects()
 
-    matches = [p for p in projects if project_name.lower() in p.name.lower()]
+    try:
+        project = resolve_project_by_name(projects, project_name)
+    except ValueError:
+        matches = find_projects_by_name(projects, project_name)
+        raise ValueError(f"Ambiguous: {summarize_project_matches(matches)}") from None
 
-    if not matches:
+    if project is None:
         return None
-    if len(matches) > 1:
-        exact = [p for p in matches if p.name.lower() == project_name.lower()]
-        if len(exact) == 1:
-            matches = exact
-        else:
-            names = ", ".join(p.name for p in matches[:5])
-            suffix = f" (+{len(matches) - 5} more)" if len(matches) > 5 else ""
-            raise ValueError(f"Ambiguous: {names}{suffix}")
-
-    project = matches[0]
     md = project.metadata
     # Check manual override before cached status
     from .status_override import get_override
