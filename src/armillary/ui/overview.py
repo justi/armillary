@@ -265,22 +265,33 @@ def _render_dying_metric(
     *,
     exclude_paths: set[str] | None = None,
 ) -> None:
-    """'Projects needing a decision' — excludes projects already in next."""
+    """'Projects needing a decision' — excludes projects already in next.
+
+    Zombie = ACTIVE but no activity in >3 days (losing momentum).
+    Forgotten WIP = PAUSED with dirty files and >10h invested.
+    """
+    from datetime import datetime, timedelta
+
     skip = exclude_paths or set()
+    stale_cutoff = datetime.now() - timedelta(days=3)
     zombies = [
         r
         for r in rows
         if r.status_raw == "ACTIVE"
-        and r.dirty is not None
-        and r.dirty == 0
         and r.work_hours
         and r.work_hours > 10
+        and r.last_modified < stale_cutoff
         and r.path not in skip
     ]
     forgotten_wip = [
         r
         for r in rows
-        if r.status_raw == "PAUSED" and r.dirty and r.dirty > 0 and r.path not in skip
+        if r.status_raw == "PAUSED"
+        and r.dirty
+        and r.dirty > 0
+        and r.work_hours
+        and r.work_hours > 10
+        and r.path not in skip
     ]
     total = len(zombies) + len(forgotten_wip)
 
