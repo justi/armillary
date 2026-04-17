@@ -106,7 +106,11 @@ def _render_project_detail(project_path: str) -> None:
     from armillary.status_override import get_override
 
     override = get_override(str(project.path))
-    is_archived = override == Status.ARCHIVED or (md and md.status == Status.ARCHIVED)
+    # Override is the sole source of truth for ARCHIVED.
+    # Cache may have stale ARCHIVED from a previous scan — ignore it.
+    # After Activate (clear_override), override=None → not archived,
+    # even if cache still says ARCHIVED until next scan.
+    is_archived = override == Status.ARCHIVED
 
     # --- Row 1: Name + Status + Launcher (top-right) ---
     if is_archived:

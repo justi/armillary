@@ -173,10 +173,14 @@ def _git_user_name() -> str:
 def _render_exclusion_row(project: object, *, action: str) -> None:
     """Render one project row with decision-helping info."""
     from armillary.exclude_service import exclude_project, include_project
+    from armillary.status_override import get_override
     from armillary.ui.helpers import _STATUS_EMOJI
 
     md = project.metadata
-    status = md.status.value if md and md.status else "?"
+    override = get_override(str(project.path))
+    status = (
+        override.value if override else (md.status.value if md and md.status else "?")
+    )
     emoji = _STATUS_EMOJI.get(status, "·")
     commits = md.commit_count if md else None
     hours = md.work_hours if md else None

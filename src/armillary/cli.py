@@ -300,9 +300,16 @@ def list_projects(
     table.add_column("Umbrella", style="dim")
     table.add_column("Last modified", justify="right")
 
+    from armillary.status_override import get_override
+
     for p in projects:
         md = p.metadata
-        status_label = (md.status.value if md and md.status else "—") or "—"
+        override = get_override(str(p.path))
+        status_label = (
+            override.value
+            if override
+            else (md.status.value if md and md.status else "—") or "—"
+        )
         branch = (md.branch if md else None) or "—"
         dirty = str(md.dirty_count) if md and md.dirty_count is not None else "—"
         table.add_row(
