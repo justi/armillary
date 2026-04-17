@@ -68,7 +68,14 @@ def _load_overview_rows() -> list[OverviewRow]:
 
 def _project_to_row(p: Project) -> OverviewRow:
     md = p.metadata
-    status_value = md.status.value if md and md.status else None
+    # Check manual override before cached status
+    from armillary.status_override import get_override
+
+    override = get_override(str(p.path))
+    if override is not None:
+        status_value = override.value
+    else:
+        status_value = md.status.value if md and md.status else None
     status_label = (
         f"{_STATUS_EMOJI.get(status_value, '·')} {status_value}"
         if status_value
