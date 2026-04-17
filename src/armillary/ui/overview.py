@@ -410,66 +410,48 @@ def _render_activity_heatmap() -> None:
                     help=str(summary["busiest_day"]),
                 )
 
-        # Heatmap chart
+        # Heatmap — CSS grid with aspect-ratio: 1 for perfect squares
         from datetime import date, timedelta
-
-        import pandas as pd
 
         today = date.today()
         start = today - timedelta(days=364)
-        all_dates = [start + timedelta(days=i) for i in range(365)]
-        df = pd.DataFrame(
-            {
-                "date": all_dates,
-                "commits": [activity.get(d, 0) for d in all_dates],
-                "week": [(d - start).days // 7 for d in all_dates],
-                "weekday": [d.weekday() for d in all_dates],
-            }
+
+        # Build grid data: 53 weeks × 7 days
+        peak = max(activity.values()) if activity else 1
+        cells: list[str] = []
+        for week in range(53):
+            for day in range(7):
+                d = start + timedelta(days=week * 7 + day)
+                if d > today:
+                    cells.append(
+                        '<div class="hm-cell" style="visibility:hidden"></div>'
+                    )
+                    continue
+                count = activity.get(d, 0)
+                if count == 0:
+                    color = "#ebedf0"
+                else:
+                    # 4 green levels like GitHub
+                    level = min(int(count / peak * 4), 3)
+                    color = ["#9be9a8", "#40c463", "#30a14e", "#216e39"][level]
+                tip = f"{d.isoformat()}: {count} commits"
+                cells.append(
+                    f'<div class="hm-cell" style="background:{color}" '
+                    f'title="{tip}"></div>'
+                )
+
+        html = (
+            "<style>"
+            ".hm-grid{display:grid;"
+            "grid-template-rows:repeat(7,1fr);"
+            "grid-auto-flow:column;"
+            "gap:2px;width:100%}"
+            ".hm-cell{aspect-ratio:1;border-radius:2px;"
+            "min-width:2px;min-height:2px}"
+            "</style>"
+            '<div class="hm-grid">' + "".join(cells) + "</div>"
         )
-
-        import altair as alt
-
-        _CELL = 11
-        _GAP = 2
-        _WEEKS = 53
-        _DAYS = 7
-        _W = _WEEKS * (_CELL + _GAP)
-        _H = _DAYS * (_CELL + _GAP)
-
-        chart = (
-            alt.Chart(df)
-            .mark_rect(cornerRadius=2)
-            .encode(
-                x=alt.X("week:O", axis=None),
-                y=alt.Y(
-                    "weekday:O",
-                    axis=alt.Axis(
-                        labels=True,
-                        labelExpr=(
-                            "datum.value == 0 ? 'Mon' : "
-                            "datum.value == 2 ? 'Wed' : "
-                            "datum.value == 4 ? 'Fri' : ''"
-                        ),
-                        title=None,
-                    ),
-                ),
-                color=alt.condition(
-                    "datum.commits > 0",
-                    alt.Color(
-                        "commits:Q",
-                        scale=alt.Scale(scheme="greens"),
-                        legend=None,
-                    ),
-                    alt.value("#ebedf0"),
-                ),
-                tooltip=[
-                    alt.Tooltip("date:T", title="Date"),
-                    alt.Tooltip("commits:Q", title="Commits"),
-                ],
-            )
-            .properties(width=_W, height=_H)
-        )
-        st.altair_chart(chart)
+        st.html(html)
 
 
 def _render_time_grouped_tables(rows: list[OverviewRow]) -> None:
