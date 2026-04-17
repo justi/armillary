@@ -32,11 +32,12 @@ mcp = FastMCP(
     "armillary",
     instructions=(
         "armillary indexes all local git repositories and idea folders on "
-        "the user's machine. Use `armillary_next` at session start to see "
-        "what to work on today. Use `armillary_context` when switching to "
-        "a project to get branch, dirty files, and recent commits. Use "
-        "`armillary_search` for literal code search. Use "
-        "`armillary_projects` to list all projects."
+        "the user's machine. ALWAYS call `armillary_next` at the very start "
+        "of every conversation to see what to work on today. ALWAYS call "
+        "`armillary_context` when the user mentions a project or switches "
+        "working directory. Use `armillary_search` for literal code search. "
+        "Use `armillary_projects` to list all projects. Use "
+        "`armillary_pulse` at weekly check-ins for a summary of what changed."
     ),
 )
 
