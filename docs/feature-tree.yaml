@@ -67,9 +67,13 @@ project:
     zombie_alert: built           # terminal warning in next when ACTIVE has no commit 14d
     status_layouts: built         # DORMANT/STALLED=README expanded, ACTIVE=collapsed, ARCHIVED=tombstone
 
+  v3:                              # ADR 0023-0025 — panel validated
+    onboarding_delight: planned   # ADR 0023 — auto-bootstrap + first scan wow card
+    distribution: planned         # ADR 0024 — tweet/HN templates + share section in sidebar
+    status_transitions: planned   # ADR 0025 — detect transitions + decision journal
+
   deferred:
-    launch_window: "revisit when users ask — 5% of projects launch"
-    reuse: "search already covers cross-repo code discovery"
+    # (empty — all former deferred items moved to killed or v3)
 
   killed:
     tags: "grep covers it"
@@ -82,3 +86,7 @@ project:
     session_hook: "panel 3/3 killed — overengineering, MCP instruction enough"
     undo_toast: "panel 0/5 — Streamlit limitation"
     dashboard_onboarding: "panel 3/5 killed — filtering for right users"
+    reuse: "panel 5/5 killed — overengineered, search covers it"
+    launch_window: "panel 3/5 killed — too MBA, just ship"
+    mobile_dashboard: "panel 4/5 killed — Streamlit is not mobile, wrong battle"
+    mrr_graph: "panel 3/5 killed — zero paying users, premature"
