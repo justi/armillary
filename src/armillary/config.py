@@ -150,6 +150,10 @@ _BUILTIN_LAUNCHERS: dict[str, LauncherConfig] = {
         "cd {path} && claude --dangerously-skip-permissions -c",
         icon="🔓",
     ),
+    "iterm-opencode": _iterm_launcher(
+        "iTerm + OpenCode", "cd {path} && opencode", icon="🟢"
+    ),
+    "iterm-codex": _iterm_launcher("iTerm + Codex", "cd {path} && codex", icon="⚡"),
     "finder": LauncherConfig(
         label="Finder",
         command="open",
