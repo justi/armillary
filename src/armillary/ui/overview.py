@@ -297,6 +297,29 @@ def _render_dying_metric(rows: list[OverviewRow]) -> None:
         icon=":material/priority_high:",
     )
 
+    # Show the actual projects so user can act
+    all_dying = zombies + forgotten_wip
+    all_dying.sort(key=lambda r: r.work_hours or 0, reverse=True)
+    with st.expander(
+        f"Show {total} project{'s' if total > 1 else ''}",
+        expanded=False,
+    ):
+        for r in all_dying:
+            is_zombie = r in zombies
+            tag = "\u26a0\ufe0f zombie" if is_zombie else "\u270f\ufe0f forgotten WIP"
+            hours = f"{r.work_hours:.0f}h" if r.work_hours else "0h"
+            col_info, col_act = st.columns([4, 1])
+            with col_info:
+                st.markdown(f"**{r.name}** \u2014 {tag} \u00b7 {hours}")
+            with col_act:
+                if st.button(
+                    "Open",
+                    key=f"dying_{r.path}",
+                    icon=":material/open_in_new:",
+                ):
+                    st.query_params["project"] = r.path
+                    st.rerun()
+
 
 def _apply_filters(
     rows: list[OverviewRow],
