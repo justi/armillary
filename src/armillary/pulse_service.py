@@ -99,7 +99,10 @@ def generate_pulse(
                 PulseEntry(
                     icon="⚠️",
                     project_name=p.name,
-                    message=f"{md.dirty_count} uncommitted files",
+                    message=(
+                        f"{md.dirty_count} uncommitted "
+                        f"file{'s' if md.dirty_count > 1 else ''}"
+                    ),
                 )
             )
 

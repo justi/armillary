@@ -93,7 +93,16 @@ def get_suggestions(
 
     candidates.sort(key=lambda s: s.score, reverse=True)
 
-    # Pick at most one per category, up to MAX_SUGGESTIONS
+    # Pick at most one per category, up to MAX_SUGGESTIONS.
+    # Priority: momentum > zombie > forgotten_gold > archive_candidate
+    _CATEGORY_PRIORITY = {
+        "momentum": 0,
+        "zombie": 1,
+        "forgotten_gold": 2,
+        "archive_candidate": 3,
+    }
+    candidates.sort(key=lambda s: (_CATEGORY_PRIORITY.get(s.category, 99), -s.score))
+
     seen_categories: set[str] = set()
     result: list[Suggestion] = []
     for s in candidates:
