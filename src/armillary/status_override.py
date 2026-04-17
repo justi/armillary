@@ -71,13 +71,22 @@ def clear_override(project_path: str) -> None:
 
 
 def filter_archived(items: list) -> list:
-    """Remove ARCHIVED projects from a list of Project-like or OverviewRow objects."""
+    """Remove ARCHIVED projects from a list of Project-like or OverviewRow objects.
+
+    Checks BOTH the override file AND cached status — so projects are
+    filtered immediately after archiving, before the next scan.
+    """
+    overrides = load_overrides()
 
     def _is_archived(item: object) -> bool:
-        # OverviewRow has status_raw
+        # Check override first (instant, no scan needed)
+        path_str = str(getattr(item, "path", ""))
+        if overrides.get(path_str) == Status.ARCHIVED.value:
+            return True
+        # OverviewRow has status_raw (already override-aware from helpers.py)
         if hasattr(item, "status_raw"):
             return item.status_raw == Status.ARCHIVED.value
-        # Project has metadata.status
+        # Project has metadata.status (cache value)
         if hasattr(item, "metadata") and item.metadata:
             return item.metadata.status == Status.ARCHIVED
         return False

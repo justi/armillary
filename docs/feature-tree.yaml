@@ -5,7 +5,7 @@
 
 project:
   metadata:
-    status: built                 # ACTIVE/PAUSED/DORMANT/IDEA/IN_PROGRESS
+    status: built                 # ACTIVE/PAUSED/DORMANT/IDEA/IN_PROGRESS/ARCHIVED + manual override
     git: built                    # branch, last_commit_ts, dirty_count, commit_count, work_hours
     readme: built                 # readme_excerpt, adr_paths, note_paths
 

@@ -85,6 +85,23 @@ def test_filter_archived_removes_archived_projects() -> None:
     assert "archived" not in names
 
 
+def test_filter_archived_uses_override_not_just_cache(
+    _use_tmp_overrides: Path,
+) -> None:
+    """Critical regression test: cache says ACTIVE, override says ARCHIVED.
+
+    filter_archived must check the override file, not just metadata.status.
+    This is the real failure mode — archiving without rescan.
+    """
+    proj = _project("sneaky", status=Status.ACTIVE, path=Path("/tmp/sneaky"))
+    set_override("/tmp/sneaky", Status.ARCHIVED)
+
+    filtered = filter_archived([proj])
+    assert len(filtered) == 0, (
+        "ACTIVE project with ARCHIVED override should be filtered"
+    )
+
+
 def test_filter_archived_keeps_all_when_none_archived() -> None:
     projects = [
         _project("a", status=Status.ACTIVE),

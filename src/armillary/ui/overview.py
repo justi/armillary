@@ -47,11 +47,11 @@ def _render_overview() -> None:
 
     _render_dormant_banner(rows, exploring=dormant_explore)
 
-    # Search bar
-    _render_search_section(rows, cfg)
-
-    # Apply filters
+    # Apply filters (before search, so search excludes ARCHIVED by default)
     filtered = _apply_filters(rows, filters=filters)
+
+    # Search bar (uses filtered rows for project dropdown)
+    _render_search_section(filtered, cfg)
 
     if dormant_explore:
         filtered = [r for r in filtered if r.status_raw == "DORMANT"]

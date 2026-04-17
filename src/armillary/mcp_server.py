@@ -21,6 +21,7 @@ from armillary.cache import Cache
 from armillary.exclude_service import filter_excluded
 from armillary.search import LiteralSearch, SearchHit
 from armillary.status_override import filter_archived
+from armillary.status_override import get_override as get_override_fn
 
 # Hard limits to prevent MCP responses from exceeding token limits.
 _MAX_RESULTS_CAP = 200
@@ -180,10 +181,17 @@ def armillary_projects(status_filter: str | None = None) -> str:
     rows = []
     for p in projects:
         md = p.metadata
+        # Check override for correct status display
+        override = get_override_fn(str(p.path))
+        status_val = (
+            override.value
+            if override
+            else (md.status.value if md and md.status else None)
+        )
         rows.append(
             {
                 "path": str(p.path),
-                "status": md.status.value if md and md.status else None,
+                "status": status_val,
                 "description": md.readme_excerpt if md else None,
             }
         )
