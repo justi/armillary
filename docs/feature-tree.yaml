@@ -11,11 +11,15 @@ project:
 
   signals:                        # ADR 0017 — decision-support signals, all local + <1s
     commit_velocity: built        # S1 — 4-week commit trend: rising/falling/flat/dead (NEXT + DECIDE)
-    skip_context: partial         # S2 — skip_reason + skip_count — CLI only, not in dashboard
-    dirty_file_age: built         # S3 — oldest mtime among dirty files, live (NEXT + CONTEXT)
+    skip_context: built           # S2 — skip_reason + skip_count — CLI next + dashboard detail banner
+    dirty_file_age: built         # S3 — oldest mtime among uncommitted files, live (NEXT + CONTEXT)
     last_session: built           # S4 — duration of last commit block (<2h gaps), live (CONTEXT)
-    first_commit_date: built      # S5 — enables project_age, intensity, stale_ratio (DECIDE)
+    first_commit_date: built      # S5 — enables project_age, intensity h/mo over active span (DECIDE)
     branch_count: built           # S6 — branch count + has_remote, safety for (DECIDE + ARCHIVE)
+    monthly_sparkline: built      # 6-month commit activity sparkline — CLI context + next, dashboard, MCP
+    days_since_commit: built      # bold warning >30d yellow, >90d red — CLI context, dashboard detail
+    purpose: built                # user-editable one-liner ("why this exists"), stored in purposes.json
+    readme_oneliner: built        # auto-extracted first sentence of README, fallback when no purpose
 
   discovery:
     search: built                 # ripgrep across all repos (CLI + MCP)
@@ -48,4 +52,5 @@ project:
     embeddings: "too heavy, ripgrep is enough"
     digest: "productivity theater — next + MCP covers daily use"
     integrations: "zero built, speculative scope, maintenance trap"
+    external_signals: "HN/PyPI/GitHub/Trends — panel 3/3 rejected: scope creep, vanity metrics"
     project_lineage: "v2/v3/v4 pattern is auto-gen tool, not user behavior"
