@@ -220,3 +220,101 @@ def test_one_per_category_then_fill(_use_tmp_cache: Path) -> None:
     assert "momentum" in categories
     assert "zombie" in categories
     assert "forgotten_gold" in categories
+
+
+# --- skip reason + count (ADR 0017 / S2) -----------------------------------
+
+
+def test_skip_with_reason_stores_reason(_use_tmp_cache: Path) -> None:
+    db_path = _use_tmp_cache
+    with Cache(db_path=db_path) as cache:
+        cache.upsert(
+            [
+                _project(
+                    "reason-proj",
+                    status=Status.DORMANT,
+                    work_hours=200,
+                    last_commit_ts=_NOW - timedelta(days=60),
+                ),
+            ]
+        )
+
+    skip_project("/tmp/reason-proj", reason="blocked by API", now=_NOW, db_path=db_path)
+
+    # Should still be skipped
+    results = get_suggestions(db_path=db_path, now=_NOW)
+    assert not any(s.project.name == "reason-proj" for s in results)
+
+
+def test_skip_count_increments_on_repeated_skips(_use_tmp_cache: Path) -> None:
+    import json
+
+    db_path = _use_tmp_cache
+    skips_file = db_path.parent / "next-skips.json"
+
+    skip_project("/tmp/proj", reason="not now", now=_NOW, db_path=db_path)
+    skip_project("/tmp/proj", reason="still not now", now=_NOW, db_path=db_path)
+    skip_project("/tmp/proj", now=_NOW, db_path=db_path)
+
+    data = json.loads(skips_file.read_text())
+    assert data["/tmp/proj"]["count"] == 3
+    assert data["/tmp/proj"]["reason"] is None  # last skip had no reason
+
+
+def test_old_format_skips_migrated_on_read(_use_tmp_cache: Path) -> None:
+    """Old format {path: timestamp} should be auto-migrated."""
+    import json
+
+    db_path = _use_tmp_cache
+    skips_file = db_path.parent / "next-skips.json"
+    skips_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write old format
+    old_data = {"/tmp/old-proj": _NOW.timestamp()}
+    skips_file.write_text(json.dumps(old_data))
+
+    with Cache(db_path=db_path) as cache:
+        cache.upsert(
+            [
+                _project(
+                    "old-proj",
+                    status=Status.DORMANT,
+                    work_hours=200,
+                    last_commit_ts=_NOW - timedelta(days=60),
+                ),
+            ]
+        )
+
+    # Project should be skipped (old format migrated)
+    results = get_suggestions(db_path=db_path, now=_NOW)
+    assert not any(s.project.name == "old-proj" for s in results)
+
+
+def test_expired_skip_shows_history_in_reason(_use_tmp_cache: Path) -> None:
+    """When a previously skipped project returns after 30 days,
+    the suggestion reason should include skip history."""
+    db_path = _use_tmp_cache
+    with Cache(db_path=db_path) as cache:
+        cache.upsert(
+            [
+                _project(
+                    "returning",
+                    status=Status.DORMANT,
+                    work_hours=200,
+                    last_commit_ts=_NOW - timedelta(days=60),
+                ),
+            ]
+        )
+
+    # Skip it twice with reasons
+    skip_project("/tmp/returning", reason="waiting for API", now=_NOW, db_path=db_path)
+    skip_project("/tmp/returning", reason="still waiting", now=_NOW, db_path=db_path)
+
+    # Fast-forward past the 30-day skip window
+    future = _NOW + timedelta(days=31)
+    results = get_suggestions(db_path=db_path, now=future)
+
+    returning = [s for s in results if s.project.name == "returning"]
+    assert len(returning) == 1
+    assert "skipped 2x" in returning[0].reason
+    assert "still waiting" in returning[0].reason

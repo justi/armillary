@@ -527,3 +527,76 @@ def test_prune_stale_does_not_touch_unrelated_umbrellas(
     deleted = cache.prune_stale()
     assert deleted == 0
     assert {r.name for r in cache.list_projects()} == {"alpha", "beta"}
+
+
+# --- ADR 0017 decision signals cache round-trip ----------------------------
+
+
+def test_upsert_round_trips_decision_signal_fields(
+    cache: Cache, tmp_path: Path
+) -> None:
+    """ADR 0017: commit_velocity, velocity_trend, first_commit_ts,
+    branch_count, has_remote must survive cache round-trip."""
+    from datetime import datetime as _dt
+
+    from armillary.models import ProjectMetadata, Status
+
+    p = tmp_path / "signals"
+    p.mkdir()
+    project = _make_project(path=p, type=ProjectType.GIT)
+    project.metadata = ProjectMetadata(
+        branch="main",
+        last_commit_sha="abc1234",
+        last_commit_ts=_dt(2026, 4, 10),
+        last_commit_author="Test",
+        dirty_count=0,
+        commit_count=50,
+        work_hours=22.3,
+        commit_velocity=[2, 4, 5, 8],
+        velocity_trend="rising",
+        first_commit_ts=_dt(2024, 1, 15, 10, 0, 0),
+        branch_count=3,
+        has_remote=True,
+        status=Status.ACTIVE,
+    )
+
+    cache.upsert([project])
+    [row] = cache.list_projects()
+
+    assert row.metadata is not None
+    assert row.metadata.commit_velocity == [2, 4, 5, 8]
+    assert row.metadata.velocity_trend == "rising"
+    assert row.metadata.first_commit_ts is not None
+    assert row.metadata.first_commit_ts.year == 2024
+    assert row.metadata.first_commit_ts.month == 1
+    assert row.metadata.branch_count == 3
+    assert row.metadata.has_remote is True
+
+
+def test_cache_handles_missing_signal_fields_gracefully(
+    cache: Cache, tmp_path: Path
+) -> None:
+    """Old cache entries without signal fields should read back with None."""
+    from armillary.models import ProjectMetadata, Status
+
+    p = tmp_path / "old"
+    p.mkdir()
+    project = _make_project(path=p, type=ProjectType.GIT)
+    project.metadata = ProjectMetadata(
+        branch="main",
+        last_commit_sha="def5678",
+        last_commit_ts=datetime(2026, 4, 1),
+        last_commit_author="Test",
+        dirty_count=0,
+        status=Status.DORMANT,
+    )
+
+    cache.upsert([project])
+    [row] = cache.list_projects()
+
+    assert row.metadata is not None
+    assert row.metadata.commit_velocity is None
+    assert row.metadata.velocity_trend is None
+    assert row.metadata.first_commit_ts is None
+    assert row.metadata.branch_count is None
+    assert row.metadata.has_remote is None

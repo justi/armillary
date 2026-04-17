@@ -169,20 +169,36 @@ def _render_project_detail(project_path: str) -> None:
 
 
 def _render_header_with_launcher(project: Project) -> None:
-    """Name + status badge + launcher dropdown in top-right."""
+    """Name + status badge + velocity trend + launcher dropdown."""
     md = project.metadata
     status_str = ""
     if md and md.status:
         emoji = _STATUS_EMOJI.get(md.status.value, "\u00b7")
         status_str = f" — {emoji} {md.status.value}"
 
+    # S1: velocity trend
+    trend_labels = {
+        "rising": ":material/trending_up: trending up",
+        "falling": ":material/trending_down: trending down",
+        "flat": ":material/trending_flat: steady",
+        "dead": ":material/block: no recent activity",
+    }
+    trend_str = ""
+    if md and md.velocity_trend:
+        trend_str = f" · {trend_labels.get(md.velocity_trend, md.velocity_trend)}"
+
     col_title, col_launcher = st.columns([5, 2])
     with col_title:
         st.title(f"{project.name}{status_str}")
+        # S5: project age + intensity
+        _render_project_age(md)
     with col_launcher:
         cfg = _safe_load_config()
         if cfg is not None and cfg.launchers:
             _render_launcher_compact(project, cfg)
+
+    if trend_str:
+        st.caption(trend_str)
 
 
 def _render_launcher_compact(project: Project, cfg: Config) -> None:
@@ -228,8 +244,12 @@ def _render_dirty_or_clean(ctx: object) -> None:
     """Full-width dirty warning or clean success signal."""
     if ctx.dirty_count > 0:
         s = "s" if ctx.dirty_count > 1 else ""
+        # S3: dirty file age
+        age_hint = ""
+        if ctx.dirty_max_age_seconds is not None:
+            age_hint = f" \u2014 oldest {_format_age(ctx.dirty_max_age_seconds)}"
         st.warning(
-            f"**{ctx.dirty_count} dirty file{s}** "
+            f"**{ctx.dirty_count} dirty file{s}{age_hint}** "
             "\u2014 commit or stash before switching",
             icon=":material/edit_note:",
         )
@@ -244,7 +264,7 @@ def _render_dirty_or_clean(ctx: object) -> None:
 
 
 def _render_narrative_context(ctx: object) -> None:
-    """Branch + last commit as narrative lines (not metric tiles)."""
+    """Branch + last commit + session + branch/remote as narrative lines."""
     if ctx.branch:
         st.markdown(f"Branch: `{ctx.branch}`")
     if ctx.recent_commits:
@@ -252,6 +272,28 @@ def _render_narrative_context(ctx: object) -> None:
         st.markdown(
             f"Last: {c.relative_time} \u2014 `{c.short_hash}` \u201c{c.subject}\u201d"
         )
+    # S4: last session
+    if ctx.last_session is not None:
+        dur = ctx.last_session.duration_seconds
+        if dur >= 3600:
+            dur_str = f"{dur / 3600:.1f}h"
+        elif dur >= 60:
+            dur_str = f"{dur / 60:.0f}min"
+        else:
+            dur_str = "<1min"
+        st.markdown(
+            f"Last session: **{dur_str}**, "
+            f"{ctx.last_session.commit_count} commit(s), "
+            f"{ctx.last_session.ended_relative}"
+        )
+    # S6: branch count + remote warning
+    parts: list[str] = []
+    if ctx.branch_count is not None and ctx.branch_count > 1:
+        parts.append(f"{ctx.branch_count} local branches")
+    if ctx.has_remote is False:
+        parts.append("**no remote \u2014 push before archiving**")
+    if parts:
+        st.caption(" \u00b7 ".join(parts))
 
 
 def _render_details_expander(project: Project) -> None:
@@ -353,6 +395,49 @@ def _git_log_recent(repo_path: Path, *, limit: int = 5) -> list[dict[str, str]]:
             }
         )
     return commits
+
+
+def _format_age(seconds: float) -> str:
+    """Human-readable age from seconds."""
+    if seconds < 3600:
+        return f"{seconds / 60:.0f}min"
+    if seconds < 86400:
+        return f"{seconds / 3600:.0f}h"
+    days = seconds / 86400
+    if days < 30:
+        return f"{days:.0f}d"
+    return f"{days / 30:.0f}mo"
+
+
+def _render_project_age(md: object | None) -> None:
+    """S5: Show project age + work intensity below the title.
+
+    Intensity = work_hours / active_span (first→last commit).
+    Only shown when active span >= 30 days — shorter spans produce
+    misleading h/mo values.
+    """
+    if md is None or not md.first_commit_ts or not md.work_hours:
+        return
+    from datetime import datetime
+
+    age_days = (datetime.now() - md.first_commit_ts).days
+    if age_days <= 0:
+        return
+    if age_days >= 365:
+        age_str = f"{age_days / 365:.1f}y"
+    elif age_days >= 30:
+        age_str = f"{age_days / 30.44:.0f}mo"
+    else:
+        age_str = f"{age_days}d"
+    # Intensity: h/mo over active span (first→last commit), not first→now
+    intensity_str = ""
+    if md.last_commit_ts and md.first_commit_ts:
+        span_days = max((md.last_commit_ts - md.first_commit_ts).days, 1)
+        if span_days >= 30:
+            span_months = span_days / 30.44
+            intensity = md.work_hours / span_months
+            intensity_str = f" \u00b7 {intensity:.1f} h/mo"
+    st.caption(f"Age {age_str}{intensity_str}")
 
 
 def _format_bytes(n: int) -> str:

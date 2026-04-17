@@ -367,3 +367,219 @@ def test_project_without_metadata(
     assert ctx is not None
     assert ctx.status is None
     assert ctx.work_hours is None
+
+
+# --- decision signals (ADR 0017) ------------------------------------------
+
+
+def test_dirty_max_age_computed_for_dirty_files(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """dirty_max_age_seconds should reflect the oldest dirty file's mtime."""
+    import time
+
+    proj_dir = tmp_path / "dirty-age"
+    proj_dir.mkdir()
+    (proj_dir / ".git").mkdir()
+
+    # Create a dirty file with known mtime
+    dirty_file = proj_dir / "changed.py"
+    dirty_file.write_text("x = 1")
+    import os
+
+    old_time = time.time() - 3600  # 1 hour ago
+    os.utime(dirty_file, (old_time, old_time))
+
+    _seed(db_path, [_project("dirty-age", path=proj_dir)])
+
+    _mock_subprocess(
+        monkeypatch,
+        {
+            ("rev-parse", "--abbrev-ref", "HEAD"): "main",
+            ("status", "--porcelain", "--no-renames"): " M changed.py",
+            ("log", "-5", "--format=%h\t%ar\t%s"): "abc\t1 hour ago\twip",
+            (
+                "branch",
+                "--sort=-committerdate",
+                "--format=%(refname:short)\t%(committerdate:relative)",
+            ): "main\t1 hour ago",
+            (
+                "log",
+                "-50",
+                "--format=%at\t%ar",
+            ): f"{int(time.time()) - 3600}\t1 hour ago",
+        },
+    )
+
+    ctx = get_context("dirty-age", db_path=db_path)
+
+    assert ctx is not None
+    assert ctx.dirty_max_age_seconds is not None
+    assert ctx.dirty_max_age_seconds >= 3500  # ~1 hour, with tolerance
+
+
+def test_dirty_max_age_none_when_clean(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proj_dir = tmp_path / "clean-proj"
+    proj_dir.mkdir()
+    (proj_dir / ".git").mkdir()
+
+    _seed(db_path, [_project("clean-proj", path=proj_dir)])
+
+    _mock_subprocess(
+        monkeypatch,
+        {
+            ("rev-parse", "--abbrev-ref", "HEAD"): "main",
+            ("status", "--porcelain", "--no-renames"): "",
+            ("log", "-5", "--format=%h\t%ar\t%s"): "abc\t1 hour ago\twip",
+            (
+                "branch",
+                "--sort=-committerdate",
+                "--format=%(refname:short)\t%(committerdate:relative)",
+            ): "main\t1 hour ago",
+            ("log", "-50", "--format=%at\t%ar"): "",
+        },
+    )
+
+    ctx = get_context("clean-proj", db_path=db_path)
+
+    assert ctx is not None
+    assert ctx.dirty_max_age_seconds is None
+
+
+def test_last_session_from_consecutive_commits(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Commits within 2h of each other form one session."""
+    import time
+
+    proj_dir = tmp_path / "session-proj"
+    proj_dir.mkdir()
+    (proj_dir / ".git").mkdir()
+
+    _seed(db_path, [_project("session-proj", path=proj_dir)])
+
+    now = int(time.time())
+    # 3 commits: now, 30 min ago, 1h ago → one session of ~1h, 3 commits
+    # then a 5h gap → 4th commit at -6h (separate session)
+    log_lines = "\n".join(
+        [
+            f"{now}\tjust now",
+            f"{now - 1800}\t30 minutes ago",
+            f"{now - 3600}\t1 hour ago",
+            f"{now - 21600}\t6 hours ago",
+        ]
+    )
+
+    _mock_subprocess(
+        monkeypatch,
+        {
+            ("rev-parse", "--abbrev-ref", "HEAD"): "main",
+            ("status", "--porcelain", "--no-renames"): "",
+            ("log", "-5", "--format=%h\t%ar\t%s"): "abc\tjust now\twip",
+            (
+                "branch",
+                "--sort=-committerdate",
+                "--format=%(refname:short)\t%(committerdate:relative)",
+            ): "main\tjust now",
+            ("log", "-50", "--format=%at\t%ar"): log_lines,
+        },
+    )
+
+    ctx = get_context("session-proj", db_path=db_path)
+
+    assert ctx is not None
+    assert ctx.last_session is not None
+    assert ctx.last_session.commit_count == 3
+    assert ctx.last_session.duration_seconds == pytest.approx(3600, abs=10)
+    assert ctx.last_session.ended_relative == "just now"
+
+
+def test_last_session_none_with_no_commits(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proj_dir = tmp_path / "no-commits"
+    proj_dir.mkdir()
+    (proj_dir / ".git").mkdir()
+
+    _seed(db_path, [_project("no-commits", path=proj_dir)])
+
+    _mock_subprocess(
+        monkeypatch,
+        {
+            ("rev-parse", "--abbrev-ref", "HEAD"): "main",
+            ("status", "--porcelain", "--no-renames"): "",
+            ("log", "-5", "--format=%h\t%ar\t%s"): "",
+            (
+                "branch",
+                "--sort=-committerdate",
+                "--format=%(refname:short)\t%(committerdate:relative)",
+            ): "",
+            ("log", "-50", "--format=%at\t%ar"): "",
+        },
+    )
+
+    ctx = get_context("no-commits", db_path=db_path)
+
+    assert ctx is not None
+    assert ctx.last_session is None
+
+
+def test_last_session_single_commit(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Single commit → session with 1 commit and 0 duration."""
+    import time
+
+    proj_dir = tmp_path / "single"
+    proj_dir.mkdir()
+    (proj_dir / ".git").mkdir()
+
+    _seed(db_path, [_project("single", path=proj_dir)])
+
+    now = int(time.time())
+    _mock_subprocess(
+        monkeypatch,
+        {
+            ("rev-parse", "--abbrev-ref", "HEAD"): "main",
+            ("status", "--porcelain", "--no-renames"): "",
+            ("log", "-5", "--format=%h\t%ar\t%s"): "abc\t1 hour ago\tinit",
+            (
+                "branch",
+                "--sort=-committerdate",
+                "--format=%(refname:short)\t%(committerdate:relative)",
+            ): "main\t1 hour ago",
+            ("log", "-50", "--format=%at\t%ar"): f"{now - 3600}\t1 hour ago",
+        },
+    )
+
+    ctx = get_context("single", db_path=db_path)
+
+    assert ctx is not None
+    assert ctx.last_session is not None
+    assert ctx.last_session.commit_count == 1
+    assert ctx.last_session.duration_seconds == 0.0
+
+
+def test_idea_project_has_no_signals(db_path: Path, tmp_path: Path) -> None:
+    idea_dir = tmp_path / "idea-signals"
+    idea_dir.mkdir()
+
+    _seed(
+        db_path,
+        [
+            _project(
+                "idea-signals",
+                path=idea_dir,
+                project_type=ProjectType.IDEA,
+                status=Status.IDEA,
+            )
+        ],
+    )
+
+    ctx = get_context("idea-signals", db_path=db_path)
+
+    assert ctx is not None
+    assert ctx.dirty_max_age_seconds is None
+    assert ctx.last_session is None

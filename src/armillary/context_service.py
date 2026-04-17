@@ -30,6 +30,18 @@ class ProjectContext:
     recent_commits: list[CommitInfo] = field(default_factory=list)
     recent_branches: list[BranchInfo] = field(default_factory=list)
 
+    # Decision signals (ADR 0017) — live signals.
+    dirty_max_age_seconds: float | None = None
+    last_session: SessionInfo | None = None
+
+    # Decision signals (ADR 0017) — from cache.
+    velocity_trend: str | None = None
+    commit_velocity: list[int] | None = None
+    first_commit_ts: str | None = None  # ISO format for display
+    last_commit_ts_iso: str | None = None  # ISO format — for intensity calc
+    branch_count: int | None = None
+    has_remote: bool | None = None
+
     # Flags
     is_git: bool = True
 
@@ -39,6 +51,15 @@ class CommitInfo:
     short_hash: str
     relative_time: str
     subject: str
+
+
+@dataclass(frozen=True)
+class SessionInfo:
+    """Last continuous work session derived from commit timestamps."""
+
+    duration_seconds: float
+    commit_count: int
+    ended_relative: str  # e.g. "2 hours ago"
 
 
 @dataclass(frozen=True)
@@ -77,6 +98,18 @@ def get_context(
     status = md.status.value if md and md.status else None
     work_hours = md.work_hours if md else None
 
+    # Cached decision signals (ADR 0017)
+    velocity_trend = md.velocity_trend if md else None
+    commit_velocity = md.commit_velocity if md else None
+    first_commit_ts = (
+        md.first_commit_ts.isoformat() if md and md.first_commit_ts else None
+    )
+    last_commit_ts_iso = (
+        md.last_commit_ts.isoformat() if md and md.last_commit_ts else None
+    )
+    branch_count = md.branch_count if md else None
+    has_remote = md.has_remote if md else None
+
     # Detect git repo: .git can be a directory (normal) or file (worktree/submodule)
     if not (project.path / ".git").exists():
         return ProjectContext(
@@ -99,6 +132,14 @@ def get_context(
         dirty_count=dirty_count,
         recent_commits=_recent_commits(project.path),
         recent_branches=_recent_branches(project.path, current=branch),
+        dirty_max_age_seconds=_dirty_max_age(project.path, dirty_files),
+        last_session=_last_session(project.path),
+        velocity_trend=velocity_trend,
+        commit_velocity=commit_velocity,
+        first_commit_ts=first_commit_ts,
+        last_commit_ts_iso=last_commit_ts_iso,
+        branch_count=branch_count,
+        has_remote=has_remote,
         is_git=True,
     )
 
@@ -181,3 +222,75 @@ def _recent_branches(
         if len(branches) >= count:
             break
     return branches
+
+
+# --- decision signals (ADR 0017) — live, not cached -------------------------
+
+_SESSION_GAP_SECONDS = 2 * 3600  # 2h gap = session boundary
+
+
+def _dirty_max_age(project_path: Path, dirty_files: list[str]) -> float | None:
+    """Return age in seconds of the oldest dirty file, or None if clean."""
+    import time
+
+    if not dirty_files:
+        return None
+    now = time.time()
+    oldest = now
+    for line in dirty_files:
+        # porcelain format: "XY filename" — strip status prefix
+        rel = line[3:] if len(line) > 3 else line
+        full = project_path / rel
+        try:
+            mtime = full.stat().st_mtime
+            oldest = min(oldest, mtime)
+        except OSError:
+            continue
+    if oldest >= now:
+        return None
+    return now - oldest
+
+
+def _last_session(project_path: Path) -> SessionInfo | None:
+    """Derive the last continuous work session from recent git commits.
+
+    A session = consecutive commits with gaps < 2h between them.
+    Returns info about the most recent such session.
+    """
+    output = _run_git(
+        project_path,
+        "log",
+        "-50",
+        "--format=%at\t%ar",
+    )
+    if not output:
+        return None
+
+    entries: list[tuple[int, str]] = []
+    for line in output.splitlines():
+        parts = line.split("\t", 1)
+        if len(parts) == 2:
+            try:
+                entries.append((int(parts[0]), parts[1]))
+            except ValueError:
+                continue
+
+    if not entries:
+        return None
+
+    # Entries are newest-first from git log. Walk from newest to find
+    # where the session boundary is.
+    session_commits = [entries[0]]
+    for i in range(1, len(entries)):
+        gap = entries[i - 1][0] - entries[i][0]
+        if gap < _SESSION_GAP_SECONDS:
+            session_commits.append(entries[i])
+        else:
+            break
+
+    duration = session_commits[0][0] - session_commits[-1][0]
+    return SessionInfo(
+        duration_seconds=float(duration),
+        commit_count=len(session_commits),
+        ended_relative=session_commits[0][1],
+    )

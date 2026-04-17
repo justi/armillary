@@ -450,6 +450,16 @@ def _row_to_metadata(row: sqlite3.Row) -> ProjectMetadata | None:
         readme_excerpt=extra.get("readme_excerpt"),
         adr_paths=[Path(p) for p in extra.get("adr_paths", [])],
         note_paths=[Path(p) for p in extra.get("note_paths", [])],
+        # Decision signals (ADR 0017)
+        commit_velocity=extra.get("commit_velocity"),
+        velocity_trend=extra.get("velocity_trend"),
+        first_commit_ts=(
+            datetime.fromtimestamp(extra["first_commit_ts"])
+            if extra.get("first_commit_ts")
+            else None
+        ),
+        branch_count=extra.get("branch_count"),
+        has_remote=extra.get("has_remote"),
         status=Status(row["status"]) if row["status"] else None,
     )
 
@@ -467,6 +477,14 @@ def _serialize_metadata_extra(md: ProjectMetadata) -> str | None:
         "readme_excerpt": md.readme_excerpt,
         "adr_paths": [str(p) for p in md.adr_paths],
         "note_paths": [str(p) for p in md.note_paths],
+        # Decision signals (ADR 0017)
+        "commit_velocity": md.commit_velocity,
+        "velocity_trend": md.velocity_trend,
+        "first_commit_ts": (
+            md.first_commit_ts.timestamp() if md.first_commit_ts else None
+        ),
+        "branch_count": md.branch_count,
+        "has_remote": md.has_remote,
     }
     # Drop empty keys to keep the JSON small and the diff readable.
     cleaned = {k: v for k, v in payload.items() if v not in (None, [], "")}

@@ -280,6 +280,18 @@ def include_command(
         typer.secho(f"Restored {project.name}", fg=typer.colors.GREEN)
 
 
+def _format_age(seconds: float) -> str:
+    """Human-readable age from seconds (e.g. '3 days', '2h')."""
+    if seconds < 3600:
+        return f"{seconds / 60:.0f}min"
+    if seconds < 86400:
+        return f"{seconds / 3600:.0f}h"
+    days = seconds / 86400
+    if days < 30:
+        return f"{days:.0f}d"
+    return f"{days / 30:.0f}mo"
+
+
 @app.command("context")
 def context_command(
     project_name: str = typer.Argument(..., help="Project name (substring match)."),
@@ -312,8 +324,52 @@ def context_command(
     short_path = _shorten_home(ctx.path)
 
     branch_str = f" on [cyan]{ctx.branch}[/cyan]" if ctx.branch else ""
-    console.print(f"\n  [bold]{ctx.name}[/bold]{branch_str} — {status_str}{hours_str}")
+    # S1: velocity trend inline with header
+    trend_labels = {
+        "rising": "trending up",
+        "falling": "trending down",
+        "flat": "steady",
+        "dead": "no recent activity",
+    }
+    trend_str = ""
+    if ctx.velocity_trend and ctx.velocity_trend != "dead":
+        label = trend_labels.get(ctx.velocity_trend, ctx.velocity_trend)
+        trend_str = f" · [dim]{label}[/dim]"
+    elif ctx.velocity_trend == "dead":
+        trend_str = " · [dim red]no recent activity[/dim red]"
+
+    header = (
+        f"\n  [bold]{ctx.name}[/bold]{branch_str} — {status_str}{hours_str}{trend_str}"
+    )
+    console.print(header)
     console.print(f"  [dim]{short_path}[/dim]")
+
+    # S5: project age + intensity (active span = first→last commit)
+    if ctx.first_commit_ts and ctx.work_hours:
+        from datetime import datetime
+
+        try:
+            first = datetime.fromisoformat(ctx.first_commit_ts)
+            age_days = (datetime.now() - first).days
+            if age_days > 0:
+                if age_days >= 365:
+                    age_str = f"{age_days / 365:.1f}y"
+                elif age_days >= 30:
+                    age_str = f"{age_days / 30.44:.0f}mo"
+                else:
+                    age_str = f"{age_days}d"
+                # Intensity: h/mo over active span (first→last commit)
+                intensity_str = ""
+                if ctx.last_commit_ts_iso:
+                    last = datetime.fromisoformat(ctx.last_commit_ts_iso)
+                    span_days = max((last - first).days, 1)
+                    if span_days >= 30:
+                        span_months = span_days / 30.44
+                        intensity = ctx.work_hours / span_months
+                        intensity_str = f" · {intensity:.1f} h/mo"
+                console.print(f"  [dim]Age {age_str}{intensity_str}[/dim]")
+        except (ValueError, TypeError):
+            pass
 
     if not ctx.is_git:
         console.print("\n  [dim]Not a git repo — no commit history.[/dim]")
@@ -321,12 +377,31 @@ def context_command(
 
     if ctx.dirty_count > 0:
         s = "s" if ctx.dirty_count > 1 else ""
-        console.print(f"\n  [bold yellow]{ctx.dirty_count} dirty file{s}[/bold yellow]")
+        age_hint = ""
+        if ctx.dirty_max_age_seconds is not None:
+            age_hint = f" — oldest {_format_age(ctx.dirty_max_age_seconds)}"
+        console.print(
+            f"\n  [bold yellow]{ctx.dirty_count} dirty file{s}{age_hint}[/bold yellow]"
+        )
         for f in ctx.dirty_files:
             console.print(f"    [yellow]{f}[/yellow]")
         if ctx.dirty_count > len(ctx.dirty_files):
             more = ctx.dirty_count - len(ctx.dirty_files)
             console.print(f"    [dim]and {more} more[/dim]")
+
+    if ctx.last_session is not None:
+        dur = ctx.last_session.duration_seconds
+        if dur >= 3600:
+            dur_str = f"{dur / 3600:.1f}h"
+        elif dur >= 60:
+            dur_str = f"{dur / 60:.0f}min"
+        else:
+            dur_str = "<1min"
+        console.print(
+            f"\n  [bold]Last session[/bold]  "
+            f"{dur_str}, {ctx.last_session.commit_count} commit(s), "
+            f"{ctx.last_session.ended_relative}"
+        )
 
     if ctx.recent_commits:
         console.print("\n  [bold]Last commits[/bold]")
@@ -343,6 +418,15 @@ def context_command(
         console.print("\n  [bold]Recent branches[/bold]")
         for b in ctx.recent_branches:
             console.print(f"  {b.name:<30} [dim]{b.relative_time}[/dim]")
+
+    # S6: branch count + remote safety
+    hints: list[str] = []
+    if ctx.branch_count is not None and ctx.branch_count > 1:
+        hints.append(f"{ctx.branch_count} local branches")
+    if ctx.has_remote is False:
+        hints.append("[bold red]no remote — push before archiving[/bold red]")
+    if hints:
+        console.print(f"\n  [dim]{' · '.join(hints)}[/dim]")
 
     # Actionable hint
     if ctx.dirty_count > 0:
@@ -364,6 +448,11 @@ def next_command(
         "--skip",
         help="Project name to dismiss from suggestions for 30 days.",
     ),
+    reason: str | None = typer.Option(
+        None,
+        "--reason",
+        help="Why you're skipping (e.g. 'blocked by API', 'not now').",
+    ),
 ) -> None:
     """What should you work on today?
 
@@ -372,6 +461,7 @@ def next_command(
     gold (high-effort dormant projects worth revisiting with AI).
 
     Use --skip <name> to dismiss a project for 30 days.
+    Use --reason with --skip to record why.
     """
     from armillary.cache import Cache
     from armillary.next_service import get_suggestions, skip_project
@@ -393,8 +483,11 @@ def next_command(
                 err=True,
             )
             raise typer.Exit(2)
-        skip_project(str(matches[0].path))
-        typer.secho(f"Skipped {matches[0].name} for 30 days.", fg=typer.colors.CYAN)
+        skip_project(str(matches[0].path), reason=reason)
+        msg = f"Skipped {matches[0].name} for 30 days."
+        if reason:
+            msg += f" Reason: {reason}"
+        typer.secho(msg, fg=typer.colors.CYAN)
         return
 
     suggestions = get_suggestions()

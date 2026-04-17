@@ -270,6 +270,24 @@ def armillary_context(project_name: str) -> str:
             result["recent_branches"] = [
                 {"name": b.name, "time": b.relative_time} for b in ctx.recent_branches
             ]
+        if ctx.dirty_max_age_seconds is not None:
+            result["dirty_max_age_seconds"] = round(ctx.dirty_max_age_seconds)
+        if ctx.last_session is not None:
+            result["last_session"] = {
+                "duration_seconds": ctx.last_session.duration_seconds,
+                "commit_count": ctx.last_session.commit_count,
+                "ended": ctx.last_session.ended_relative,
+            }
+        if ctx.velocity_trend is not None:
+            result["velocity_trend"] = ctx.velocity_trend
+        if ctx.commit_velocity is not None:
+            result["commit_velocity"] = ctx.commit_velocity
+        if ctx.first_commit_ts is not None:
+            result["first_commit_ts"] = ctx.first_commit_ts
+        if ctx.branch_count is not None:
+            result["branch_count"] = ctx.branch_count
+        if ctx.has_remote is not None:
+            result["has_remote"] = ctx.has_remote
 
     return json.dumps(result, separators=(",", ":"), default=str)
 

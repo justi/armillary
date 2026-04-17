@@ -592,3 +592,111 @@ def test_extract_all_swallows_extraction_errors(
     # Broken project: empty metadata, no exception
     assert projects[1].metadata is not None
     assert projects[1].metadata.last_commit_sha is None
+
+
+# --- decision signals (ADR 0017) ------------------------------------------
+
+
+def test_extract_velocity_and_trend_for_recent_repo(tmp_path: Path) -> None:
+    """A repo with commits in the last 4 weeks gets a velocity vector and trend."""
+    repo = _mk_real_git_repo(tmp_path / "velocity")
+    md = metadata.extract(_git_project(repo))
+
+    assert md.commit_velocity is not None
+    assert len(md.commit_velocity) == 4
+    assert sum(md.commit_velocity) >= 1  # at least the initial commit
+    assert md.velocity_trend in ("rising", "falling", "flat", "dead")
+
+
+def test_extract_velocity_dead_for_old_repo(tmp_path: Path) -> None:
+    """A repo whose only commit is older than 4 weeks → dead."""
+    import time as _time
+
+    env = _git_env()
+    repo = tmp_path / "old"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True, env=env)
+    (repo / "a.txt").write_text("a")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, env=env)
+    # Commit dated 60 days ago
+    old_ts = int(_time.time()) - 60 * 86400
+    date_str = f"{old_ts} +0000"
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "old"],
+        cwd=repo,
+        check=True,
+        env={**env, "GIT_COMMITTER_DATE": date_str, "GIT_AUTHOR_DATE": date_str},
+    )
+
+    md = metadata.extract(_git_project(repo))
+
+    assert md.commit_velocity == [0, 0, 0, 0]
+    assert md.velocity_trend == "dead"
+
+
+def test_extract_first_commit_ts(tmp_path: Path) -> None:
+    """first_commit_ts should be the timestamp of the initial commit."""
+    env = _git_env()
+    repo = _mk_real_git_repo(tmp_path / "first-ts")
+    # Add a second commit so first != last
+    (repo / "b.txt").write_text("b")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, env=env)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "second"], cwd=repo, check=True, env=env
+    )
+
+    md = metadata.extract(_git_project(repo))
+
+    assert md.first_commit_ts is not None
+    assert md.last_commit_ts is not None
+    # First commit must be <= last commit
+    assert md.first_commit_ts <= md.last_commit_ts
+
+
+def test_extract_branch_count_and_has_remote(tmp_path: Path) -> None:
+    """branch_count = number of local branches. has_remote = False for local repo."""
+    env = _git_env()
+    repo = _mk_real_git_repo(tmp_path / "branches")
+    # Create a second branch
+    subprocess.run(["git", "branch", "feature-x"], cwd=repo, check=True, env=env)
+
+    md = metadata.extract(_git_project(repo))
+
+    assert md.branch_count == 2  # main + feature-x
+    assert md.has_remote is False
+
+
+def test_extract_has_remote_true_with_remote(tmp_path: Path) -> None:
+    """has_remote = True when a remote is configured."""
+    env = _git_env()
+    repo = _mk_real_git_repo(tmp_path / "with-remote")
+    subprocess.run(
+        ["git", "remote", "add", "origin", "/tmp/fake"],
+        cwd=repo,
+        check=True,
+        env=env,
+    )
+
+    md = metadata.extract(_git_project(repo))
+
+    assert md.has_remote is True
+
+
+def test_extract_signals_none_for_idea_project(tmp_path: Path) -> None:
+    """IDEA projects should have all decision signals as None."""
+    folder = tmp_path / "idea"
+    folder.mkdir()
+    project = Project(
+        path=folder.resolve(),
+        name="idea",
+        type=ProjectType.IDEA,
+        umbrella=tmp_path.resolve(),
+        last_modified=__import__("datetime").datetime.now(),
+    )
+    md = metadata.extract(project)
+
+    assert md.commit_velocity is None
+    assert md.velocity_trend is None
+    assert md.first_commit_ts is None
+    assert md.branch_count is None
+    assert md.has_remote is None

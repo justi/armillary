@@ -194,6 +194,20 @@ def _fill_git_fields(repo_path: Path, md: ProjectMetadata) -> None:
     with contextlib.suppress(Exception):
         md.commit_count, md.work_hours = _compute_commit_stats(repo)
 
+    # S1: Commit velocity — 4-week window (ADR 0017).
+    with contextlib.suppress(Exception):
+        md.commit_velocity, md.velocity_trend = _compute_velocity(repo)
+
+    # S5: First commit timestamp (ADR 0017).
+    with contextlib.suppress(Exception):
+        md.first_commit_ts = _first_commit_timestamp(repo)
+
+    # S6: Branch count + has_remote (ADR 0017).
+    with contextlib.suppress(Exception):
+        md.branch_count = len(repo.branches)
+    with contextlib.suppress(Exception):
+        md.has_remote = bool(repo.remotes)
+
 
 # --- commit stats ---------------------------------------------------------
 
@@ -246,6 +260,74 @@ def _compute_commit_stats(repo: git.Repo) -> tuple[int, float]:
 
     work_hours = round(total_work_seconds / 3600, 1)
     return commit_count, work_hours
+
+
+# --- decision signals (ADR 0017) ------------------------------------------
+
+_VELOCITY_WEEKS = 4
+_SECONDS_PER_WEEK = 7 * 86400
+
+
+def _compute_velocity(repo: git.Repo) -> tuple[list[int], str]:
+    """Return (commit_counts_per_week, trend) for the last 4 weeks.
+
+    commit_counts_per_week: [week4_ago, week3_ago, week2_ago, week1_ago]
+    trend: "rising" / "falling" / "flat" / "dead"
+    """
+    import time
+
+    now = int(time.time())
+    raw = repo.git.log(
+        "--format=%at",
+        f"--since={_VELOCITY_WEEKS * 7} days ago",
+    )
+    if not raw.strip():
+        return [0] * _VELOCITY_WEEKS, "dead"
+
+    timestamps = [int(ts) for ts in raw.strip().splitlines()]
+    buckets = [0] * _VELOCITY_WEEKS
+    for ts in timestamps:
+        age = now - ts
+        week_idx = min(age // _SECONDS_PER_WEEK, _VELOCITY_WEEKS - 1)
+        # bucket 0 = oldest week, bucket 3 = most recent
+        buckets[_VELOCITY_WEEKS - 1 - week_idx] += 1
+
+    return buckets, _classify_trend(buckets)
+
+
+def _classify_trend(buckets: list[int]) -> str:
+    """Classify a 4-week velocity vector into a human-readable trend."""
+    if all(b == 0 for b in buckets):
+        return "dead"
+    # Compare first half vs second half
+    first_half = sum(buckets[: len(buckets) // 2])
+    second_half = sum(buckets[len(buckets) // 2 :])
+    if second_half > first_half * 1.5:
+        return "rising"
+    if first_half > second_half * 1.5:
+        return "falling"
+    return "flat"
+
+
+def _first_commit_timestamp(repo: git.Repo) -> datetime | None:
+    """Return the timestamp of the very first commit in the repo.
+
+    Note: `git log --reverse -1` does NOT work — `-1` limits BEFORE
+    reverse is applied. Use `--diff-filter` with rev-list instead.
+    """
+    raw = repo.git.rev_list("--max-parents=0", "HEAD", "--format=%at")
+    if not raw.strip():
+        return None
+    # rev-list --format outputs "commit <sha>\n<format>" per entry;
+    # take the first timestamp line (oldest root commit).
+    for line in raw.strip().splitlines():
+        if line.startswith("commit "):
+            continue
+        try:
+            return datetime.fromtimestamp(int(line.strip()))
+        except ValueError:
+            continue
+    return None
 
 
 # --- README ---------------------------------------------------------------

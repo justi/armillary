@@ -50,8 +50,15 @@ def get_suggestions(
     skips = _load_skips(db_path)
     active_skips = {
         path
-        for path, ts in skips.items()
-        if now.timestamp() - ts < _SKIP_DURATION_DAYS * 86400
+        for path, entry in skips.items()
+        if now.timestamp() - entry["timestamp"] < _SKIP_DURATION_DAYS * 86400
+    }
+
+    # Expired skips — projects returning after skip period
+    expired_skips: dict[str, dict] = {
+        path: entry
+        for path, entry in skips.items()
+        if now.timestamp() - entry["timestamp"] >= _SKIP_DURATION_DAYS * 86400
     }
 
     candidates: list[Suggestion] = []
@@ -65,6 +72,21 @@ def get_suggestions(
 
         suggestion = _evaluate(p, now)
         if suggestion is not None:
+            # Enrich with skip history if this project was previously skipped
+            skip_entry = expired_skips.get(str(p.path))
+            if skip_entry:
+                count = skip_entry.get("count", 1)
+                last_reason = skip_entry.get("reason")
+                skip_note = f" (skipped {count}x"
+                if last_reason:
+                    skip_note += f", last: {last_reason}"
+                skip_note += ")"
+                suggestion = Suggestion(
+                    project=suggestion.project,
+                    category=suggestion.category,
+                    reason=suggestion.reason + skip_note,
+                    score=suggestion.score,
+                )
             candidates.append(suggestion)
 
     candidates.sort(key=lambda s: s.score, reverse=True)
@@ -93,13 +115,20 @@ def get_suggestions(
 def skip_project(
     project_path: str,
     *,
+    reason: str | None = None,
     now: datetime | None = None,
     db_path: Path | None = None,
 ) -> None:
-    """Mark a project as skipped for 30 days."""
+    """Mark a project as skipped for 30 days, with optional reason."""
     now = now or datetime.now()
     skips = _load_skips(db_path)
-    skips[project_path] = now.timestamp()
+    prev = skips.get(project_path, {})
+    prev_count = prev.get("count", 0) if isinstance(prev, dict) else 0
+    skips[project_path] = {
+        "timestamp": now.timestamp(),
+        "reason": reason,
+        "count": prev_count + 1,
+    }
     _save_skips(skips, db_path)
 
 
@@ -176,8 +205,12 @@ def _skips_path(db_path: Path | None = None) -> Path:
     return default_db_path().parent / _SKIPS_FILENAME
 
 
-def _load_skips(db_path: Path | None = None) -> dict[str, float]:
-    """Load {project_path: timestamp} from disk."""
+def _load_skips(db_path: Path | None = None) -> dict[str, dict]:
+    """Load skip data from disk.
+
+    Handles both old format {path: timestamp} and new format
+    {path: {timestamp, reason, count}}, migrating old entries on read.
+    """
     path = _skips_path(db_path)
     if not path.exists():
         return {}
@@ -185,12 +218,19 @@ def _load_skips(db_path: Path | None = None) -> dict[str, float]:
         parsed = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(parsed, dict):
             return {}
-        return {k: v for k, v in parsed.items() if isinstance(v, (int, float))}
+        result: dict[str, dict] = {}
+        for k, v in parsed.items():
+            if isinstance(v, (int, float)):
+                # Migrate old format
+                result[k] = {"timestamp": v, "reason": None, "count": 1}
+            elif isinstance(v, dict) and "timestamp" in v:
+                result[k] = v
+        return result
     except (ValueError, OSError):
         return {}
 
 
-def _save_skips(skips: dict[str, float], db_path: Path | None = None) -> None:
+def _save_skips(skips: dict[str, dict], db_path: Path | None = None) -> None:
     """Persist skips to disk."""
     path = _skips_path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)

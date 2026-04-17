@@ -9,23 +9,31 @@ project:
     git: built                    # branch, last_commit_ts, dirty_count, commit_count, work_hours
     readme: built                 # readme_excerpt, adr_paths, note_paths
 
+  signals:                        # ADR 0017 — decision-support signals, all local + <1s
+    commit_velocity: built        # S1 — 4-week commit trend: rising/falling/flat/dead (NEXT + DECIDE)
+    skip_context: partial         # S2 — skip_reason + skip_count — CLI only, not in dashboard
+    dirty_file_age: built         # S3 — oldest mtime among dirty files, live (NEXT + CONTEXT)
+    last_session: built           # S4 — duration of last commit block (<2h gaps), live (CONTEXT)
+    first_commit_date: built      # S5 — enables project_age, intensity, stale_ratio (DECIDE)
+    branch_count: built           # S6 — branch count + has_remote, safety for (DECIDE + ARCHIVE)
+
   discovery:
     search: built                 # ripgrep across all repos (CLI + MCP)
     list: built                   # filtered terminal table
     export: planned               # JSON output — formalize what bridge already does
 
   decisions:
-    next: built                   # momentum / zombie / forgotten gold (CLI + MCP)
-    skip: built                   # hide from next for 30 days
-    context: built                # ADR 0013 — "where was I?" per project (CLI + MCP)
-    decide: planned               # keep / pivot / kill — three buttons, minimal
-    archive: planned              # just a status value — ARCHIVED
+    next: built                   # momentum / zombie / forgotten gold (CLI + MCP) — enriched by S1, S3
+    skip: built                   # hide from next for 30 days — enriched by S2 (reason + count)
+    context: built                # ADR 0013 — "where was I?" per project (CLI + MCP) — enriched by S3, S4, S5, S6
+    decide: planned               # keep / pivot / kill — signals S1, S5, S6 ready
+    archive: planned              # just a status value — ARCHIVED — signal S6 safety check ready
 
   actions:
     open: built                   # launch in Cursor/VS Code/Zed
     scan: built                   # refresh all metadata
     dashboard: built              # Streamlit overview + detail + settings
-    detail_redesign: planned      # ADR 0014 — narrative layout, action buttons top, noise reduction
+    detail_redesign: built        # ADR 0014 — narrative layout, action buttons top, noise reduction
 
   ai_integration:
     mcp_server: built             # armillary_next, armillary_search, armillary_projects, armillary_context

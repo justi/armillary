@@ -95,6 +95,18 @@ class ProjectMetadata(BaseModel):
     adr_paths: list[Path] = Field(default_factory=list)
     note_paths: list[Path] = Field(default_factory=list)
 
+    # Decision signals (ADR 0017) — cached during scan.
+    # S1: 4-week commit velocity [week4, week3, week2, week1].
+    commit_velocity: list[int] | None = None
+    # S1: trend derived from commit_velocity.
+    velocity_trend: str | None = None  # rising / falling / flat / dead
+    # S5: timestamp of the very first commit in the repo.
+    first_commit_ts: datetime | None = None
+    # S6: total number of local branches.
+    branch_count: int | None = None
+    # S6: whether the repo has at least one remote configured.
+    has_remote: bool | None = None
+
     # Computed by `status.compute_status()` after extract; lives here so
     # the cache and dashboard can both read it as part of `ProjectMetadata`.
     status: Status | None = None
