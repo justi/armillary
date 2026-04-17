@@ -155,8 +155,9 @@ def test_builtin_codex_claude_dont_pass_path_as_positional() -> None:
     """Regression for Codex review P2: passing `{path}` to `codex` /
     `claude` makes them treat the project path as an initial prompt."""
     builtins = Config.builtin_launchers()
-    assert builtins["claude-code"].args == []
-    assert builtins["codex"].args == []
+    assert "{path}" not in builtins["claude-code"].args
+    assert "{path}" not in builtins["codex"].args
+    assert "{path}" not in builtins["claude-code-yolo"].args
 
 
 # --- load_config: errors --------------------------------------------------
