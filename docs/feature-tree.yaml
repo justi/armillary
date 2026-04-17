@@ -24,7 +24,7 @@ project:
   discovery:
     search: built                 # ripgrep across all repos (CLI + MCP)
     list: built                   # filtered terminal table
-    export: planned               # JSON output — formalize what bridge already does
+    export: killed                # "bridge already does it, nobody will pipe JSON to jq" — Marc
 
   decisions:
     next: built                   # momentum / zombie / forgotten gold (CLI + MCP) — enriched by S1, S3
@@ -45,6 +45,12 @@ project:
   ai_integration:
     mcp_server: built             # armillary_next, armillary_search, armillary_projects, armillary_context
     claude_bridge: built          # compact repos-index.md (ACTIVE/PAUSED only, 15 max)
+
+  planned:                        # Next wave — validated by panel
+    archive_candidates: planned   # ADR 0019 — 4th category in next: "this should die"
+    purpose_prompts: planned      # ADR 0019 — "why are you closing this?" at archive time
+    weekly_pulse: planned         # ADR 0018 — MCP + CLI retrospective: what changed this week
+    activity_heatmap: planned     # ADR 0020 — GitHub Wrapped for your entire dev life
 
   deferred:
     launch_window: "revisit when users ask — 5% of projects launch"
