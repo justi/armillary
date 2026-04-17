@@ -107,7 +107,7 @@ def test_extract_dirty_count_includes_staged_files(tmp_path: Path) -> None:
 
     Without the staged-vs-HEAD diff, a repo where someone has staged
     files but not yet committed shows dirty_count=0 and the status
-    heuristic mis-classifies it. PLAN.md §5 says PAUSED triggers on
+    heuristic mis-classifies it. PLAN.md §5 says STALLED triggers on
     "dirty files", which staged work obviously is.
     """
     repo = _mk_real_git_repo(tmp_path / "staged")

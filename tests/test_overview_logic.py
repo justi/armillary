@@ -50,7 +50,7 @@ class TestApplyStatusFilter:
     def test_no_selection_shows_active_and_paused(self) -> None:
         rows = [
             _row("a", status="ACTIVE"),
-            _row("b", status="PAUSED"),
+            _row("b", status="STALLED"),
             _row("c", status="DORMANT"),
             _row("d", status="IDEA"),
             _row("e", status="ARCHIVED"),
@@ -97,7 +97,7 @@ class TestApplyStatusFilter:
 
 class TestFindAtRiskProjects:
     def test_paused_with_dirty_and_hours(self) -> None:
-        rows = [_row("wip", status="PAUSED", dirty=3, work_hours=50)]
+        rows = [_row("wip", status="STALLED", dirty=3, work_hours=50)]
         assert len(find_at_risk_projects(rows)) == 1
 
     def test_active_never_at_risk(self) -> None:
@@ -112,17 +112,17 @@ class TestFindAtRiskProjects:
     def test_low_hours_filtered_out(self) -> None:
         """Regression: blog with 0h, flow with 3h should not appear."""
         rows = [
-            _row("blog", status="PAUSED", dirty=1, work_hours=0),
-            _row("flow", status="PAUSED", dirty=2, work_hours=3),
+            _row("blog", status="STALLED", dirty=1, work_hours=0),
+            _row("flow", status="STALLED", dirty=2, work_hours=3),
         ]
         assert find_at_risk_projects(rows) == []
 
     def test_paused_clean_not_at_risk(self) -> None:
-        rows = [_row("clean-pause", status="PAUSED", dirty=0, work_hours=100)]
+        rows = [_row("clean-pause", status="STALLED", dirty=0, work_hours=100)]
         assert find_at_risk_projects(rows) == []
 
     def test_exclude_paths(self) -> None:
-        rows = [_row("wip", status="PAUSED", dirty=2, work_hours=50)]
+        rows = [_row("wip", status="STALLED", dirty=2, work_hours=50)]
         assert find_at_risk_projects(rows, exclude_paths={"/tmp/wip"}) == []
 
     def test_archived_not_at_risk(self) -> None:
@@ -134,7 +134,7 @@ class TestFindAtRiskProjects:
 
 
 class TestDormantExplore:
-    """Regression: default ACTIVE+PAUSED filter must not kill dormant explore."""
+    """Regression: default ACTIVE+STALLED filter must not kill dormant explore."""
 
     def test_dormant_explore_bypasses_default_filter(self) -> None:
         rows = [

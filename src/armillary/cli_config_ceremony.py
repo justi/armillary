@@ -61,7 +61,7 @@ def run_initial_scan_and_summary(
     if status_counts:
         order = [
             Status.ACTIVE,
-            Status.PAUSED,
+            Status.STALLED,
             Status.DORMANT,
             Status.IDEA,
             Status.IN_PROGRESS,

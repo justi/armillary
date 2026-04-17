@@ -17,7 +17,7 @@ from armillary.utils import shorten_home as _shorten_home_impl
 
 _STATUS_EMOJI = {
     "ACTIVE": "🟢",
-    "PAUSED": "🟡",
+    "STALLED": "🟡",
     "DORMANT": "⚫",
     "IDEA": "💭",
     "IN_PROGRESS": "📝",

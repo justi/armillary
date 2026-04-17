@@ -325,14 +325,14 @@ def test_upsert_basic_only_preserves_existing_metadata(
         last_commit_author="Someone",
         dirty_count=5,
         readme_excerpt="hello",
-        status=Status.PAUSED,
+        status=Status.STALLED,
     )
 
     # First: full upsert with metadata
     cache.upsert([project])
     [row] = cache.list_projects()
     assert row.metadata is not None
-    assert row.metadata.status is Status.PAUSED
+    assert row.metadata.status is Status.STALLED
     assert row.metadata.branch == "main"
     assert row.metadata.dirty_count == 5
 
@@ -345,7 +345,7 @@ def test_upsert_basic_only_preserves_existing_metadata(
 
     [row] = cache.list_projects()
     assert row.metadata is not None, "metadata must survive a basic-only upsert"
-    assert row.metadata.status is Status.PAUSED
+    assert row.metadata.status is Status.STALLED
     assert row.metadata.branch == "main"
     assert row.metadata.dirty_count == 5
     assert row.metadata.readme_excerpt == "hello"

@@ -283,7 +283,7 @@ def list_projects(
         None,
         "--status",
         "-s",
-        help="Filter by computed status (ACTIVE, PAUSED, DORMANT, IDEA, IN_PROGRESS).",
+        help="Filter by computed status (ACTIVE, STALLED, DORMANT, IDEA, IN_PROGRESS).",
     ),
 ) -> None:
     """Print the project table from cache, sorted by last modified."""

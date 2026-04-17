@@ -36,7 +36,7 @@ class Status(StrEnum):
     ACTIVE = "ACTIVE"
     """Recent commit or file edit (default cutoff: 7 days)."""
 
-    PAUSED = "PAUSED"
+    STALLED = "STALLED"
     """Dirty working tree but no recent commits."""
 
     DORMANT = "DORMANT"

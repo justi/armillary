@@ -367,13 +367,13 @@ def apply_status_filter(
     rows: list[OverviewRow],
     selected: list[str],
 ) -> list[OverviewRow]:
-    """Filter rows by status. No selection = ACTIVE + PAUSED default.
+    """Filter rows by status. No selection = ACTIVE + STALLED default.
 
     Pure function — testable without Streamlit.
     """
     if selected:
         return [r for r in rows if r.status_raw in selected]
-    return [r for r in rows if r.status_raw in ("ACTIVE", "PAUSED")]
+    return [r for r in rows if r.status_raw in ("ACTIVE", "STALLED")]
 
 
 def find_at_risk_projects(
@@ -381,7 +381,7 @@ def find_at_risk_projects(
     *,
     exclude_paths: set[str] | None = None,
 ) -> list[OverviewRow]:
-    """PAUSED + dirty + >10h = uncommitted work at risk.
+    """STALLED + dirty + >10h = uncommitted work at risk.
 
     Pure function — testable without Streamlit.
     """
@@ -389,7 +389,7 @@ def find_at_risk_projects(
     return [
         r
         for r in rows
-        if r.status_raw == "PAUSED"
+        if r.status_raw == "STALLED"
         and r.dirty
         and r.dirty > 0
         and r.work_hours

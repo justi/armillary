@@ -105,6 +105,6 @@ def test_filter_archived_uses_override_not_just_cache(
 def test_filter_archived_keeps_all_when_none_archived() -> None:
     projects = [
         _project("a", status=Status.ACTIVE),
-        _project("b", status=Status.PAUSED),
+        _project("b", status=Status.STALLED),
     ]
     assert len(filter_archived(projects)) == 2

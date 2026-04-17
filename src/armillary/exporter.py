@@ -2,7 +2,7 @@
 
 The bridge file is loaded into every Claude Code conversation via
 `@armillary/repos-index.md` in `~/.claude/CLAUDE.md`. It must be small:
-only ACTIVE/PAUSED projects, minimal columns (Status + Path), max 15 rows.
+only ACTIVE/STALLED projects, minimal columns (Status + Path), max 15 rows.
 For the full project list, agents use the `armillary_projects` MCP tool.
 
 The exporter reads from the SQLite cache, never from disk.
@@ -25,7 +25,7 @@ _COLUMNS: tuple[tuple[str, str], ...] = (
     ("Path", "path"),
 )
 
-_VISIBLE_STATUSES: frozenset[Status] = frozenset({Status.ACTIVE, Status.PAUSED})
+_VISIBLE_STATUSES: frozenset[Status] = frozenset({Status.ACTIVE, Status.STALLED})
 
 _MAX_ROWS = 15
 
@@ -38,7 +38,7 @@ def render_repos_index(
 ) -> str:
     """Render a compact markdown table for the Claude Code bridge.
 
-    Only ACTIVE/PAUSED projects are shown (up to 15). Paths are
+    Only ACTIVE/STALLED projects are shown (up to 15). Paths are
     shortened with ``~``. A footer notes hidden projects and points
     to the MCP tool for the full list.
     """
@@ -65,7 +65,7 @@ def render_repos_index(
         lines.append("")
         return "\n".join(lines)
 
-    lines.append(f"**{len(visible)}** ACTIVE/PAUSED project(s).")
+    lines.append(f"**{len(visible)}** ACTIVE/STALLED project(s).")
     lines.append("")
 
     headers = [h for h, _ in _COLUMNS]

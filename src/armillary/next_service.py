@@ -3,7 +3,7 @@
 Three categories of suggestions:
 - **Momentum** — ACTIVE + recent commits → "continue"
 - **Zombie** — ACTIVE but no commit in >7 days → "kill or ship"
-- **Forgotten gold** — DORMANT/PAUSED with >50h invested → "finish with AI or archive"
+- **Forgotten gold** — DORMANT/STALLED with >50h invested → "finish with AI or archive"
 
 Skip mechanism: projects can be dismissed for 30 days.
 """
@@ -187,8 +187,8 @@ def _evaluate(project: Project, now: datetime) -> Suggestion | None:
             project=project, category="zombie", reason=reason, score=score
         )
 
-    # Forgotten gold: DORMANT/PAUSED with significant work
-    if status in (Status.DORMANT, Status.PAUSED) and hours >= _GOLD_MIN_HOURS:
+    # Forgotten gold: DORMANT/STALLED with significant work
+    if status in (Status.DORMANT, Status.STALLED) and hours >= _GOLD_MIN_HOURS:
         months_since = days_since / 30
         score = hours * 0.3 * (1 / max(months_since, 0.1))
         months_rounded = round(months_since)
@@ -207,7 +207,7 @@ def _evaluate(project: Project, now: datetime) -> Suggestion | None:
     # Archive candidate: low-effort project with dead velocity (ADR 0019)
     velocity = md.velocity_trend
     if (
-        status in (Status.ACTIVE, Status.PAUSED, Status.DORMANT)
+        status in (Status.ACTIVE, Status.STALLED, Status.DORMANT)
         and velocity == "dead"
         and hours < _GOLD_MIN_HOURS
         and dirty == 0

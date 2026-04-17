@@ -3,7 +3,7 @@
 The labels answer "where does this project stand?":
 
 - ACTIVE       — recent commit OR recent file edit (default ≤ 7 days)
-- PAUSED       — dirty working tree, last commit between 7 and 30 days
+- STALLED       — dirty working tree, last commit between 7 and 30 days
 - DORMANT      — nothing has happened for 30+ days
 - IDEA         — loose folder with no git history
 - IN_PROGRESS  — IDEA folder containing a TODO.md with open `[ ]` items
@@ -21,7 +21,7 @@ from pathlib import Path
 from .models import Project, ProjectType, Status
 
 DEFAULT_ACTIVE_DAYS = 7
-DEFAULT_PAUSED_DAYS = 30
+DEFAULT_STALLED_DAYS = 30
 
 
 def compute_status(
@@ -29,7 +29,7 @@ def compute_status(
     *,
     now: datetime | None = None,
     active_days: int = DEFAULT_ACTIVE_DAYS,
-    paused_days: int = DEFAULT_PAUSED_DAYS,
+    paused_days: int = DEFAULT_STALLED_DAYS,
 ) -> Status:
     """Classify a single project.
 
@@ -60,9 +60,9 @@ def compute_status(
     if age <= timedelta(days=active_days):
         return Status.ACTIVE
     if dirty_count > 0 and age <= timedelta(days=paused_days):
-        return Status.PAUSED
+        return Status.STALLED
     # Anything older than active_days with no dirty work in progress is
-    # DORMANT — including the 7-30 day "clean and quiet" window. PAUSED
+    # DORMANT — including the 7-30 day "clean and quiet" window. STALLED
     # is reserved for "I left work in progress and walked away".
     return Status.DORMANT
 

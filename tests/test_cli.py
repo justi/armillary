@@ -1111,7 +1111,7 @@ def test_config_init_summary_counts_status_correctly(
 
     out = _strip_ansi(result.stdout)
     assert "1 git, 1 idea" in out
-    # Status line is "N ACTIVE, M PAUSED, ..."
+    # Status line is "N ACTIVE, M STALLED, ..."
     assert "ACTIVE" in out
     assert "DORMANT" in out or "IDEA" in out  # at least one status counted
 

@@ -1,6 +1,6 @@
 """Tests for `armillary.exporter` — compact bridge index + Claude bridge install.
 
-The bridge file is always compact: only ACTIVE/PAUSED projects, Status + Path
+The bridge file is always compact: only ACTIVE/STALLED projects, Status + Path
 columns, max 15 rows, paths shortened with ~.
 """
 
@@ -47,14 +47,14 @@ def test_render_empty_cache() -> None:
 def test_render_shows_only_active_and_paused() -> None:
     projects = [
         _project("active1", metadata=ProjectMetadata(status=Status.ACTIVE)),
-        _project("paused1", metadata=ProjectMetadata(status=Status.PAUSED)),
+        _project("paused1", metadata=ProjectMetadata(status=Status.STALLED)),
         _project("dormant1", metadata=ProjectMetadata(status=Status.DORMANT)),
         _project(
             "idea1", type=ProjectType.IDEA, metadata=ProjectMetadata(status=Status.IDEA)
         ),
     ]
     out = render_repos_index(projects, generated_at=_NOW)
-    assert "**2** ACTIVE/PAUSED project(s)" in out
+    assert "**2** ACTIVE/STALLED project(s)" in out
     assert "/tmp/active1" in out
     assert "/tmp/paused1" in out
     assert "/tmp/dormant1" not in out
@@ -67,7 +67,7 @@ def test_render_caps_at_15_rows() -> None:
         for i in range(20)
     ]
     out = render_repos_index(projects, generated_at=_NOW)
-    assert "**15** ACTIVE/PAUSED project(s)" in out
+    assert "**15** ACTIVE/STALLED project(s)" in out
     assert "/tmp/proj-14" in out
     assert "/tmp/proj-15" not in out
     assert "+5 hidden" in out
@@ -152,7 +152,7 @@ def test_write_roundtrip_through_real_cache(tmp_path: Path) -> None:
     assert written == 2  # total in cache
     assert output.exists()
     text = output.read_text(encoding="utf-8")
-    assert "**1** ACTIVE/PAUSED project(s)" in text
+    assert "**1** ACTIVE/STALLED project(s)" in text
     assert "/tmp/alpha" in text
     assert "/tmp/beta" not in text  # dormant filtered out
 

@@ -61,7 +61,7 @@ def test_active_when_recent_filesystem_edit_without_metadata() -> None:
 def test_dormant_when_clean_tree_in_paused_window() -> None:
     """Between active and paused cutoffs with a clean tree → DORMANT.
 
-    PAUSED is reserved for repos with dirty files (PLAN.md §5: "PAUSED
+    STALLED is reserved for repos with dirty files (PLAN.md §5: "STALLED
     — dirty files + last commit 7-30 days ago"). A clean repo nobody
     has touched is just DORMANT regardless of whether it crossed the
     30-day mark yet.
@@ -73,7 +73,7 @@ def test_dormant_when_clean_tree_in_paused_window() -> None:
     assert compute_status(_git_project(metadata=md), now=NOW) is Status.DORMANT
 
 
-# --- PAUSED ---------------------------------------------------------------
+# --- STALLED ---------------------------------------------------------------
 
 
 def test_paused_when_dirty_in_window() -> None:
@@ -81,11 +81,11 @@ def test_paused_when_dirty_in_window() -> None:
         last_commit_ts=NOW - timedelta(days=14),
         dirty_count=3,
     )
-    assert compute_status(_git_project(metadata=md), now=NOW) is Status.PAUSED
+    assert compute_status(_git_project(metadata=md), now=NOW) is Status.STALLED
 
 
 def test_paused_only_when_within_paused_cutoff() -> None:
-    """Dirty + 31 days → DORMANT, not PAUSED."""
+    """Dirty + 31 days → DORMANT, not STALLED."""
     md = ProjectMetadata(
         last_commit_ts=NOW - timedelta(days=31),
         dirty_count=5,
@@ -169,8 +169,8 @@ def test_custom_paused_days_overrides_default() -> None:
 
     # default cutoff (30d) → DORMANT
     assert compute_status(p, now=NOW) is Status.DORMANT
-    # extended cutoff → PAUSED
-    assert compute_status(p, now=NOW, paused_days=60) is Status.PAUSED
+    # extended cutoff → STALLED
+    assert compute_status(p, now=NOW, paused_days=60) is Status.STALLED
 
 
 def test_manual_override_takes_precedence(

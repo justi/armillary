@@ -89,7 +89,7 @@ def generate_pulse(
 
         # Dirty files aging > 7 days
         if (
-            md.status in (Status.PAUSED, Status.ACTIVE)
+            md.status in (Status.STALLED, Status.ACTIVE)
             and md.dirty_count
             and md.dirty_count > 0
             and md.work_hours

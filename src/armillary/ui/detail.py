@@ -163,7 +163,7 @@ def _render_project_detail(project_path: str) -> None:
             and md
             and md.status
             in (
-                Status.PAUSED,
+                Status.STALLED,
                 Status.DORMANT,
             )
         )
@@ -212,7 +212,7 @@ def _render_project_detail(project_path: str) -> None:
     st.markdown("---")
     st.subheader("Reference", anchor=False)
 
-    is_dormant = md and md.status in (Status.DORMANT, Status.PAUSED)
+    is_dormant = md and md.status in (Status.DORMANT, Status.STALLED)
 
     if md and md.readme_excerpt:
         with st.expander(
@@ -238,13 +238,13 @@ def _render_project_detail(project_path: str) -> None:
     # --- Collapsed details (path, umbrella, stats) ---
     _render_details_expander(project)
 
-    # --- Archive action for ACTIVE projects (PAUSED/DORMANT have it at top) ---
+    # --- Archive action for ACTIVE projects (STALLED/DORMANT have it at top) ---
     if (
         not is_archived
         and md
         and md.status
         not in (
-            Status.PAUSED,
+            Status.STALLED,
             Status.DORMANT,
         )
     ):
