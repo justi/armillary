@@ -45,6 +45,10 @@ def _render_overview() -> None:
     if not dormant_explore:
         _render_next_suggestions()
 
+    # Zombie alert — ACTIVE projects going stale (M3)
+    if not dormant_explore:
+        _render_zombie_alert_dashboard(rows)
+
     # "Dying projects" hook — below next, excludes already-suggested projects
     if not dormant_explore:
         from armillary.next_service import get_suggestions
@@ -317,6 +321,30 @@ def _spark_char(value: int, all_values: list[int]) -> str:
     """Single sparkline character for a value within a series."""
     peak = max(all_values) or 1
     return _SPARK_CHARS[min(int(value / peak * 7), 7)]
+
+
+def _render_zombie_alert_dashboard(rows: list[OverviewRow]) -> None:
+    """Zombie alert in dashboard — mirrors CLI _print_zombie_alert."""
+    from datetime import datetime, timedelta
+
+    cutoff = datetime.now() - timedelta(days=14)
+    zombies = [
+        r
+        for r in rows
+        if r.status_raw == "ACTIVE"
+        and r.last_modified < cutoff
+        and r.work_hours
+        and r.work_hours > 10
+    ]
+    if zombies:
+        names = ", ".join(r.name for r in zombies[:3])
+        more = f" +{len(zombies) - 3}" if len(zombies) > 3 else ""
+        st.warning(
+            f"**{len(zombies)} zombie"
+            f"{'s' if len(zombies) > 1 else ''}: "
+            f"{names}{more}** \u2014 no commit in 14+ days",
+            icon=":material/warning:",
+        )
 
 
 def _render_dying_metric(
@@ -652,6 +680,8 @@ def _render_table(rows: list[OverviewRow]) -> None:
             "Last": st.column_config.TextColumn("Last", width="small"),
         },
     )
+
+    st.caption("Select multiple rows to bulk archive")
 
     selection = getattr(event, "selection", None)
     selected_indices = getattr(selection, "rows", []) if selection else []

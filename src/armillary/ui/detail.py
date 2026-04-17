@@ -382,6 +382,7 @@ def _render_header_with_launcher(project: Project) -> None:
     )
 
     last_convo = get_last_conversation(str(project.path))
+    st.caption("Last talked to user:")
     new_convo = st.text_input(
         "Last talked to user",
         value=last_convo or "",
@@ -397,17 +398,19 @@ def _render_header_with_launcher(project: Project) -> None:
     from armillary.purpose_service import get_revenue, set_revenue
 
     current_rev = get_revenue(str(project.path))
-    new_rev = st.number_input(
-        "Monthly revenue (USD)",
-        value=current_rev or 0,
-        min_value=0,
-        step=10,
-        key=f"revenue_{project.path}",
-        label_visibility="collapsed",
-        help="Monthly revenue in USD. $0 = no revenue.",
-    )
-    if new_rev != (current_rev or 0):
-        set_revenue(str(project.path), int(new_rev))
+    if current_rev is not None:
+        st.caption(f"Revenue: ${current_rev}/mo")
+    with st.expander("Set revenue", expanded=False):
+        new_rev = st.number_input(
+            "Monthly revenue (USD)",
+            value=current_rev or 0,
+            min_value=0,
+            step=10,
+            key=f"revenue_{project.path}",
+        )
+        if st.button("Save", key=f"save_rev_{project.path}"):
+            set_revenue(str(project.path), int(new_rev))
+            st.rerun()
         st.rerun()
 
 
