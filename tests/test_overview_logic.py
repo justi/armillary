@@ -9,10 +9,14 @@ the Streamlit rendering. Catches regressions like:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from armillary.ui.helpers import OverviewRow
-from armillary.ui.overview import apply_status_filter, find_at_risk_projects
+from armillary.ui.overview import (
+    apply_status_filter,
+    find_at_risk_projects,
+    group_by_time,
+)
 
 
 def _row(
@@ -22,6 +26,7 @@ def _row(
     dirty: int | None = 0,
     work_hours: float | None = 100,
     path: str | None = None,
+    last_modified: datetime | None = None,
 ) -> OverviewRow:
     return OverviewRow(
         status_label=f"🟢 {status}",
@@ -33,7 +38,7 @@ def _row(
         commits=50,
         work_hours=work_hours,
         umbrella="~/Projects",
-        last_modified=datetime.now(),
+        last_modified=last_modified or datetime.now(),
         path=path or f"/tmp/{name}",
     )
 
@@ -150,3 +155,37 @@ class TestDormantExplore:
         ]
         filtered = apply_status_filter(rows, [])
         assert all(r.status_raw != "DORMANT" for r in filtered)
+
+
+# --- time-based grouping ---
+
+
+class TestGroupByTime:
+    def test_groups_by_recency(self) -> None:
+        now = datetime.now()
+        rows = [
+            _row("recent", last_modified=now - timedelta(days=5)),
+            _row("mid", last_modified=now - timedelta(days=100)),
+            _row("old", last_modified=now - timedelta(days=500)),
+        ]
+        groups = group_by_time(rows)
+        assert [r.name for r in groups["last_month"]] == ["recent"]
+        assert [r.name for r in groups["last_year"]] == ["mid"]
+        assert [r.name for r in groups["older"]] == ["old"]
+
+    def test_empty_groups_have_empty_lists(self) -> None:
+        now = datetime.now()
+        rows = [_row("recent", last_modified=now - timedelta(days=1))]
+        groups = group_by_time(rows)
+        assert len(groups["last_month"]) == 1
+        assert groups["last_year"] == []
+        assert groups["older"] == []
+
+    def test_all_projects_accounted_for(self) -> None:
+        now = datetime.now()
+        rows = [
+            _row(f"p{i}", last_modified=now - timedelta(days=i * 50)) for i in range(10)
+        ]
+        groups = group_by_time(rows)
+        total = sum(len(v) for v in groups.values())
+        assert total == len(rows)

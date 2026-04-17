@@ -54,28 +54,31 @@ def _render_overview() -> None:
 
     _render_dormant_banner(rows, exploring=dormant_explore)
 
-    # Apply filters — dormant explore bypasses default ACTIVE+PAUSED filter
+    # Apply filters — dormant explore bypasses normal filter
     if dormant_explore:
         filtered = [r for r in rows if r.status_raw == "DORMANT"]
         filtered.sort(key=lambda r: r.work_hours or 0, reverse=True)
-    else:
-        filtered = _apply_filters(rows, filters=filters)
-
-    # Subtitle — simple count of what's visible
-    if dormant_explore:
         total_hours = sum(r.work_hours or 0 for r in filtered)
         st.caption(f"{len(filtered)} dormant projects \u00b7 {total_hours:.0f}h total")
-    else:
+        if filtered:
+            _render_table(filtered)
+        else:
+            st.warning("No dormant projects.")
+    elif filters["status"]:
+        # Explicit status selection — flat table
+        filtered = apply_status_filter(rows, filters["status"])
         st.caption(f"{len(filtered)} projects")
+        if filtered:
+            _render_table(filtered)
+        else:
+            st.warning("No projects match the current filters.")
+    else:
+        # Default: all projects (except ARCHIVED) in time groups
+        all_visible = [r for r in rows if r.status_raw != "ARCHIVED"]
+        _render_time_grouped_tables(all_visible)
 
-    if not filtered:
-        st.warning("No projects match the current filters.")
-        return
-
-    _render_table(filtered)
-
-    # Search bar below table — utility, not hero
-    _render_search_section(filtered, cfg)
+    # Search bar below table
+    _render_search_section([r for r in rows if r.status_raw != "ARCHIVED"], cfg)
 
 
 def _render_header() -> None:
@@ -339,12 +342,59 @@ def find_at_risk_projects(
     ]
 
 
+def group_by_time(
+    rows: list[OverviewRow],
+) -> dict[str, list[OverviewRow]]:
+    """Split rows into 'last_month', 'last_year', 'older'.
+
+    Pure function — testable without Streamlit.
+    """
+    from datetime import datetime, timedelta
+
+    now = datetime.now()
+    month_ago = now - timedelta(days=30)
+    year_ago = now - timedelta(days=365)
+    return {
+        "last_month": [r for r in rows if r.last_modified >= month_ago],
+        "last_year": [r for r in rows if month_ago > r.last_modified >= year_ago],
+        "older": [r for r in rows if r.last_modified < year_ago],
+    }
+
+
 def _apply_filters(
     rows: list[OverviewRow],
     *,
     filters: dict[str, list[str] | str],
 ) -> list[OverviewRow]:
     return apply_status_filter(rows, filters["status"])
+
+
+def _render_time_grouped_tables(rows: list[OverviewRow]) -> None:
+    """Show projects in time groups: last month, last year, older.
+
+    Only non-empty groups are rendered. Each gets a subheader + table.
+    """
+    from datetime import datetime, timedelta
+
+    now = datetime.now()
+    month_ago = now - timedelta(days=30)
+    year_ago = now - timedelta(days=365)
+
+    this_month = [r for r in rows if r.last_modified >= month_ago]
+    this_year = [r for r in rows if month_ago > r.last_modified >= year_ago]
+    older = [r for r in rows if r.last_modified < year_ago]
+
+    if this_month:
+        st.caption(f"Last month \u2014 {len(this_month)} projects")
+        _render_table(this_month)
+    if this_year:
+        st.caption(f"Last year \u2014 {len(this_year)} projects")
+        _render_table(this_year)
+    if older:
+        st.caption(f"Older \u2014 {len(older)} projects")
+        _render_table(older)
+    if not rows:
+        st.warning("No projects in cache.")
 
 
 def _render_table(rows: list[OverviewRow]) -> None:
