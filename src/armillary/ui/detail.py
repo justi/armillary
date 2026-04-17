@@ -137,6 +137,7 @@ def _render_project_detail(project_path: str) -> None:
         from armillary.status_override import set_override
 
         set_override(str(project.path), Status.ARCHIVED)
+        st.toast(f"Archived {project.name}")
         st.rerun()
 
     # --- Skip history (S2) ---
@@ -150,7 +151,7 @@ def _render_project_detail(project_path: str) -> None:
             icon=":material/archive:",
         )
         if st.button(
-            "Activate — return to auto-computed status",
+            "Reactivate",
             key="detail_activate",
             icon=":material/unarchive:",
             type="primary",
@@ -242,6 +243,7 @@ def _render_project_detail(project_path: str) -> None:
             from armillary.status_override import set_override
 
             set_override(str(project.path), Status.ARCHIVED)
+            st.toast(f"Archived {project.name}")
             st.rerun()
 
 
@@ -380,8 +382,7 @@ def _render_dirty_or_clean(ctx: object) -> None:
         if ctx.dirty_max_age_seconds is not None:
             age_hint = f" \u2014 {_format_age(ctx.dirty_max_age_seconds)} stale"
         st.warning(
-            f"**{ctx.dirty_count} uncommitted file{s}{age_hint}** "
-            "\u2014 commit or stash before switching",
+            f"**{ctx.dirty_count} uncommitted file{s}{age_hint}**",
             icon=":material/edit_note:",
         )
         with st.expander("Uncommitted files", expanded=ctx.dirty_count <= 5):

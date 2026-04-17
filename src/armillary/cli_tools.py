@@ -331,7 +331,7 @@ def archive_command(
 def activate_command(
     names: list[str] = typer.Argument(..., help="Project name(s) to activate."),
 ) -> None:
-    """Restore a project from archived — return to auto-computed status.
+    """Restore a project from archived — return to automatic status.
 
     Clears any manual status override so the project's status is
     determined by git activity again.
@@ -361,13 +361,13 @@ def activate_command(
         project = matches[0]
         if get_override(str(project.path)) is None:
             typer.secho(
-                f"{project.name} has no manual override — already auto-computed.",
+                f"{project.name} has no manual override — already automatic.",
                 fg=typer.colors.YELLOW,
             )
             continue
         clear_override(str(project.path))
         typer.secho(
-            f"Activated {project.name} — status is now auto-computed.",
+            f"Activated {project.name} — status is now automatic.",
             fg=typer.colors.GREEN,
         )
 
