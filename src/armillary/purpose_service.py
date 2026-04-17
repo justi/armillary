@@ -94,3 +94,40 @@ def set_archive_reason(project_path: str, reason: str) -> None:
 def get_archive_reason(project_path: str) -> str | None:
     """Get the archive reason for a project."""
     return load_archive_reasons().get(project_path)
+
+
+# --- Last conversation date (ADR 0022 M1) ---
+
+_CONVERSATIONS_FILENAME = "last-conversations.json"
+
+
+def _conversations_path() -> Path:
+    return default_db_path().parent / _CONVERSATIONS_FILENAME
+
+
+def load_conversations() -> dict[str, str]:
+    """Load {project_path: ISO date string} from disk."""
+    path = _conversations_path()
+    if not path.exists():
+        return {}
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(parsed, dict):
+            return {k: v for k, v in parsed.items() if isinstance(v, str)}
+    except (ValueError, OSError):
+        pass
+    return {}
+
+
+def set_last_conversation(project_path: str, date_str: str) -> None:
+    """Record when you last talked to a user about this project."""
+    convos = load_conversations()
+    convos[project_path] = date_str.strip()
+    path = _conversations_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(convos, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def get_last_conversation(project_path: str) -> str | None:
+    """Get the last conversation date for a project."""
+    return load_conversations().get(project_path)

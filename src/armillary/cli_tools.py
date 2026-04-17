@@ -432,6 +432,46 @@ def purpose_command(
         )
 
 
+@app.command("talked")
+def talked_command(
+    project_name: str = typer.Argument(..., help="Project name."),
+    date: str | None = typer.Argument(None, help="Date (YYYY-MM-DD). Omit for today."),
+) -> None:
+    """Record when you last talked to a user about this project."""
+    from datetime import date as date_type
+
+    from armillary.purpose_service import (
+        set_last_conversation,
+    )
+
+    with Cache() as cache:
+        projects = cache.list_projects()
+    matches = [p for p in projects if project_name.lower() in p.name.lower()]
+    if not matches:
+        typer.secho(
+            f"No project matches '{project_name}'.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2)
+    if len(matches) > 1:
+        exact = [p for p in matches if p.name.lower() == project_name.lower()]
+        if len(exact) == 1:
+            matches = exact
+        else:
+            names = ", ".join(p.name for p in matches[:5])
+            typer.secho(f"Ambiguous: {names}.", fg=typer.colors.RED, err=True)
+            raise typer.Exit(2)
+
+    project = matches[0]
+    date_str = date or date_type.today().isoformat()
+    set_last_conversation(str(project.path), date_str)
+    typer.secho(
+        f"Recorded: last talked to user about {project.name} on {date_str}",
+        fg=typer.colors.GREEN,
+    )
+
+
 def _format_age(seconds: float) -> str:
     """Human-readable age from seconds (e.g. '3 days', '2h')."""
     if seconds < 3600:
@@ -626,6 +666,13 @@ def context_command(
     if ctx.unmerged_branches:
         for b in ctx.unmerged_branches[:5]:
             console.print(f"    [dim yellow]{b}[/dim yellow]")
+
+    # Last user conversation
+    from armillary.purpose_service import get_last_conversation
+
+    last_convo = get_last_conversation(str(ctx.path))
+    if last_convo:
+        console.print(f"\n  [dim]Last user conversation: {last_convo}[/dim]")
 
     # Actionable hint
     if ctx.dirty_count > 0:

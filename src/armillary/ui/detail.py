@@ -370,6 +370,24 @@ def _render_header_with_launcher(project: Project) -> None:
     if info_parts:
         st.caption(" \u00b7 ".join(info_parts))
 
+    # Last user conversation (ADR 0022 M1)
+    from armillary.purpose_service import (
+        get_last_conversation,
+        set_last_conversation,
+    )
+
+    last_convo = get_last_conversation(str(project.path))
+    new_convo = st.text_input(
+        "Last talked to user",
+        value=last_convo or "",
+        placeholder="YYYY-MM-DD",
+        key=f"last_convo_{project.path}",
+        label_visibility="collapsed",
+    )
+    if new_convo != (last_convo or "") and new_convo:
+        set_last_conversation(str(project.path), new_convo)
+        st.rerun()
+
 
 def _render_launcher_compact(project: Project, cfg: Config) -> None:
     """Compact launcher: selectbox + Open button, top-right."""

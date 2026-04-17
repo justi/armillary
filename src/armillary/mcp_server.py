@@ -350,6 +350,12 @@ def armillary_context(project_name: str) -> str:
     if purpose:
         result["purpose"] = purpose
 
+    from armillary.purpose_service import get_last_conversation
+
+    last_convo = get_last_conversation(str(ctx.path))
+    if last_convo:
+        result["last_user_conversation"] = last_convo
+
     return json.dumps(result, separators=(",", ":"), default=str)
 
 
