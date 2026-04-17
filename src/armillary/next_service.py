@@ -182,7 +182,8 @@ def _evaluate(project: Project, now: datetime) -> Suggestion | None:
         months_since = days_since / 30
         score = hours * 0.3 * (1 / max(months_since, 0.1))
         reason = (
-            f"{hours:.0f}h invested, abandoned {months_since:.0f} month(s) ago. "
+            f"{hours:.0f}h invested, abandoned {months_since:.0f} "
+            f"{'month' if months_since == 1 else 'months'} ago. "
             f"Finish with AI or archive?"
         )
         return Suggestion(

@@ -42,12 +42,15 @@ def _render_overview() -> None:
     # Check if dormant explore mode is active
     dormant_explore = st.session_state.get("_dormant_explore", False)
 
-    # "Dying projects" hook — Harry Dry: one number that hurts
-    if not dormant_explore:
-        _render_dying_metric(rows)
-
     if not dormant_explore:
         _render_next_suggestions()
+
+    # "Dying projects" hook — below next, excludes already-suggested projects
+    if not dormant_explore:
+        from armillary.next_service import get_suggestions
+
+        suggested_paths = {str(s.project.path) for s in get_suggestions()}
+        _render_dying_metric(rows, exclude_paths=suggested_paths)
 
     _render_dormant_banner(rows, exploring=dormant_explore)
 
@@ -258,13 +261,13 @@ def _spark_char(value: int, all_values: list[int]) -> str:
     return _SPARK_CHARS[min(int(value / peak * 7), 7)]
 
 
-def _render_dying_metric(rows: list[OverviewRow]) -> None:
-    """'Projects needing a decision' — specific, actionable (Harry Dry).
-
-    Zombies = ACTIVE but no activity in >7 days (about to go dormant).
-    These are the projects where you're losing momentum RIGHT NOW.
-    Small number = actionable. Large number = noise.
-    """
+def _render_dying_metric(
+    rows: list[OverviewRow],
+    *,
+    exclude_paths: set[str] | None = None,
+) -> None:
+    """'Projects needing a decision' — excludes projects already in next."""
+    skip = exclude_paths or set()
     zombies = [
         r
         for r in rows
@@ -273,10 +276,12 @@ def _render_dying_metric(rows: list[OverviewRow]) -> None:
         and r.dirty == 0
         and r.work_hours
         and r.work_hours > 10
+        and r.path not in skip
     ]
-    # Also count PAUSED with old dirty files (forgotten WIP)
     forgotten_wip = [
-        r for r in rows if r.status_raw == "PAUSED" and r.dirty and r.dirty > 0
+        r
+        for r in rows
+        if r.status_raw == "PAUSED" and r.dirty and r.dirty > 0 and r.path not in skip
     ]
     total = len(zombies) + len(forgotten_wip)
 

@@ -118,6 +118,27 @@ def _render_project_detail(project_path: str) -> None:
     else:
         _render_header_with_launcher(project)
 
+    # --- Archive button (prominent for stale projects) ---
+    show_archive_top = (
+        not is_archived
+        and md
+        and md.status
+        in (
+            Status.PAUSED,
+            Status.DORMANT,
+        )
+    )
+    if show_archive_top and st.button(
+        "Archive this project",
+        key="detail_archive_top",
+        icon=":material/archive:",
+        type="secondary",
+    ):
+        from armillary.status_override import set_override
+
+        set_override(str(project.path), Status.ARCHIVED)
+        st.rerun()
+
     # --- Skip history (S2) ---
     _render_skip_history(project)
 
@@ -201,8 +222,16 @@ def _render_project_detail(project_path: str) -> None:
     # --- Collapsed details (path, umbrella, stats) ---
     _render_details_expander(project)
 
-    # --- Archive action (non-archived projects only) ---
-    if not is_archived:
+    # --- Archive action for ACTIVE projects (PAUSED/DORMANT have it at top) ---
+    if (
+        not is_archived
+        and md
+        and md.status
+        not in (
+            Status.PAUSED,
+            Status.DORMANT,
+        )
+    ):
         st.markdown("---")
         if st.button(
             "Archive this project",
