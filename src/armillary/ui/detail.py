@@ -190,6 +190,17 @@ def _render_header_with_launcher(project: Project) -> None:
     col_title, col_launcher = st.columns([5, 2])
     with col_title:
         st.title(f"{project.name}{status_str}")
+        # Purpose or README one-liner
+        from armillary.purpose_service import get_purpose
+
+        purpose = get_purpose(str(project.path))
+        if purpose:
+            st.caption(f"*{purpose}*")
+        elif md and md.readme_excerpt:
+            excerpt = md.readme_excerpt
+            dot = excerpt.find(". ")
+            oneliner = excerpt[: dot + 1] if 0 < dot < 80 else excerpt[:80]
+            st.caption(f"*{oneliner}*")
         # S5: project age + intensity
         _render_project_age(md)
     with col_launcher:
@@ -197,8 +208,23 @@ def _render_header_with_launcher(project: Project) -> None:
         if cfg is not None and cfg.launchers:
             _render_launcher_compact(project, cfg)
 
+    # Trend + days since + sparkline in one info row
+    info_parts: list[str] = []
     if trend_str:
-        st.caption(trend_str)
+        info_parts.append(trend_str)
+    if md and md.last_commit_ts:
+        from datetime import datetime
+
+        days_ago = (datetime.now() - md.last_commit_ts).days
+        if days_ago > 90:
+            info_parts.append(f":material/error: **{days_ago}d** since last commit")
+        elif days_ago > 30:
+            info_parts.append(f":material/warning: **{days_ago}d** since last commit")
+    if md and md.monthly_commits and any(c > 0 for c in md.monthly_commits):
+        spark = _sparkline_text(md.monthly_commits)
+        info_parts.append(f"Activity {spark} (6mo)")
+    if info_parts:
+        st.caption(" \u00b7 ".join(info_parts))
 
 
 def _render_launcher_compact(project: Project, cfg: Config) -> None:
@@ -395,6 +421,17 @@ def _git_log_recent(repo_path: Path, *, limit: int = 5) -> list[dict[str, str]]:
             }
         )
     return commits
+
+
+_SPARK_CHARS = " \u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
+
+
+def _sparkline_text(values: list[int]) -> str:
+    """Render a list of ints as a unicode sparkline."""
+    if not values:
+        return ""
+    peak = max(values) or 1
+    return "".join(_SPARK_CHARS[min(int(v / peak * 7), 7)] for v in values)
 
 
 def _format_age(seconds: float) -> str:

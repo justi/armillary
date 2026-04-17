@@ -102,6 +102,8 @@ class ProjectMetadata(BaseModel):
     velocity_trend: str | None = None  # rising / falling / flat / dead
     # S5: timestamp of the very first commit in the repo.
     first_commit_ts: datetime | None = None
+    # Monthly activity: commit counts per month, last 6 months [oldest..newest].
+    monthly_commits: list[int] | None = None
     # S6: total number of local branches.
     branch_count: int | None = None
     # S6: whether the repo has at least one remote configured.

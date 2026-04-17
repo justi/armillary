@@ -458,6 +458,7 @@ def _row_to_metadata(row: sqlite3.Row) -> ProjectMetadata | None:
             if extra.get("first_commit_ts")
             else None
         ),
+        monthly_commits=extra.get("monthly_commits"),
         branch_count=extra.get("branch_count"),
         has_remote=extra.get("has_remote"),
         status=Status(row["status"]) if row["status"] else None,
@@ -483,6 +484,7 @@ def _serialize_metadata_extra(md: ProjectMetadata) -> str | None:
         "first_commit_ts": (
             md.first_commit_ts.timestamp() if md.first_commit_ts else None
         ),
+        "monthly_commits": md.monthly_commits,
         "branch_count": md.branch_count,
         "has_remote": md.has_remote,
     }

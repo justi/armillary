@@ -288,6 +288,17 @@ def armillary_context(project_name: str) -> str:
             result["branch_count"] = ctx.branch_count
         if ctx.has_remote is not None:
             result["has_remote"] = ctx.has_remote
+        if ctx.monthly_commits is not None:
+            result["monthly_commits"] = ctx.monthly_commits
+        if ctx.readme_oneliner:
+            result["readme_oneliner"] = ctx.readme_oneliner
+
+    # Purpose (user-editable, separate from cache)
+    from armillary.purpose_service import get_purpose
+
+    purpose = get_purpose(str(ctx.path))
+    if purpose:
+        result["purpose"] = purpose
 
     return json.dumps(result, separators=(",", ":"), default=str)
 

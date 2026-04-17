@@ -202,6 +202,10 @@ def _fill_git_fields(repo_path: Path, md: ProjectMetadata) -> None:
     with contextlib.suppress(Exception):
         md.first_commit_ts = _first_commit_timestamp(repo)
 
+    # Monthly activity: commit counts per month, last 6 months.
+    with contextlib.suppress(Exception):
+        md.monthly_commits = _monthly_activity(repo)
+
     # S6: Branch count + has_remote (ADR 0017).
     with contextlib.suppress(Exception):
         md.branch_count = len(repo.branches)
@@ -307,6 +311,29 @@ def _classify_trend(buckets: list[int]) -> str:
     if first_half > second_half * 1.5:
         return "falling"
     return "flat"
+
+
+_ACTIVITY_MONTHS = 6
+_SECONDS_PER_MONTH = 30 * 86400
+
+
+def _monthly_activity(repo: git.Repo) -> list[int]:
+    """Return commit counts per month for the last 6 months [oldest..newest]."""
+    import time
+
+    now = int(time.time())
+    raw = repo.git.log(
+        "--format=%at",
+        f"--since={_ACTIVITY_MONTHS * 30} days ago",
+    )
+    buckets = [0] * _ACTIVITY_MONTHS
+    if not raw.strip():
+        return buckets
+    for line in raw.strip().splitlines():
+        age = now - int(line)
+        idx = min(age // _SECONDS_PER_MONTH, _ACTIVITY_MONTHS - 1)
+        buckets[_ACTIVITY_MONTHS - 1 - idx] += 1
+    return buckets
 
 
 def _first_commit_timestamp(repo: git.Repo) -> datetime | None:

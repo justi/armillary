@@ -280,6 +280,57 @@ def include_command(
         typer.secho(f"Restored {project.name}", fg=typer.colors.GREEN)
 
 
+@app.command("purpose")
+def purpose_command(
+    project_name: str = typer.Argument(..., help="Project name (substring match)."),
+    text: str | None = typer.Argument(None, help="Purpose text. Omit to show current."),
+    clear: bool = typer.Option(False, "--clear", help="Remove the purpose."),
+) -> None:
+    """Set or show a project's purpose — why it exists, in one sentence."""
+    from armillary.cache import Cache
+    from armillary.purpose_service import clear_purpose, get_purpose, set_purpose
+
+    with Cache() as cache:
+        projects = cache.list_projects()
+    matches = [p for p in projects if project_name.lower() in p.name.lower()]
+    if not matches:
+        typer.secho(
+            f"No project matches '{project_name}'.", fg=typer.colors.RED, err=True
+        )
+        raise typer.Exit(2)
+    if len(matches) > 1:
+        exact = [p for p in matches if p.name.lower() == project_name.lower()]
+        if len(exact) == 1:
+            matches = exact
+        else:
+            names = ", ".join(p.name for p in matches[:5])
+            typer.secho(f"Ambiguous: {names}.", fg=typer.colors.RED, err=True)
+            raise typer.Exit(2)
+
+    project = matches[0]
+    path_str = str(project.path)
+
+    if clear:
+        clear_purpose(path_str)
+        typer.secho(f"Cleared purpose for {project.name}.", fg=typer.colors.CYAN)
+        return
+
+    if text:
+        set_purpose(path_str, text)
+        typer.secho(f"Purpose for {project.name}: {text}", fg=typer.colors.GREEN)
+        return
+
+    current = get_purpose(path_str)
+    if current:
+        typer.echo(f"{project.name}: {current}")
+    else:
+        typer.secho(
+            f"No purpose set for {project.name}. "
+            f'Use: armillary purpose {project.name} "your purpose here"',
+            fg=typer.colors.YELLOW,
+        )
+
+
 def _format_age(seconds: float) -> str:
     """Human-readable age from seconds (e.g. '3 days', '2h')."""
     if seconds < 3600:
@@ -290,6 +341,17 @@ def _format_age(seconds: float) -> str:
     if days < 30:
         return f"{days:.0f}d"
     return f"{days / 30:.0f}mo"
+
+
+_SPARK_CHARS = " \u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
+
+
+def _sparkline(values: list[int]) -> str:
+    """Render a list of ints as a unicode sparkline."""
+    if not values:
+        return ""
+    peak = max(values) or 1
+    return "".join(_SPARK_CHARS[min(int(v / peak * 7), 7)] for v in values)
 
 
 @app.command("context")
@@ -344,6 +406,15 @@ def context_command(
     console.print(header)
     console.print(f"  [dim]{short_path}[/dim]")
 
+    # Purpose or README one-liner — "what is this project?"
+    from armillary.purpose_service import get_purpose
+
+    purpose = get_purpose(str(ctx.path))
+    if purpose:
+        console.print(f"  [italic]{purpose}[/italic]")
+    elif ctx.readme_oneliner:
+        console.print(f"  [dim italic]{ctx.readme_oneliner}[/dim italic]")
+
     # S5: project age + intensity (active span = first→last commit)
     if ctx.first_commit_ts and ctx.work_hours:
         from datetime import datetime
@@ -370,6 +441,26 @@ def context_command(
                 console.print(f"  [dim]Age {age_str}{intensity_str}[/dim]")
         except (ValueError, TypeError):
             pass
+
+    # Days since last commit — bold kill trigger
+    if ctx.last_commit_ts_iso:
+        from datetime import datetime as _dt
+
+        try:
+            last = _dt.fromisoformat(ctx.last_commit_ts_iso)
+            days_ago = (_dt.now() - last).days
+            if days_ago > 90:
+                console.print(f"  [bold red]{days_ago}d since last commit[/bold red]")
+            elif days_ago > 30:
+                console.print(
+                    f"  [bold yellow]{days_ago}d since last commit[/bold yellow]"
+                )
+        except (ValueError, TypeError):
+            pass
+
+    # Monthly sparkline
+    if ctx.monthly_commits and any(c > 0 for c in ctx.monthly_commits):
+        console.print(f"  [dim]Activity  {_sparkline(ctx.monthly_commits)} (6mo)[/dim]")
 
     if not ctx.is_git:
         console.print("\n  [dim]Not a git repo — no commit history.[/dim]")

@@ -37,10 +37,14 @@ class ProjectContext:
     # Decision signals (ADR 0017) — from cache.
     velocity_trend: str | None = None
     commit_velocity: list[int] | None = None
+    monthly_commits: list[int] | None = None
     first_commit_ts: str | None = None  # ISO format for display
     last_commit_ts_iso: str | None = None  # ISO format — for intensity calc
     branch_count: int | None = None
     has_remote: bool | None = None
+
+    # From cache — for display.
+    readme_oneliner: str | None = None
 
     # Flags
     is_git: bool = True
@@ -101,6 +105,7 @@ def get_context(
     # Cached decision signals (ADR 0017)
     velocity_trend = md.velocity_trend if md else None
     commit_velocity = md.commit_velocity if md else None
+    monthly_commits = md.monthly_commits if md else None
     first_commit_ts = (
         md.first_commit_ts.isoformat() if md and md.first_commit_ts else None
     )
@@ -109,6 +114,16 @@ def get_context(
     )
     branch_count = md.branch_count if md else None
     has_remote = md.has_remote if md else None
+    # README one-liner for context display
+    readme_oneliner = None
+    if md and md.readme_excerpt:
+        # First sentence or first 80 chars
+        excerpt = md.readme_excerpt
+        dot = excerpt.find(". ")
+        if dot > 0 and dot < 80:
+            readme_oneliner = excerpt[: dot + 1]
+        else:
+            readme_oneliner = excerpt[:80] + ("..." if len(excerpt) > 80 else "")
 
     # Detect git repo: .git can be a directory (normal) or file (worktree/submodule)
     if not (project.path / ".git").exists():
@@ -136,10 +151,12 @@ def get_context(
         last_session=_last_session(project.path),
         velocity_trend=velocity_trend,
         commit_velocity=commit_velocity,
+        monthly_commits=monthly_commits,
         first_commit_ts=first_commit_ts,
         last_commit_ts_iso=last_commit_ts_iso,
         branch_count=branch_count,
         has_remote=has_remote,
+        readme_oneliner=readme_oneliner,
         is_git=True,
     )
 
