@@ -260,6 +260,26 @@ def _render_project_detail(project_path: str) -> None:
         set_last_conversation(str(project.path), new_str)
         st.rerun()
 
+    # --- Transition journal (ADR 0025) ---
+    import contextlib as _ctx2
+
+    with _ctx2.suppress(Exception):
+        from armillary.transition_service import load_journal
+
+        journal = load_journal(str(project.path))
+        if journal:
+            with st.expander(
+                f"Status transitions ({len(journal)})",
+                icon=":material/swap_vert:",
+                expanded=False,
+            ):
+                for entry in reversed(journal[-10:]):
+                    reason = f' — "{entry["reason"]}"' if entry.get("reason") else ""
+                    st.markdown(
+                        f"- {entry['date']}  "
+                        f"{entry['from']} \u2192 {entry['to']}{reason}"
+                    )
+
     # --- Collapsed details (path, umbrella, stats) ---
     _render_details_expander(project)
 

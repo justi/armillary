@@ -807,6 +807,16 @@ def next_command(
     # Zombie alert — ACTIVE projects going stale (M3)
     _print_zombie_alert(console)
 
+    # Status transitions (ADR 0025)
+    import contextlib as _cl
+
+    with _cl.suppress(Exception):
+        from armillary.transition_service import detect_transitions, format_transitions
+
+        transitions = detect_transitions()
+        if transitions:
+            console.print(f"[dim]{format_transitions(transitions)}[/dim]")
+
     for s in suggestions:
         icon = _CATEGORY_ICONS.get(s.category, "•")
         short_path = _shorten_home(s.project.path)

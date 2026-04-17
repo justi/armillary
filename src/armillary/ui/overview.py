@@ -50,6 +50,10 @@ def _render_overview() -> None:
     # Check if dormant explore mode is active
     dormant_explore = st.session_state.get("_dormant_explore", False)
 
+    # Status transitions (ADR 0025)
+    if not dormant_explore:
+        _render_transitions()
+
     if not dormant_explore:
         _render_next_suggestions()
 
@@ -142,6 +146,36 @@ _CATEGORY_LABELS = {
     "forgotten_gold": "Forgotten gold",
     "archive_candidate": "Archive this?",
 }
+
+
+def _render_transitions() -> None:
+    """Show status transitions since last scan (ADR 0025)."""
+    import contextlib
+
+    with contextlib.suppress(Exception):
+        from armillary.transition_service import detect_transitions
+
+        transitions = detect_transitions()
+        if not transitions:
+            return
+
+        icons = {
+            "DORMANT": "\U0001f4a4",
+            "STALLED": "\u26a0\ufe0f",
+            "ACTIVE": "\U0001f525",
+            "ARCHIVED": "\U0001f4e6",
+        }
+        lines = []
+        for t in transitions[:5]:
+            icon = icons.get(t["to_status"], "\u2022")
+            lines.append(
+                f"{icon} **{t['project']}** \u2192 {t['to_status']} "
+                f"(was {t['from_status']})"
+            )
+        if len(transitions) > 5:
+            lines.append(f"+{len(transitions) - 5} more")
+
+        st.info("\n\n".join(lines), icon=":material/swap_vert:")
 
 
 def _render_yesterday_line(suggestions: list) -> None:

@@ -68,9 +68,9 @@ project:
     status_layouts: built         # DORMANT/STALLED=README expanded, ACTIVE=collapsed, ARCHIVED=tombstone
 
   v3:                              # ADR 0023-0025 — panel validated
-    onboarding_delight: planned   # ADR 0023 — auto-bootstrap + first scan wow card
-    distribution: planned         # ADR 0024 — tweet/HN templates + share section in sidebar
-    status_transitions: planned   # ADR 0025 — detect transitions + decision journal
+    onboarding_delight: built     # ADR 0023 — auto-bootstrap + first scan wow card
+    distribution: built           # ADR 0024 — tweet/HN templates + share section in sidebar
+    status_transitions: built     # ADR 0025 — detect transitions + decision journal
 
   deferred:
     # (empty — all former deferred items moved to killed or v3)
