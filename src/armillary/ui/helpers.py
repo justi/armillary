@@ -21,6 +21,7 @@ _STATUS_EMOJI = {
     "DORMANT": "⚫",
     "IDEA": "💭",
     "IN_PROGRESS": "📝",
+    "ARCHIVED": "📦",
 }
 
 
