@@ -545,6 +545,18 @@ def _render_activity_heatmap() -> None:
         )
         st.html(html)
 
+        # Export button
+        from armillary.heatmap_service import export_heatmap_html
+
+        card_html = export_heatmap_html(activity, summary)
+        st.download_button(
+            "Download card",
+            data=card_html,
+            file_name="armillary-card.html",
+            mime="text/html",
+            icon=":material/download:",
+        )
+
 
 def _render_time_grouped_tables(rows: list[OverviewRow]) -> None:
     """Show projects in time groups: last month, last year, older.

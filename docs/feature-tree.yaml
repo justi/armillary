@@ -60,8 +60,8 @@ project:
     stalled_rename: built          # PAUSED → STALLED (vocabulary change)
 
     # M2 "Money" — revenue + virality
-    revenue_mrr: planned          # monthly_revenue integer, manually entered
-    shareable_card: planned       # heatmap + stats export as PNG for tweets
+    revenue_mrr: built            # monthly_revenue integer, manually entered, shown everywhere
+    shareable_card: built         # heatmap export as HTML card — CLI armillary card + dashboard download
 
     # M3 "Nag" — proactive + polish
     zombie_alert: planned         # terminal warning when ACTIVE has no commit 14d

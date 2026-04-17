@@ -868,6 +868,31 @@ def next_command(
             console.print(f"  [dim]→ armillary next --skip {s.project.name}[/dim]")
 
 
+@app.command("card")
+def card_command(
+    output: str = typer.Option(
+        "armillary-card.html",
+        "--output",
+        "-o",
+        help="Output file path.",
+    ),
+) -> None:
+    """Export your activity heatmap as a shareable HTML card."""
+    from armillary.heatmap_service import (
+        daily_activity,
+        export_heatmap_html,
+        heatmap_summary,
+    )
+
+    activity = daily_activity()
+    summary = heatmap_summary(activity)
+    html = export_heatmap_html(activity, summary)
+    from pathlib import Path
+
+    Path(output).write_text(html, encoding="utf-8")
+    typer.secho(f"Card exported to {output}", fg=typer.colors.GREEN)
+
+
 @app.command("pulse")
 def pulse_command() -> None:
     """Weekly pulse — what changed across your projects this week."""
