@@ -429,9 +429,16 @@ def _render_activity_heatmap() -> None:
 
         import altair as alt
 
+        _CELL = 11
+        _GAP = 2
+        _WEEKS = 53
+        _DAYS = 7
+        _W = _WEEKS * (_CELL + _GAP)
+        _H = _DAYS * (_CELL + _GAP)
+
         chart = (
             alt.Chart(df)
-            .mark_point(shape="square", filled=True, size=100)
+            .mark_rect(cornerRadius=2)
             .encode(
                 x=alt.X("week:O", axis=None),
                 y=alt.Y(
@@ -460,9 +467,9 @@ def _render_activity_heatmap() -> None:
                     alt.Tooltip("commits:Q", title="Commits"),
                 ],
             )
-            .properties(height=120)
+            .properties(width=_W, height=_H)
         )
-        st.altair_chart(chart, use_container_width=True)
+        st.altair_chart(chart)
 
 
 def _render_time_grouped_tables(rows: list[OverviewRow]) -> None:
