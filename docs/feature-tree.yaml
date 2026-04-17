@@ -37,7 +37,9 @@ project:
     open: built                   # launch in Cursor/VS Code/Zed
     scan: built                   # refresh all metadata
     dashboard: built              # Streamlit overview + detail + settings
-    detail_redesign: built        # ADR 0014 — narrative layout, action buttons top, noise reduction
+    detail_redesign: built        # ADR 0014 — narrative layout, signals, purpose, sparkline, tombstone
+    overview_hero: built          # "dying projects" metric + next as hero section (not expander)
+    archive_button: built         # Archive/Activate buttons in detail view, tombstone layout
 
   ai_integration:
     mcp_server: built             # armillary_next, armillary_search, armillary_projects, armillary_context

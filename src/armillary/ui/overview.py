@@ -42,6 +42,10 @@ def _render_overview() -> None:
     # Check if dormant explore mode is active
     dormant_explore = st.session_state.get("_dormant_explore", False)
 
+    # "Dying projects" hook — Harry Dry: one number that hurts
+    if not dormant_explore:
+        _render_dying_metric(rows)
+
     if not dormant_explore:
         _render_next_suggestions()
 
@@ -112,51 +116,62 @@ _CATEGORY_LABELS = {
 
 
 def _render_next_suggestions() -> None:
-    """Hero element: armillary next suggestions."""
+    """Hero section — the reason you open armillary every morning."""
     from armillary.next_service import get_suggestions
+    from armillary.purpose_service import get_purpose
 
     suggestions = get_suggestions()
     if not suggestions:
         return
 
-    with st.expander(
+    st.subheader(
         "What should you work on today?",
-        expanded=True,
-        icon=":material/tips_and_updates:",
-    ):
-        for s in suggestions:
-            icon = _CATEGORY_ICONS.get(s.category, "•")
-            label = _CATEGORY_LABELS.get(s.category, s.category)
-            path_str = _shorten_home(s.project.path)
-            col_info, col_action = st.columns([4, 1])
-            with col_info:
-                # Purpose or README one-liner
-                from armillary.purpose_service import get_purpose
+        anchor=False,
+    )
 
-                purpose = get_purpose(str(s.project.path))
-                md = s.project.metadata
-                oneliner = ""
-                if purpose:
-                    oneliner = f"*{purpose}*  \n"
-                elif md and md.readme_excerpt:
-                    excerpt = md.readme_excerpt
-                    dot = excerpt.find(". ")
-                    short = excerpt[: dot + 1] if 0 < dot < 80 else excerpt[:80]
-                    oneliner = f"*{short}*  \n"
-                st.markdown(
-                    f"{icon} **{s.project.name}** — {label}  \n"
-                    f"{oneliner}"
-                    f"{s.reason}  \n"
-                    f"`{path_str}`"
-                )
-            with col_action:
-                if st.button(
-                    "Open",
-                    key=f"next_open_{s.project.name}",
-                    icon=":material/open_in_new:",
-                ):
-                    st.query_params["project"] = str(s.project.path)
-                    st.rerun()
+    for s in suggestions:
+        icon = _CATEGORY_ICONS.get(s.category, "\u2022")
+        label = _CATEGORY_LABELS.get(s.category, s.category)
+        path_str = _shorten_home(s.project.path)
+
+        purpose = get_purpose(str(s.project.path))
+        md = s.project.metadata
+        oneliner = ""
+        if purpose:
+            oneliner = f"*{purpose}*  \n"
+        elif md and md.readme_excerpt:
+            excerpt = md.readme_excerpt
+            dot = excerpt.find(". ")
+            short = excerpt[: dot + 1] if 0 < dot < 80 else excerpt[:80]
+            oneliner = f"*{short}*  \n"
+
+        # Sparkline inline
+        spark = ""
+        if md and md.monthly_commits and any(c > 0 for c in md.monthly_commits):
+            chars = "".join(
+                _spark_char(c, md.monthly_commits) for c in md.monthly_commits
+            )
+            spark = f"  \n`{chars}` (6mo)"
+
+        col_info, col_action = st.columns([4, 1])
+        with col_info:
+            st.markdown(
+                f"{icon} **{s.project.name}** \u2014 {label}  \n"
+                f"{oneliner}"
+                f"{s.reason}{spark}"
+            )
+            st.caption(f"`{path_str}`")
+        with col_action:
+            if st.button(
+                "Open",
+                key=f"next_open_{s.project.name}",
+                icon=":material/open_in_new:",
+                type="primary",
+            ):
+                st.query_params["project"] = str(s.project.path)
+                st.rerun()
+
+    st.markdown("---")
 
 
 def _render_dormant_banner(rows: list[OverviewRow], *, exploring: bool) -> None:
@@ -232,6 +247,45 @@ def _render_empty_cache_state(cfg: Config | None) -> None:
                 "No umbrellas configured. "
                 "Run `armillary config --init` from your terminal."
             )
+
+
+_SPARK_CHARS = " \u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
+
+
+def _spark_char(value: int, all_values: list[int]) -> str:
+    """Single sparkline character for a value within a series."""
+    peak = max(all_values) or 1
+    return _SPARK_CHARS[min(int(value / peak * 7), 7)]
+
+
+def _render_dying_metric(rows: list[OverviewRow]) -> None:
+    """'Projects dying this week' — one number that hurts (Harry Dry).
+
+    Dying = ACTIVE/PAUSED with no commit in >14 days, or DORMANT with
+    uncommitted files (forgotten WIP). This is the daily hook.
+    """
+    from datetime import datetime, timedelta
+
+    now = datetime.now()
+    cutoff = now - timedelta(days=14)
+    dying = 0
+    for r in rows:
+        if r.status_raw == "ARCHIVED":
+            continue
+        # Active/Paused but going stale
+        if r.status_raw in ("ACTIVE", "PAUSED"):
+            if r.last_modified < cutoff:
+                dying += 1
+        # Dormant with dirty files = forgotten WIP
+        elif r.status_raw == "DORMANT" and r.dirty and r.dirty > 0:
+            dying += 1
+
+    if dying > 0:
+        st.error(
+            f"**{dying} project{'s' if dying > 1 else ''} dying this week** "
+            "\u2014 decide: keep, archive, or finish",
+            icon=":material/warning:",
+        )
 
 
 def _apply_filters(
