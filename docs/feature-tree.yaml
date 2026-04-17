@@ -46,11 +46,11 @@ project:
     mcp_server: built             # armillary_next, armillary_search, armillary_projects, armillary_context
     claude_bridge: built          # compact repos-index.md (ACTIVE/PAUSED only, 15 max)
 
-  planned:                        # Next wave — validated by panel
-    archive_candidates: planned   # ADR 0019 — 4th category in next: "this should die"
-    purpose_prompts: planned      # ADR 0019 — "why are you closing this?" at archive time
-    weekly_pulse: planned         # ADR 0018 — MCP + CLI retrospective: what changed this week
-    activity_heatmap: planned     # ADR 0020 — GitHub Wrapped for your entire dev life
+  insights:                        # Next wave — validated by panel
+    archive_candidates: built     # ADR 0019 — 4th category in next: "this should die"
+    archive_reasons: built        # ADR 0019 — "why are you closing this?" stored + shown on tombstone
+    weekly_pulse: built           # ADR 0018 — MCP armillary_pulse + CLI armillary pulse
+    activity_heatmap: built       # ADR 0020 — GitHub Wrapped calendar heatmap in dashboard
 
   deferred:
     launch_window: "revisit when users ask — 5% of projects launch"

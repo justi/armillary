@@ -80,6 +80,9 @@ def _render_overview() -> None:
     # Search bar below table
     _render_search_section([r for r in rows if r.status_raw != "ARCHIVED"], cfg)
 
+    # Activity heatmap (ADR 0020) — collapsible at bottom
+    _render_activity_heatmap()
+
 
 def _render_header() -> None:
     """Minimal header: logo + relative scan time."""
@@ -373,6 +376,89 @@ def _apply_filters(
     filters: dict[str, list[str] | str],
 ) -> list[OverviewRow]:
     return apply_status_filter(rows, filters["status"])
+
+
+def _render_activity_heatmap() -> None:
+    """GitHub-contributions-style heatmap (ADR 0020)."""
+    with st.expander(
+        "Activity heatmap (12 months)",
+        icon=":material/calendar_month:",
+        expanded=False,
+    ):
+        from armillary.heatmap_service import daily_activity, heatmap_summary
+
+        activity = daily_activity()
+        if not activity:
+            st.caption("No commit activity in the last 12 months.")
+            return
+
+        summary = heatmap_summary(activity)
+
+        # Summary metrics
+        cols = st.columns(4)
+        with cols[0]:
+            st.metric("Commits", f"{summary['total_commits']:,}")
+        with cols[1]:
+            st.metric("Active days", summary["active_days"])
+        with cols[2]:
+            st.metric("Longest streak", f"{summary['longest_streak']}d")
+        with cols[3]:
+            if summary["busiest_day"]:
+                st.metric(
+                    "Busiest day",
+                    f"{summary['busiest_count']}",
+                    help=str(summary["busiest_day"]),
+                )
+
+        # Heatmap chart
+        from datetime import date, timedelta
+
+        import pandas as pd
+
+        today = date.today()
+        start = today - timedelta(days=364)
+        all_dates = [start + timedelta(days=i) for i in range(365)]
+        df = pd.DataFrame(
+            {
+                "date": all_dates,
+                "commits": [activity.get(d, 0) for d in all_dates],
+                "week": [(d - start).days // 7 for d in all_dates],
+                "weekday": [d.weekday() for d in all_dates],
+            }
+        )
+
+        import altair as alt
+
+        chart = (
+            alt.Chart(df)
+            .mark_rect(cornerRadius=2)
+            .encode(
+                x=alt.X("week:O", axis=None),
+                y=alt.Y(
+                    "weekday:O",
+                    axis=alt.Axis(
+                        labels=True,
+                        labelExpr=(
+                            "datum.value == 0 ? 'Mon' : "
+                            "datum.value == 2 ? 'Wed' : "
+                            "datum.value == 4 ? 'Fri' : ''"
+                        ),
+                        title=None,
+                    ),
+                ),
+                color=alt.Color(
+                    "commits:Q",
+                    scale=alt.Scale(scheme="greens"),
+                    legend=None,
+                ),
+                tooltip=[
+                    alt.Tooltip("date:T", title="Date"),
+                    alt.Tooltip("commits:Q", title="Commits"),
+                ],
+            )
+            .properties(height=120)
+        )
+        st.altair_chart(chart, use_container_width=True)
 
 
 def _render_time_grouped_tables(rows: list[OverviewRow]) -> None:
