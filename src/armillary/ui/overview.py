@@ -27,6 +27,14 @@ from armillary.ui.sidebar import _render_sidebar
 def _render_overview() -> None:
     _render_header()
 
+    # Record weekly pulse snapshot on every dashboard load (idempotent per week)
+    import contextlib
+
+    with contextlib.suppress(Exception):
+        from armillary.pulse_service import take_snapshot
+
+        take_snapshot()
+
     cfg = _safe_load_config()
     rows = _load_overview_rows()
     rows = filter_excluded(rows)

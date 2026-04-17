@@ -49,6 +49,14 @@ def get_suggestions(
     projects = filter_excluded(projects)
     projects = filter_archived(projects)
 
+    # Record weekly pulse snapshot on every next call (idempotent per week)
+    import contextlib
+
+    with contextlib.suppress(Exception):
+        from .pulse_service import take_snapshot
+
+        take_snapshot(db_path=db_path)
+
     skips = _load_skips(db_path)
     active_skips = {
         path

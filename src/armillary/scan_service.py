@@ -50,6 +50,14 @@ def full_scan(
         cache.upsert(projects, write_metadata=write_metadata)
         cache.prune_stale()
 
+    # Record weekly pulse snapshot (idempotent per week)
+    import contextlib
+
+    with contextlib.suppress(Exception):
+        from .pulse_service import take_snapshot
+
+        take_snapshot()
+
     return projects
 
 
