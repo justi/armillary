@@ -28,10 +28,20 @@ from armillary.scanner import scan as scan_umbrellas
 
 app = typer.Typer(
     name="armillary",
-    help="Project observatory with AI integration.",
-    no_args_is_help=True,
+    help="Total recall for everything you've ever built.",
+    invoke_without_command=True,
+    no_args_is_help=False,
     add_completion=False,
 )
+
+
+@app.callback()
+def _default(ctx: typer.Context) -> None:
+    """Run `next` when no subcommand is given."""
+    if ctx.invoked_subcommand is None:
+        from armillary.cli_tools import next_command
+
+        ctx.invoke(next_command, skip=None, reason=None)
 
 
 @app.command()
