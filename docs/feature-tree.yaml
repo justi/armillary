@@ -46,11 +46,26 @@ project:
     mcp_server: built             # armillary_next, armillary_search, armillary_projects, armillary_context
     claude_bridge: built          # compact repos-index.md (ACTIVE/PAUSED only, 15 max)
 
-  insights:                        # Next wave — validated by panel
+  insights:                        # v1 — validated by panel
     archive_candidates: built     # ADR 0019 — 4th category in next: "this should die"
     archive_reasons: built        # ADR 0019 — "why are you closing this?" stored + shown on tombstone
     weekly_pulse: built           # ADR 0018 — MCP armillary_pulse + CLI armillary pulse
     activity_heatmap: built       # ADR 0020 — GitHub Wrapped calendar heatmap in dashboard
+
+  v2:                              # ADR 0022 — 3 milestones
+    # M1 "Memory" — time-series + cleanup
+    pulse_history: planned        # 6-month portfolio evolution chart
+    last_conversation: planned    # editable "when did I last talk to a user?"
+    bulk_archive: planned         # checkboxes + "Archive selected" in overview
+    stalled_rename: planned       # PAUSED → STALLED (vocabulary change)
+
+    # M2 "Money" — revenue + virality
+    revenue_mrr: planned          # monthly_revenue integer, manually entered
+    shareable_card: planned       # heatmap + stats export as PNG for tweets
+
+    # M3 "Nag" — proactive + polish
+    zombie_alert: planned         # terminal warning when ACTIVE has no commit 14d
+    status_layouts: planned       # DORMANT=rediscovery, ACTIVE=resume layouts
 
   deferred:
     launch_window: "revisit when users ask — 5% of projects launch"
@@ -59,7 +74,11 @@ project:
   killed:
     tags: "grep covers it"
     embeddings: "too heavy, ripgrep is enough"
-    digest: "productivity theater — next + MCP covers daily use"
+    digest: "resurrected as weekly_pulse (built)"
     integrations: "zero built, speculative scope, maintenance trap"
     external_signals: "HN/PyPI/GitHub/Trends — panel 3/3 rejected: scope creep, vanity metrics"
     project_lineage: "v2/v3/v4 pattern is auto-gen tool, not user behavior"
+    export: "bridge already does it — Marc"
+    session_hook: "panel 3/3 killed — overengineering, MCP instruction enough"
+    undo_toast: "panel 0/5 — Streamlit limitation"
+    dashboard_onboarding: "panel 3/5 killed — filtering for right users"
