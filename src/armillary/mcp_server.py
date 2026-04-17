@@ -356,6 +356,12 @@ def armillary_context(project_name: str) -> str:
     if last_convo:
         result["last_user_conversation"] = last_convo
 
+    from armillary.purpose_service import get_revenue
+
+    rev = get_revenue(str(ctx.path))
+    if rev is not None:
+        result["monthly_revenue_usd"] = rev
+
     return json.dumps(result, separators=(",", ":"), default=str)
 
 

@@ -131,3 +131,40 @@ def set_last_conversation(project_path: str, date_str: str) -> None:
 def get_last_conversation(project_path: str) -> str | None:
     """Get the last conversation date for a project."""
     return load_conversations().get(project_path)
+
+
+# --- Revenue/MRR (ADR 0022 M2) ---
+
+_REVENUE_FILENAME = "revenue.json"
+
+
+def _revenue_path() -> Path:
+    return default_db_path().parent / _REVENUE_FILENAME
+
+
+def load_revenue() -> dict[str, int]:
+    """Load {project_path: monthly_revenue_usd} from disk."""
+    path = _revenue_path()
+    if not path.exists():
+        return {}
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(parsed, dict):
+            return {k: v for k, v in parsed.items() if isinstance(v, (int, float))}
+    except (ValueError, OSError):
+        pass
+    return {}
+
+
+def set_revenue(project_path: str, amount: int) -> None:
+    """Set monthly revenue for a project (USD)."""
+    rev = load_revenue()
+    rev[project_path] = amount
+    path = _revenue_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(rev, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def get_revenue(project_path: str) -> int | None:
+    """Get monthly revenue for a project, or None if not set."""
+    return load_revenue().get(project_path)

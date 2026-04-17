@@ -352,6 +352,11 @@ def _render_header_with_launcher(project: Project) -> None:
 
     # Sunk cost + sparkline + trend + days since in one info row
     info_parts: list[str] = []
+    from armillary.purpose_service import get_revenue as _get_rev
+
+    _rev = _get_rev(str(project.path))
+    if _rev is not None and _rev > 0:
+        info_parts.append(f":material/attach_money: **${_rev}/mo**")
     if md and md.work_hours is not None:
         info_parts.append(f"**{md.work_hours:.0f}h** invested")
     if md and md.monthly_commits and any(c > 0 for c in md.monthly_commits):
@@ -386,6 +391,23 @@ def _render_header_with_launcher(project: Project) -> None:
     )
     if new_convo != (last_convo or "") and new_convo:
         set_last_conversation(str(project.path), new_convo)
+        st.rerun()
+
+    # Revenue/MRR (ADR 0022 M2)
+    from armillary.purpose_service import get_revenue, set_revenue
+
+    current_rev = get_revenue(str(project.path))
+    new_rev = st.number_input(
+        "Monthly revenue (USD)",
+        value=current_rev or 0,
+        min_value=0,
+        step=10,
+        key=f"revenue_{project.path}",
+        label_visibility="collapsed",
+        help="Monthly revenue in USD. $0 = no revenue.",
+    )
+    if new_rev != (current_rev or 0):
+        set_revenue(str(project.path), int(new_rev))
         st.rerun()
 
 

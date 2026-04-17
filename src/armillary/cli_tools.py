@@ -472,6 +472,45 @@ def talked_command(
     )
 
 
+@app.command("revenue")
+def revenue_command(
+    project_name: str = typer.Argument(..., help="Project name."),
+    amount: int | None = typer.Argument(None, help="Monthly revenue in USD."),
+) -> None:
+    """Set or show monthly revenue (MRR) for a project."""
+    from armillary.purpose_service import get_revenue, set_revenue
+
+    with Cache() as cache:
+        projects = cache.list_projects()
+    matches = [p for p in projects if project_name.lower() in p.name.lower()]
+    if not matches:
+        typer.secho(
+            f"No project matches '{project_name}'.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2)
+    if len(matches) > 1:
+        exact = [p for p in matches if p.name.lower() == project_name.lower()]
+        if len(exact) == 1:
+            matches = exact
+        else:
+            names = ", ".join(p.name for p in matches[:5])
+            typer.secho(f"Ambiguous: {names}.", fg=typer.colors.RED, err=True)
+            raise typer.Exit(2)
+
+    project = matches[0]
+    if amount is not None:
+        set_revenue(str(project.path), amount)
+        typer.secho(f"{project.name}: ${amount}/mo", fg=typer.colors.GREEN)
+    else:
+        current = get_revenue(str(project.path))
+        if current is not None:
+            typer.echo(f"{project.name}: ${current}/mo")
+        else:
+            typer.secho(f"No revenue set for {project.name}.", fg=typer.colors.YELLOW)
+
+
 def _format_age(seconds: float) -> str:
     """Human-readable age from seconds (e.g. '3 days', '2h')."""
     if seconds < 3600:
@@ -555,6 +594,13 @@ def context_command(
         console.print(f"  [italic]{purpose}[/italic]")
     elif ctx.readme_oneliner:
         console.print(f"  [dim italic]{ctx.readme_oneliner}[/dim italic]")
+
+    # Revenue
+    from armillary.purpose_service import get_revenue
+
+    rev = get_revenue(str(ctx.path))
+    if rev is not None:
+        console.print(f"  [green]${rev}/mo[/green]")
 
     # S5: project age + intensity (active span = first→last commit)
     if ctx.first_commit_ts and ctx.work_hours:
@@ -785,7 +831,7 @@ def next_command(
         return
 
     from armillary.cli_helpers import _shorten_home
-    from armillary.purpose_service import get_purpose
+    from armillary.purpose_service import get_purpose, get_revenue
 
     console = Console()
 
@@ -808,7 +854,10 @@ def next_command(
             dot = excerpt.find(". ")
             oneliner = excerpt[: dot + 1] if 0 < dot < 80 else excerpt[:80]
             console.print(f"  [dim italic]{oneliner}[/dim italic]")
-        console.print(f"  {s.reason}")
+        # Revenue inline
+        rev = get_revenue(str(s.project.path))
+        rev_str = f" · [green]${rev}/mo[/green]" if rev else ""
+        console.print(f"  {s.reason}{rev_str}")
         # Monthly sparkline
         if md and md.monthly_commits and any(c > 0 for c in md.monthly_commits):
             console.print(
