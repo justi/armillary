@@ -451,6 +451,24 @@ def _render_pulse_section() -> None:
             for e in pulse.aging_wip:
                 st.markdown(f"- {e.icon} **{e.project_name}** \u2014 {e.message}")
 
+        # Pulse history chart (ADR 0022 M1)
+        from armillary.pulse_service import load_history, take_snapshot
+
+        # Take snapshot on view (idempotent per week)
+        take_snapshot()
+        history = load_history()
+        if len(history) >= 2:
+            import pandas as pd
+
+            st.markdown("---")
+            st.markdown("**Portfolio evolution**")
+            df = pd.DataFrame(history)
+            df["date"] = pd.to_datetime(df["date"])
+            st.area_chart(
+                df.set_index("date")[["active", "stalled", "dormant"]],
+                color=["#40c463", "#f0ad4e", "#666666"],
+            )
+
 
 def _render_activity_heatmap() -> None:
     """GitHub-contributions-style heatmap (ADR 0020)."""

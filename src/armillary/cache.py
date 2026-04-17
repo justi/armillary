@@ -398,6 +398,19 @@ def _project_to_row(p: Project, *, now: float) -> tuple[Any, ...]:
     )
 
 
+def _safe_status(raw: str | None) -> Status | None:
+    """Parse status string, handling renamed values gracefully."""
+    if not raw:
+        return None
+    # Handle PAUSED → STALLED rename
+    if raw == "PAUSED":
+        return Status.STALLED
+    try:
+        return Status(raw)
+    except ValueError:
+        return None
+
+
 def _row_to_project(row: sqlite3.Row) -> Project:
     md = _row_to_metadata(row)
     return Project(
@@ -461,7 +474,7 @@ def _row_to_metadata(row: sqlite3.Row) -> ProjectMetadata | None:
         monthly_commits=extra.get("monthly_commits"),
         branch_count=extra.get("branch_count"),
         has_remote=extra.get("has_remote"),
-        status=Status(row["status"]) if row["status"] else None,
+        status=_safe_status(row["status"]),
     )
 
 

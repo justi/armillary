@@ -822,11 +822,25 @@ def next_command(
 @app.command("pulse")
 def pulse_command() -> None:
     """Weekly pulse — what changed across your projects this week."""
-    from armillary.pulse_service import format_pulse, generate_pulse
+    from armillary.pulse_service import (
+        format_pulse,
+        generate_pulse,
+        load_history,
+        take_snapshot,
+    )
 
     pulse = generate_pulse()
+    take_snapshot()  # record this week
     console = Console()
-    console.print(f"\n{format_pulse(pulse)}\n")
+    console.print(f"\n{format_pulse(pulse)}")
+
+    history = load_history()
+    if len(history) >= 2:
+        console.print(
+            f"\n[dim]History: {len(history)} weeks tracked. "
+            f"Active: {' → '.join(str(h['active']) for h in history[-4:])}[/dim]"
+        )
+    console.print()
 
 
 @app.command("mcp-serve")

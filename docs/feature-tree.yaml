@@ -54,8 +54,8 @@ project:
 
   v2:                              # ADR 0022 — 3 milestones
     # M1 "Memory" — time-series + cleanup
-    pulse_history: planned        # 6-month portfolio evolution chart
-    last_conversation: planned    # editable "when did I last talk to a user?"
+    pulse_history: built          # 6-month portfolio evolution chart (JSON snapshots)
+    last_conversation: built      # editable "when did I last talk to a user?"
     bulk_archive: built           # multi-select table + "Archive selected" button
     stalled_rename: built          # PAUSED → STALLED (vocabulary change)
 

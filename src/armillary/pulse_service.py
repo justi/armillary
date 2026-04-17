@@ -143,3 +143,111 @@ def format_pulse(pulse: WeeklyPulse) -> str:
             lines.append(f"  {e.icon} {e.project_name} — {e.message}")
 
     return "\n".join(lines)
+
+
+# --- Pulse history (ADR 0022 M1) ---
+
+_HISTORY_FILENAME = "pulse-history.json"
+
+
+def _history_path(db_path: Path | None = None) -> Path:
+    from .cache import default_db_path
+
+    base = db_path.parent if db_path else default_db_path().parent
+    return base / _HISTORY_FILENAME
+
+
+@dataclass(frozen=True)
+class PulseSnapshot:
+    """One week's summary for history tracking."""
+
+    date: str  # ISO week start (Monday)
+    active: int
+    stalled: int
+    dormant: int
+    archived: int
+    total_hours: float
+    projects_worked: int  # projects with commits that week
+
+
+def take_snapshot(
+    *,
+    db_path: Path | None = None,
+    now: datetime | None = None,
+) -> PulseSnapshot:
+    """Create a snapshot of current portfolio state."""
+    import json
+
+    now = now or datetime.now()
+    # Week start = Monday
+    week_start = (now - timedelta(days=now.weekday())).date().isoformat()
+
+    with Cache(db_path=db_path) as cache:
+        projects = cache.list_projects()
+    projects = filter_excluded(projects)
+
+    counts = {"ACTIVE": 0, "STALLED": 0, "DORMANT": 0, "ARCHIVED": 0}
+    total_hours = 0.0
+    worked = 0
+    week_ago = now - timedelta(days=7)
+
+    for p in projects:
+        md = p.metadata
+        if not md or not md.status:
+            continue
+        s = md.status.value
+        if s in counts:
+            counts[s] += 1
+        if md.work_hours:
+            total_hours += md.work_hours
+        if md.last_commit_ts and md.last_commit_ts >= week_ago:
+            worked += 1
+
+    snap = PulseSnapshot(
+        date=week_start,
+        active=counts["ACTIVE"],
+        stalled=counts["STALLED"],
+        dormant=counts["DORMANT"],
+        archived=counts["ARCHIVED"],
+        total_hours=round(total_hours, 1),
+        projects_worked=worked,
+    )
+
+    # Append to history (dedupe by date)
+    history = load_history(db_path=db_path)
+    history = [h for h in history if h["date"] != week_start]
+    history.append(
+        {
+            "date": snap.date,
+            "active": snap.active,
+            "stalled": snap.stalled,
+            "dormant": snap.dormant,
+            "archived": snap.archived,
+            "total_hours": snap.total_hours,
+            "projects_worked": snap.projects_worked,
+        }
+    )
+    # Keep last 26 weeks (6 months)
+    history = history[-26:]
+
+    path = _history_path(db_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(history, indent=2), encoding="utf-8")
+
+    return snap
+
+
+def load_history(*, db_path: Path | None = None) -> list[dict]:
+    """Load pulse history from disk."""
+    import json
+
+    path = _history_path(db_path)
+    if not path.exists():
+        return []
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(parsed, list):
+            return parsed
+    except (ValueError, OSError):
+        pass
+    return []
