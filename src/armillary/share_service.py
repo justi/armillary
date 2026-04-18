@@ -88,9 +88,9 @@ def generate_tweet(*, db_path: Path | None = None) -> str:
         return "Scan more projects first (need at least 5)."
     return (
         f"1st project {s['span']} ago. "
-        f"Last year — {s['last_year_count']} projects, "
-        f"{s['total_hours']:,}h total.\n"
-        f"{s['dormant']} forgotten. {s['active']} still active.\n\n"
+        f"{s['total_hours']:,}h of work across {s['total']} projects.\n"
+        f"{s['last_year_count']} touched last year. "
+        f"{s['active']} active right now.\n\n"
         f"armillary — total recall for everything you've ever built."
     )
 
