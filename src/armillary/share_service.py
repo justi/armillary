@@ -58,6 +58,16 @@ def _portfolio_stats(*, db_path: Path | None = None) -> dict[str, object]:
 
     umbrellas = len({str(p.umbrella) for p in projects})
 
+    # Projects active in last year
+    year_ago = datetime.now() - __import__("datetime").timedelta(days=365)
+    last_year_count = sum(
+        1
+        for p in projects
+        if p.metadata
+        and p.metadata.last_commit_ts
+        and p.metadata.last_commit_ts >= year_ago
+    )
+
     return {
         "total": total,
         "git_count": git_count,
@@ -66,6 +76,7 @@ def _portfolio_stats(*, db_path: Path | None = None) -> dict[str, object]:
         "dormant": statuses.get("DORMANT", 0),
         "stalled": statuses.get("STALLED", 0),
         "span": span,
+        "last_year_count": last_year_count,
         "umbrellas": umbrellas,
     }
 
@@ -76,10 +87,11 @@ def generate_tweet(*, db_path: Path | None = None) -> str:
     if s["total"] < 5:
         return "Scan more projects first (need at least 5)."
     return (
-        f"I built {s['total']} projects in {s['span']}.\n"
-        f"{s['active']} active, {s['dormant']} forgotten, "
-        f"{s['total_hours']:,}h total.\n\n"
-        f"Tracking with armillary — total recall for side projects."
+        f"1st project {s['span']} ago. "
+        f"Last year — {s['last_year_count']} projects, "
+        f"{s['total_hours']:,}h total.\n"
+        f"{s['dormant']} forgotten. {s['active']} still active.\n\n"
+        f"armillary — total recall for everything you've ever built."
     )
 
 
