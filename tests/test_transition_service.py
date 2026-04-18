@@ -30,24 +30,24 @@ def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def test_first_run_baselines_without_transitions(db: Path) -> None:
-    from armillary.transition_service import detect_transitions
+    from armillary.transition_service import detect_and_store_transitions
 
     with Cache(db_path=db) as c:
         c.upsert([_project("a"), _project("b")])
-    transitions = detect_transitions(db_path=db)
+    transitions = detect_and_store_transitions(db_path=db)
     assert transitions == []
 
 
 def test_detects_status_change_and_records_journal(db: Path) -> None:
-    from armillary.transition_service import detect_transitions, load_journal
+    from armillary.transition_service import detect_and_store_transitions, load_journal
 
     with Cache(db_path=db) as c:
         c.upsert([_project("a", status=Status.ACTIVE)])
-    detect_transitions(db_path=db)  # baseline
+    detect_and_store_transitions(db_path=db)  # baseline
 
     with Cache(db_path=db) as c:
         c.upsert([_project("a", status=Status.DORMANT)])
-    transitions = detect_transitions(db_path=db)
+    transitions = detect_and_store_transitions(db_path=db)
     assert len(transitions) == 1
     assert transitions[0]["from_status"] == "ACTIVE"
     assert transitions[0]["to_status"] == "DORMANT"
@@ -59,13 +59,13 @@ def test_detects_status_change_and_records_journal(db: Path) -> None:
 
 
 def test_idempotent_for_unchanged_cache(db: Path) -> None:
-    from armillary.transition_service import detect_transitions
+    from armillary.transition_service import detect_and_store_transitions
 
     with Cache(db_path=db) as c:
         c.upsert([_project("a")])
-    detect_transitions(db_path=db)  # baseline
+    detect_and_store_transitions(db_path=db)  # baseline
     # No change — should return empty
-    transitions = detect_transitions(db_path=db)
+    transitions = detect_and_store_transitions(db_path=db)
     assert transitions == []
 
 

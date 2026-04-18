@@ -811,9 +811,12 @@ def next_command(
     import contextlib as _cl
 
     with _cl.suppress(Exception):
-        from armillary.transition_service import detect_transitions, format_transitions
+        from armillary.transition_service import (
+            consume_pending_transitions,
+            format_transitions,
+        )
 
-        transitions = detect_transitions()
+        transitions = consume_pending_transitions()
         if transitions:
             console.print(f"[dim]{format_transitions(transitions)}[/dim]")
 

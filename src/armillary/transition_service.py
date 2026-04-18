@@ -14,10 +14,10 @@ from pathlib import Path
 
 from .cache import Cache, default_db_path
 from .exclude_service import filter_excluded
-from .status_override import filter_archived
 
 _PREVIOUS_FILENAME = "status-previous.json"
 _JOURNAL_FILENAME = "transition-journal.json"
+_PENDING_FILENAME = "transitions-pending.json"
 
 _MAX_DISPLAY = 5
 
@@ -49,24 +49,23 @@ def _save_json(path: Path, data: object) -> None:
 # --- Transition detection ---
 
 
-def detect_transitions(
+def detect_and_store_transitions(
     *,
     db_path: Path | None = None,
 ) -> list[dict]:
-    """Compare current status vs previous, return list of transitions.
+    """Compare current status vs previous, store pending transitions.
 
-    Each transition: {project, path, from_status, to_status}
-    Also updates status-previous.json for next comparison and records
-    new transitions to the decision journal automatically.
+    Called by scan_service after scan. Writes transitions to
+    transitions-pending.json for CLI/dashboard to consume later,
+    and records them in the decision journal.
 
-    Idempotent across repeated calls within the same cache state:
-    once current is saved as previous, subsequent calls return []
-    until the cache changes again (i.e. after a scan).
+    Returns the list of new transitions.
     """
     with Cache(db_path=db_path) as cache:
         projects = cache.list_projects()
     projects = filter_excluded(projects)
-    projects = filter_archived(projects)
+    # Do NOT filter_archived — we want to detect archive transitions too
+    from .status_override import get_override
 
     previous = _load_json(_previous_path(db_path))
     if not isinstance(previous, dict):
@@ -80,7 +79,9 @@ def detect_transitions(
         if not md or not md.status:
             continue
         path_str = str(p.path)
-        current_status = md.status.value
+        # Use override if present, else cached status
+        override = get_override(path_str)
+        current_status = override.value if override else md.status.value
         current[path_str] = current_status
 
         prev_status = previous.get(path_str)
@@ -98,17 +99,38 @@ def detect_transitions(
     # Save current as previous for next comparison
     _save_json(_previous_path(db_path), current)
 
-    # Auto-record new transitions to the decision journal so the
-    # detail view's "Status transitions" expander has content.
-    for t in transitions:
-        record_journal_entry(
-            t["path"],
-            t["from_status"],
-            t["to_status"],
-            db_path=db_path,
-        )
+    if transitions:
+        # Store as pending for CLI/dashboard to read
+        _save_json(_pending_path(db_path), transitions)
+        # Record in journal
+        for t in transitions:
+            record_journal_entry(
+                t["path"],
+                t["from_status"],
+                t["to_status"],
+                db_path=db_path,
+            )
 
     return transitions
+
+
+def consume_pending_transitions(
+    *,
+    db_path: Path | None = None,
+) -> list[dict]:
+    """Read and clear pending transitions. Called by CLI/dashboard."""
+    path = _pending_path(db_path)
+    data = _load_json(path)
+    if not isinstance(data, list) or not data:
+        return []
+    # Clear pending after reading
+    _save_json(path, [])
+    return data
+
+
+def _pending_path(db_path: Path | None = None) -> Path:
+    base = db_path.parent if db_path else default_db_path().parent
+    return base / _PENDING_FILENAME
 
 
 # --- Decision journal ---

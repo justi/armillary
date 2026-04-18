@@ -60,9 +60,9 @@ def full_scan(
 
     # Detect status transitions (ADR 0025)
     with contextlib.suppress(Exception):
-        from .transition_service import detect_transitions
+        from .transition_service import detect_and_store_transitions
 
-        detect_transitions()
+        detect_and_store_transitions()
 
     return projects
 

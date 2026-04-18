@@ -153,9 +153,9 @@ def _render_transitions() -> None:
     import contextlib
 
     with contextlib.suppress(Exception):
-        from armillary.transition_service import detect_transitions
+        from armillary.transition_service import consume_pending_transitions
 
-        transitions = detect_transitions()
+        transitions = consume_pending_transitions()
         if not transitions:
             return
 

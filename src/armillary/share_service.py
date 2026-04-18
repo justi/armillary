@@ -23,7 +23,11 @@ def _portfolio_stats(*, db_path: Path | None = None) -> dict[str, object]:
     projects = filter_excluded(projects)
     projects = filter_archived(projects)
 
+    from .models import ProjectType
+
+    git_projects = [p for p in projects if p.type == ProjectType.GIT]
     total = len(projects)
+    git_count = len(git_projects)
     total_hours = sum(p.metadata.work_hours or 0 for p in projects if p.metadata)
     statuses = Counter(
         p.metadata.status.value for p in projects if p.metadata and p.metadata.status
@@ -56,6 +60,7 @@ def _portfolio_stats(*, db_path: Path | None = None) -> dict[str, object]:
 
     return {
         "total": total,
+        "git_count": git_count,
         "total_hours": round(total_hours),
         "active": statuses.get("ACTIVE", 0),
         "dormant": statuses.get("DORMANT", 0),
@@ -85,7 +90,7 @@ def generate_hn_post(*, db_path: Path | None = None) -> str:
         return "Scan more projects first (need at least 5)."
     return (
         f"Show HN: armillary — never forget a side project again\n\n"
-        f"I have {s['total']} git repos across {s['umbrellas']} folders.\n"
+        f"I have {s['git_count']} git repos across {s['umbrellas']} folders.\n"
         f"{s['dormant']} are dormant ({s['total_hours']:,}h invested, "
         f"forgotten).\n"
         f"{s['active']} are active right now.\n\n"
