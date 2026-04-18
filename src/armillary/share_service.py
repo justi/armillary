@@ -86,13 +86,45 @@ def generate_tweet(*, db_path: Path | None = None) -> str:
     s = _portfolio_stats(db_path=db_path)
     if s["total"] < 5:
         return "Scan more projects first (need at least 5)."
-    return (
-        f"1st project {s['span']} ago. "
-        f"{s['total_hours']:,}h of work across {s['total']} projects.\n"
-        f"{s['last_year_count']} touched last year. "
-        f"{s['active']} active right now.\n\n"
-        f"armillary — total recall for everything you've ever built."
-    )
+
+    import random
+
+    templates = [
+        # Pieter style — raw numbers + casual discovery
+        (
+            f"just scanned my laptop with armillary. "
+            f"{s['total_hours']:,} hours across {s['total']} projects "
+            f"over {s['span']}. "
+            f"{s['stalled']} projects have uncommitted work just "
+            f"sitting there. found projects i completely forgot about"
+        ),
+        # Marc style — shock number + action
+        (
+            f"installed armillary, it scanned all my repos. "
+            f"{s['total']} projects. {s['total_hours']:,}h. "
+            f"{s['stalled']} with uncommitted work. "
+            f'the "what should you work on today?" feature alone '
+            f"is worth it. ship or kill, no more limbo"
+        ),
+        # Arvid style — insight + reframe
+        (
+            f"armillary just showed me {s['span']} of building "
+            f"in one heatmap. {s['total']} projects. "
+            f"{s['total_hours']:,} hours. "
+            f"{s['stalled']} repos with uncommitted work — "
+            f"that's not technical debt, that's decision debt"
+        ),
+        # Harry style — simple + wish
+        (
+            f"scanned my machine with armillary. "
+            f"{s['total']} projects. {s['span']}. "
+            f"{s['total_hours']:,} hours. "
+            f"{s['last_year_count']} touched last year. "
+            f"{s['active']} active right now. "
+            f"wish i had this years ago"
+        ),
+    ]
+    return random.choice(templates)
 
 
 def generate_hn_post(*, db_path: Path | None = None) -> str:
