@@ -23,10 +23,16 @@ def refresh_cache() -> None:
 
 
 def go_to_overview() -> None:
-    """Navigate to overview by clearing query params."""
+    """Navigate to overview by clearing query params.
+
+    Also clears transient view-state flags (``_dormant_explore``) so the
+    Overview button always lands on the clean dashboard — not a nested
+    sub-view the user previously drilled into.
+    """
     with contextlib.suppress(KeyError):
         del st.query_params["page"]
     st.query_params.pop("project", None)
+    st.session_state.pop("_dormant_explore", None)
     st.rerun()
 
 
