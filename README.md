@@ -31,7 +31,7 @@
 
 ## See it in action
 
-The dashboard — `armillary start`:
+`armillary start` — the dashboard:
 
 <p><a href="#see-it-in-action"><img src=".github/previews/dashboard.png" alt="armillary dashboard — header with scan summary, hero 'N projects calling. One dying.' line, three dominant-number suggestion cards (momentum / zombie / forgotten gold) with sparklines, and a 3-cell status strip" width="820"></a></p>
 
