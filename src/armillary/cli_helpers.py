@@ -172,7 +172,7 @@ def _print_delight_card() -> None:
     # Top 2 by hours
     by_hours = sorted(
         projects,
-        key=lambda p: p.metadata.work_hours or 0 if p.metadata else 0,
+        key=lambda p: ((p.metadata.work_hours or 0) if p.metadata else 0),
         reverse=True,
     )
     top = ", ".join(

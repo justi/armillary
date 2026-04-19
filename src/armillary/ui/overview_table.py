@@ -47,25 +47,30 @@ def _render_time_grouped_tables(rows: list[OverviewRow]) -> None:
 
     if this_month:
         st.caption(f"Last month \u2014 {len(this_month)} projects")
-        _render_table(this_month)
+        _render_table(this_month, key_prefix="month")
     if this_year:
         with st.expander(
             f"Last year \u2014 {len(this_year)} projects",
             expanded=False,
         ):
-            _render_table(this_year)
+            _render_table(this_year, key_prefix="year")
     if older:
         with st.expander(
             f"Older \u2014 {len(older)} projects",
             expanded=False,
         ):
-            _render_table(older)
+            _render_table(older, key_prefix="older")
     if not rows:
         st.warning("No projects in cache.")
 
 
-def _render_table(rows: list[OverviewRow]) -> None:
-    """Compact dataframe with multi-select + action bar."""
+def _render_table(rows: list[OverviewRow], *, key_prefix: str = "default") -> None:
+    """Compact dataframe with multi-select + action bar.
+
+    Streamlit widget keys must be unique across the page; when the
+    overview renders multiple time-grouped tables in one rerun each
+    instance needs its own ``bulk_archive`` key, otherwise the second
+    instance raises a duplicate-widget error."""
     display = []
     for r in rows:
         emoji = _STATUS_EMOJI.get(r.status_raw, "·")
@@ -138,7 +143,7 @@ def _render_table(rows: list[OverviewRow]) -> None:
         with col_action:
             if st.button(
                 "Archive selected",
-                key="bulk_archive",
+                key=f"bulk_archive_{key_prefix}",
                 icon=":material/archive:",
                 type="secondary",
             ):

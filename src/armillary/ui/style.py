@@ -12,14 +12,37 @@ builders) so it can be unit-tested without a running Streamlit session.
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import streamlit as st
 
+
+def _load_dashboard_css() -> str:
+    """Read the sibling ``dashboard.css`` at import time.
+
+    Falls back to an empty string (no custom styles) when the file is
+    missing — e.g. a broken package install or running from an
+    environment that stripped non-Python assets. Better to ship a
+    plain Streamlit dashboard than to blow up the entire UI import.
+    """
+    css_path = Path(__file__).with_name("dashboard.css")
+    try:
+        return css_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        warnings.warn(
+            f"Could not load dashboard CSS from {css_path}: {exc}. "
+            "Continuing without custom dashboard styles.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return ""
+
+
 # Extracted to a sibling .css file so the module stays readable and the
 # design tokens are editable without touching Python. Loaded once at
 # import time; GitHub / editors syntax-highlight the .css properly.
-_CSS = Path(__file__).with_name("dashboard.css").read_text(encoding="utf-8")
+_CSS = _load_dashboard_css()
 
 STATUS_COLORS = {
     "ACTIVE": "#40c463",
