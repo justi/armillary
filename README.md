@@ -33,72 +33,72 @@
 
 `armillary next` — what should I work on today?
 
-```console
-$ armillary next
-Yesterday: alpha-app, my-saas
+```ansi
+[32m❯[0m [1marmillary next[0m
+[90mYesterday:[0m alpha-app, my-saas
 
-🔥 alpha-app  ~/Projects/alpha-app
-  Dashboard for small SaaS revenue monitoring.
-  48h invested, last commit today — keep shipping.
-  Activity      ▆▇ (6mo)
-  → cd ~/Projects/alpha-app
+[33m🔥 [1;37malpha-app[0m  [90m~/Projects/alpha-app[0m
+  [2mDashboard for small SaaS revenue monitoring.[0m
+  [1;37m48h invested[0m, last commit [32mtoday[0m — keep shipping.
+  Activity      [32m▆▇[0m [90m(6mo)[0m
+  [36m→[0m cd ~/Projects/alpha-app
 
-⚠️  my-saas  ~/projects_prod/my-saas
-  Subscription box for niche hobby market.
-  32h invested, no commit in 18d — kill or ship?
-  Activity  ▇▅▃▁     (6mo)
-  → cd ~/projects_prod/my-saas
+[33m⚠️  [1;37mmy-saas[0m  [90m~/projects_prod/my-saas[0m
+  [2mSubscription box for niche hobby market.[0m
+  [1;37m32h invested[0m, no commit in [33m18d[0m — kill or ship?
+  Activity  [33m▇▅▃▁[0m     [90m(6mo)[0m
+  [36m→[0m cd ~/projects_prod/my-saas
 
-💎 speak-faster  ~/Projects/speak-faster
-  Voice latency benchmark harness for STT engines.
-  47h invested, abandoned 4 months ago. Finish with AI or archive?
-  Activity  ▆▄▁      (6mo)
-  → cd ~/Projects/speak-faster
-  → armillary next --skip speak-faster
+[35m💎 [1;37mspeak-faster[0m  [90m~/Projects/speak-faster[0m
+  [2mVoice latency benchmark harness for STT engines.[0m
+  [1;37m47h invested[0m, abandoned [35m4 months ago[0m. Finish with AI or archive?
+  Activity  [90m▆▄▁[0m      [90m(6mo)[0m
+  [36m→[0m cd ~/Projects/speak-faster
+  [36m→[0m armillary next --skip speak-faster
 ```
 
 `armillary pulse` — weekly check-in:
 
-```console
-$ armillary pulse
-Worked on:
-  🔨 alpha-app — active this week · 48h invested
-  🔨 research-notes — active this week · 12h invested
-  🔨 my-saas — active this week · 32h invested
+```ansi
+[32m❯[0m [1marmillary pulse[0m
+[1;37mWorked on:[0m
+  🔨 [36malpha-app[0m — active this week · [1;37m48h invested[0m
+  🔨 [36mresearch-notes[0m — active this week · [1;37m12h invested[0m
+  🔨 [36mmy-saas[0m — active this week · [1;37m32h invested[0m
 
-Went dormant:
-  💤 old-prototype — went dormant this week
-  💤 ai-playground — went dormant this week
+[1;37mWent dormant:[0m
+  💤 [90mold-prototype[0m — went dormant this week
+  💤 [90mai-playground[0m — went dormant this week
 
-Uncommitted work:
-  ⚠️  my-saas — 12 uncommitted files
-  ⚠️  experiments — 3 uncommitted files
+[1;37mUncommitted work:[0m
+  ⚠️  [33mmy-saas[0m — 12 uncommitted files
+  ⚠️  [33mexperiments[0m — 3 uncommitted files
 ```
 
 `armillary context <name>` — instant re-entry:
 
-```console
-$ armillary context my-saas
-  my-saas on main — STALLED — 32.0 h · trending down
-  ~/projects_prod/my-saas
-  > Subscription box for niche hobby market.
-  Age 14mo
-  Activity      ▇▅▃▁ (6mo)
+```ansi
+[32m❯[0m [1marmillary context my-saas[0m
+  [1;37mmy-saas[0m on [36mmain[0m — [33mSTALLED[0m — [1;37m32.0h[0m · [33mtrending down[0m
+  [90m~/projects_prod/my-saas[0m
+  [2m> Subscription box for niche hobby market.[0m
+  Age [1;37m14mo[0m
+  Activity      [33m▇▅▃▁[0m [90m(6mo)[0m
 
-  Last session  1.4h, 3 commits, 18 days ago
+  Last session  [1;37m1.4h[0m, 3 commits, 18 days ago
 
-  Last commits
-  a3f9e12  18 days ago      wip: pricing page redesign
-  8c12f04  19 days ago      feat: annual plan discount calc
-  2e88a01  3 weeks ago      fix: stripe webhook race condition
+  [1;37mLast commits[0m
+  [36ma3f9e12[0m  [90m18 days ago[0m      wip: pricing page redesign
+  [36m8c12f04[0m  [90m19 days ago[0m      feat: annual plan discount calc
+  [36m2e88a01[0m  [90m3 weeks ago[0m      fix: stripe webhook race condition
 
-  Recent branches
-  feat/annual-plans              3 weeks ago
-  experiment/webflow-embed       2 months ago
+  [1;37mRecent branches[0m
+  [36mfeat/annual-plans[0m              3 weeks ago
+  [36mexperiment/webflow-embed[0m       2 months ago
 
-  4 local branches · 2 unmerged
-    feat/annual-plans
-    experiment/webflow-embed
+  4 local branches · [33m2 unmerged[0m
+    [33mfeat/annual-plans[0m
+    [33mexperiment/webflow-embed[0m
 ```
 
 Your AI coding agent sees the same data through MCP — ask Claude Code _"what should I work on?"_ and it calls `armillary_next` under the hood.
