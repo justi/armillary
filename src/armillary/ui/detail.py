@@ -467,7 +467,9 @@ def _render_glance_strip(project: Project) -> None:
             last_val, last_sub = f"{days // 30}mo", "ago"
         else:
             last_val, last_sub = f"{days // 365}y", "ago"
-        last_tone = "warning" if days > 30 else ("danger" if days > 90 else None)
+        # 90+ days is the stricter threshold, so check it first — otherwise
+        # anything over 30 shortcircuits into warning and danger is unreachable.
+        last_tone = "danger" if days > 90 else ("warning" if days > 30 else None)
     else:
         last_val, last_sub, last_tone = "\u2014", "no commits", None
 
