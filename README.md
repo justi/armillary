@@ -111,7 +111,7 @@ armillary start
 
 ## MCP server for AI coding agents
 
-armillary exposes four MCP tools that Claude Code / Cursor can call:
+armillary exposes five MCP tools that Claude Code / Cursor can call:
 
 | Tool | What it does | Speed |
 |---|---|---|
@@ -119,6 +119,7 @@ armillary exposes four MCP tools that Claude Code / Cursor can call:
 | `armillary_context` | Where was I? Branch, dirty files, recent commits | sub-second |
 | `armillary_search` | Exact code search: function names, imports, error messages | <10ms |
 | `armillary_projects` | List all projects with path, status, description | instant |
+| `armillary_pulse` | What changed in my portfolio this week? | instant |
 
 `armillary config --init` auto-configures MCP in `~/.claude/mcp.json`. Or manually:
 
