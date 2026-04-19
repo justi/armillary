@@ -5,6 +5,9 @@ notes/
 .notes/
 TODO-private.md
 
+# Private tooling — share/screenshot scripts touch the real portfolio
+scripts/
+
 # Python
 __pycache__/
 *.py[cod]
