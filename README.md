@@ -9,16 +9,16 @@
    ─────────────────────────                     ────────────────────────
 
    ~/Projects/                                   🧭  armillary next
-     alpha-app/                                      "what should I work on today?"
-     speak-faster/      ┌───────────────────┐
-     old-prototype/     │                   │    🔄  armillary context <name>
+     acme-dashboard/                                  "what should I work on today?"
+     acme-voice-lab/    ┌───────────────────┐
+     acme-prototype/    │                   │    🔄  armillary context <name>
                         │     armillary     │        "where was I on this project?"
    ~/projects_prod/     │                   │
-     my-saas/      ────▶│  scan + index +   │──▶ 🔍  armillary search "needle"
-     side-project/      │   SQLite cache    │        ripgrep across all repos
+     acme-subscriptions/─▶│  scan + index +   │──▶ 🔍  armillary search "needle"
+     acme-side-project/ │   SQLite cache    │        ripgrep across all repos
                         │                   │
    ~/code/              └───────────────────┘    🤖  MCP server
-     experiments/                │                   Claude Code / Cursor query your repos
+     acme-experiments/            │                   Claude Code / Cursor query your repos
      ...                        │
                                 ▼                📋  armillary list
                      status: ACTIVE / STALLED /      terminal table, sortable
@@ -33,73 +33,15 @@
 
 `armillary next` — what should I work on today?
 
-```console
-$ armillary next
-Yesterday: alpha-app, my-saas
-
-🔥 alpha-app  ~/Projects/alpha-app
-  Dashboard for small SaaS revenue monitoring.
-  48h invested, last commit today — keep shipping.
-  Activity      ▆▇ (6mo)
-  → cd ~/Projects/alpha-app
-
-⚠️  my-saas  ~/projects_prod/my-saas
-  Subscription box for niche hobby market.
-  32h invested, no commit in 18d — kill or ship?
-  Activity  ▇▅▃▁     (6mo)
-  → cd ~/projects_prod/my-saas
-
-💎 speak-faster  ~/Projects/speak-faster
-  Voice latency benchmark harness for STT engines.
-  47h invested, abandoned 4 months ago. Finish with AI or archive?
-  Activity  ▆▄▁      (6mo)
-  → cd ~/Projects/speak-faster
-  → armillary next --skip speak-faster
-```
+<p><img src=".github/previews/next.svg" alt="armillary next output — yesterday line + three categorized suggestions (acme-dashboard momentum, acme-subscriptions zombie, acme-voice-lab forgotten gold) with sparklines and cd hints" width="820"></p>
 
 `armillary pulse` — weekly check-in:
 
-```console
-$ armillary pulse
-Worked on:
-  🔨 alpha-app — active this week · 48h invested
-  🔨 research-notes — active this week · 12h invested
-  🔨 my-saas — active this week · 32h invested
-
-Went dormant:
-  💤 old-prototype — went dormant this week
-  💤 ai-playground — went dormant this week
-
-Uncommitted work:
-  ⚠️  my-saas — 12 uncommitted files
-  ⚠️  experiments — 3 uncommitted files
-```
+<p><img src=".github/previews/pulse.svg" alt="armillary pulse output — worked-on, went-dormant, and uncommitted-work sections" width="820"></p>
 
 `armillary context <name>` — instant re-entry:
 
-```console
-$ armillary context my-saas
-  my-saas on main — STALLED — 32.0 h · trending down
-  ~/projects_prod/my-saas
-  > Subscription box for niche hobby market.
-  Age 14mo
-  Activity      ▇▅▃▁ (6mo)
-
-  Last session  1.4h, 3 commits, 18 days ago
-
-  Last commits
-  a3f9e12  18 days ago      wip: pricing page redesign
-  8c12f04  19 days ago      feat: annual plan discount calc
-  2e88a01  3 weeks ago      fix: stripe webhook race condition
-
-  Recent branches
-  feat/annual-plans              3 weeks ago
-  experiment/webflow-embed       2 months ago
-
-  4 local branches · 2 unmerged
-    feat/annual-plans
-    experiment/webflow-embed
-```
+<p><img src=".github/previews/context.svg" alt="armillary context acme-subscriptions — status, activity sparkline, last session, recent commits, unmerged branches" width="820"></p>
 
 Your AI coding agent sees the same data through MCP — ask Claude Code _"what should I work on?"_ and it calls `armillary_next` under the hood.
 
