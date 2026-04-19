@@ -1,6 +1,6 @@
 # armillary
 
-> Total recall for everything you've ever built.
+> 💎 Never forget a side project again. Scans your folders, tells you what's rotting, and which forgotten hours are worth reviving.
 >
 > *An armillary sphere is an ancient astronomical instrument — concentric rings modeling the celestial sphere, with a fixed center and orbits turning around it. You are the center, your projects orbit around you, and `armillary` lets you see the whole system at once.*
 
@@ -21,7 +21,7 @@
      experiments/                │                   Claude Code / Cursor query your repos
      ...                        │
                                 ▼                📋  armillary list
-                     status: ACTIVE / PAUSED /       terminal table, sortable
+                     status: ACTIVE / STALLED /      terminal table, sortable
                              DORMANT / IDEA
 ```
 

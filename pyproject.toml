@@ -1,7 +1,7 @@
 [project]
 name = "armillary"
 version = "0.1.0"
-description = "Project observatory with AI integration"
+description = "Never forget a side project again — scan your folders, see what's rotting, revive forgotten hours."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"

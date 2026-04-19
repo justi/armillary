@@ -28,7 +28,7 @@ from armillary.scanner import scan as scan_umbrellas
 
 app = typer.Typer(
     name="armillary",
-    help="What should you work on today?",
+    help="Never forget a side project again.",
     invoke_without_command=True,
     no_args_is_help=False,
     add_completion=False,
