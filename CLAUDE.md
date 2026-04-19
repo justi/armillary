@@ -51,14 +51,25 @@ one. The target layout for the dashboard:
 
 ```
 ui/
-  app.py          — entrypoint + routing (thin)
-  overview.py     — project table + filters
-  detail.py       — single project view
-  settings.py     — config editor tabs
-  search.py       — search bar + results
-  sidebar.py      — sidebar with filters + action buttons
-  helpers.py      — shared small utilities (_shorten_home, etc.)
+  app.py              — entrypoint + routing (thin)
+  overview.py         — project table + filters + hero suggestions
+  detail.py           — single project view
+  settings.py         — config editor entrypoint
+  settings_tabs.py    — settings tab renderers
+  settings_editors.py — per-umbrella / per-launcher editors
+  search.py           — search bar + results
+  sidebar.py          — sidebar with filters + action buttons
+  actions.py          — shared navigation + refresh + save helpers
+  style.py            — design-system CSS + HTML builders (status chip,
+                        big suggestion card, status strip, timeline, …)
+  launcher_support.py — platform-specific launcher detection
+  helpers.py          — shared small utilities (_shorten_home, etc.)
 ```
+
+Over-size modules today (flagged as tech debt, not exceptions):
+`overview.py` / `detail.py` / `cli_tools.py` / `style.py` / `cli.py`
+all exceed the 400-line target and should be split as opportunities
+arise — new work should not add to them.
 
 ### 4. Prefer typed models over dict[str, Any]
 
