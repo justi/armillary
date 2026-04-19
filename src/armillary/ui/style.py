@@ -107,6 +107,12 @@ _CSS = """
   padding-left: 14px;
   margin: 4px 0 14px;
   font-style: italic;
+  cursor: text;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.arm-purpose-quote:hover {
+  border-left-color: var(--arm-accent);
+  background: rgba(88, 166, 255, 0.05);
 }
 
 /* At-a-glance strip */
@@ -199,7 +205,7 @@ _CSS = """
   border: 1px solid var(--arm-border);
   border-left-width: 3px;
   border-radius: 8px;
-  margin-bottom: 10px;
+  margin-bottom: 16px;
   align-items: center;
   background: var(--arm-bg);
 }
@@ -431,13 +437,15 @@ def status_strip_cell(
     count: int,
     label: str,
     sub: str,
+    tooltip: str | None = None,
 ) -> str:
     """One cell for the merged status strip (zombies/at-risk/forgotten)."""
     import html
 
     bg = f"{color}22"
+    title_attr = f' title="{html.escape(tooltip, quote=True)}"' if tooltip else ""
     return (
-        '<div class="arm-strip-cell">'
+        f'<div class="arm-strip-cell"{title_attr}>'
         f'<div class="arm-strip-icon" style="background:{bg};color:{color};">'
         f"{html.escape(icon)}</div>"
         '<div style="flex:1;">'

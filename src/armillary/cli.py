@@ -221,7 +221,11 @@ def _pre_start_scan() -> None:
         umbrellas = [
             UmbrellaFolder(path=u.path, max_depth=u.max_depth) for u in cfg.umbrellas
         ]
-        projects, changed_count = scan_service.incremental_scan(umbrellas)
+        with Console(stderr=True).status(
+            "Scanning umbrellas and refreshing changed projects…",
+            spinner="dots",
+        ):
+            projects, changed_count = scan_service.incremental_scan(umbrellas)
 
         typer.secho(
             f"  ✓ {len(projects)} project(s), {changed_count} changed.",

@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 import typer
+from rich.console import Console
 
 from armillary import bootstrap, exporter, launcher, scan_service
 from armillary.cli_helpers import _safe_load_config, _shorten_home_str
@@ -38,7 +39,11 @@ def run_initial_scan_and_summary(
 
     try:
         umbrellas = [UmbrellaFolder(path=c.path, max_depth=3) for c in chosen]
-        projects = scan_service.initial_scan(umbrellas)
+        with Console(stderr=True).status(
+            "Scanning umbrellas and extracting git metadata…",
+            spinner="dots",
+        ):
+            projects = scan_service.initial_scan(umbrellas)
     except Exception as exc:  # noqa: BLE001 — never abort init on scan failure
         typer.secho(
             f"⚠ Initial scan failed: {exc}",

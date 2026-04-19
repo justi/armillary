@@ -98,6 +98,13 @@ def _render_project_detail(project_path: str) -> None:
             go_to_overview()
         return
 
+    current_view = f"detail:{project_path}"
+    if st.session_state.get("_arm_view") != current_view:
+        for key in list(st.session_state):
+            if key.startswith("_archive_confirm_"):
+                st.session_state.pop(key)
+    st.session_state["_arm_view"] = current_view
+
     md = project.metadata
 
     # Back navigation in content area (not just sidebar)
@@ -244,6 +251,8 @@ def _render_project_detail(project_path: str) -> None:
 
     # --- Danger zone — unified archive box for non-archived projects ---
     if not is_archived:
+        confirm_key = f"_archive_confirm_{project.path}"
+        confirm_archive = st.session_state.get(confirm_key, False)
         st.markdown(
             '<div class="arm-danger-zone">'
             '<div class="kicker">Danger zone \u2014 archive</div>'
@@ -256,15 +265,21 @@ def _render_project_detail(project_path: str) -> None:
             key="archive_reason_bottom",
             label_visibility="collapsed",
         )
+        if confirm_archive:
+            st.warning("Click again to confirm archive", icon=":material/warning:")
         if st.button(
             "Archive project",
             key="detail_archive",
             icon=":material/archive:",
             type="secondary",
         ):
+            if not confirm_archive:
+                st.session_state[confirm_key] = True
+                st.rerun()
             from armillary.purpose_service import set_archive_reason
             from armillary.status_override import set_override
 
+            st.session_state.pop(confirm_key, None)
             set_override(str(project.path), Status.ARCHIVED)
             if reason_bottom:
                 set_archive_reason(str(project.path), reason_bottom)
@@ -329,8 +344,8 @@ def _render_header_with_launcher(project: Project) -> None:
                     "",
                     icon=":material/edit:",
                     key=f"edit_btn_{project.path}",
-                    help="Edit purpose",
-                    type="tertiary",
+                    help="Click to edit purpose",
+                    type="secondary",
                 ):
                     st.session_state[edit_key] = True
                     st.rerun()

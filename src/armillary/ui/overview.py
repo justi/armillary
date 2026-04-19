@@ -33,6 +33,11 @@ from armillary.ui.style import (
 
 
 def _render_overview() -> None:
+    st.session_state["_arm_view"] = "overview"
+    for key in list(st.session_state):
+        if key.startswith("_archive_confirm_"):
+            st.session_state.pop(key)
+
     _render_header()
 
     # Record weekly pulse snapshot on every dashboard load (idempotent per week)
@@ -150,7 +155,7 @@ def _render_header() -> None:
 _CATEGORY_ICONS = {
     "momentum": "🔥",
     "zombie": "⚠️",
-    "forgotten_gold": "💀",
+    "forgotten_gold": "💎",
     "archive_candidate": "📦",
 }
 _CATEGORY_LABELS = {
@@ -247,6 +252,7 @@ def _render_next_suggestions() -> None:
 
     # Yesterday's activity — retention hook
     _render_yesterday_line(suggestions)
+    st.caption("Momentum · zombies · forgotten gold — pick one to open.")
 
     for s in suggestions:
         emoji = _CATEGORY_ICONS.get(s.category, "\u2022")
@@ -461,6 +467,9 @@ def _render_status_strip(
             count=len(zombies),
             label="zombies",
             sub="no commit 14+ days" if zombies else "none \u2014 nice",
+            tooltip=(
+                "ACTIVE projects with no commits in 14+ days. Decide: kill or ship?"
+            ),
         ),
         status_strip_cell(
             icon="\U0001f4dd",
@@ -468,6 +477,7 @@ def _render_status_strip(
             count=len(at_risk),
             label="at risk",
             sub=(f"{at_risk_hours:.0f}h uncommitted" if at_risk else "all committed"),
+            tooltip="STALLED projects with uncommitted work. Push or lose hours.",
         ),
         status_strip_cell(
             icon="\U0001f4b0",
@@ -475,6 +485,7 @@ def _render_status_strip(
             count=len(dormant),
             label="forgotten",
             sub=(f"{dormant_hours:.0f}h invested" if dormant else "none dormant"),
+            tooltip="DORMANT projects — dev abandoned 30+ days. Revive or archive.",
         ),
     ]
     st.markdown(status_strip(cells), unsafe_allow_html=True)
@@ -545,8 +556,9 @@ def _render_empty_cache_state(cfg: Config | None) -> None:
     """Friendly first-launch screen with scan button."""
     st.subheader("Cache is empty", anchor=False)
     st.write(
-        "armillary needs to walk the filesystem at least once to discover "
-        "your projects. Click the button below or use `armillary scan`."
+        "First time? Your config is ready. Click Scan filesystem now to "
+        "discover your projects. This reads metadata from every git repo "
+        "under your umbrella folders."
     )
 
     from armillary.ui.actions import run_scan_with_feedback
