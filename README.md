@@ -23,6 +23,8 @@
                                 ▼                📋  armillary list
                      status: ACTIVE / STALLED /      terminal table, sortable
                              DORMANT / IDEA
+                                                 🩺  armillary pulse
+                                                     weekly changes across your portfolio
 ```
 
 **Status:** Alpha. Daily-driver-ready on macOS / Linux.
