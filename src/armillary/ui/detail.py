@@ -283,10 +283,9 @@ def _render_header_tombstone(project: Project) -> None:
     if purpose:
         st.caption(f"*{purpose}*")
     elif md and md.readme_excerpt:
-        excerpt = md.readme_excerpt
-        dot = excerpt.find(". ")
-        oneliner = excerpt[: dot + 1] if 0 < dot < 80 else excerpt[:80]
-        st.caption(f"*{oneliner}*")
+        from armillary.utils import excerpt_one_liner
+
+        st.caption(f"*{excerpt_one_liner(md.readme_excerpt)}*")
     # Sunk cost summary
     parts: list[str] = []
     if md and md.work_hours is not None:
@@ -339,10 +338,12 @@ def _render_header_with_launcher(project: Project) -> None:
             # No purpose yet OR user clicked edit — show input, with
             # README excerpt as a visual placeholder if empty
             if not purpose and md and md.readme_excerpt:
-                excerpt = md.readme_excerpt
-                dot = excerpt.find(". ")
-                oneliner = excerpt[: dot + 1] if 0 < dot < 80 else excerpt[:80]
-                st.markdown(purpose_quote(oneliner), unsafe_allow_html=True)
+                from armillary.utils import excerpt_one_liner
+
+                st.markdown(
+                    purpose_quote(excerpt_one_liner(md.readme_excerpt)),
+                    unsafe_allow_html=True,
+                )
             new_purpose = st.text_input(
                 "Purpose",
                 value=purpose or "",
@@ -489,12 +490,12 @@ def _render_glance_strip(project: Project) -> None:
     activity_val: str = "\u2014"
     activity_sub = "6 months"
     if md and md.monthly_commits and any(c > 0 for c in md.monthly_commits):
-        spark = _sparkline_text(md.monthly_commits)
-        trend = getattr(md, "velocity_trend", None)
-        from armillary.ui.style import spark_color_for_trend
+        from armillary.ui.style import sparkline_html
 
-        color = spark_color_for_trend(trend)
-        activity_val = f'<span class="arm-spark" style="color:{color};">{spark}</span>'
+        activity_val = sparkline_html(
+            md.monthly_commits,
+            trend=getattr(md, "velocity_trend", None),
+        )
 
     cells = [
         {
@@ -733,9 +734,6 @@ def _humanize_porcelain(line: str) -> str:
     return line
 
 
-_SPARK_CHARS = " \u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
-
-
 def _render_skip_history(project: Project) -> None:
     """Show skip history if this project was previously skipped."""
     from armillary.next_service import _load_skips
@@ -752,14 +750,6 @@ def _render_skip_history(project: Project) -> None:
     if reason:
         parts.append(f"last reason: *{reason}*")
     st.info(" \u2014 ".join(parts), icon=":material/skip_next:")
-
-
-def _sparkline_text(values: list[int]) -> str:
-    """Render a list of ints as a unicode sparkline."""
-    if not values:
-        return ""
-    peak = max(values) or 1
-    return "".join(_SPARK_CHARS[min(int(v / peak * 7), 7)] for v in values)
 
 
 def _format_age(seconds: float) -> str:

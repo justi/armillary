@@ -832,10 +832,11 @@ def next_command(
         if purpose:
             console.print(f"  [italic]{purpose}[/italic]")
         elif md and md.readme_excerpt:
-            excerpt = md.readme_excerpt
-            dot = excerpt.find(". ")
-            oneliner = excerpt[: dot + 1] if 0 < dot < 80 else excerpt[:80]
-            console.print(f"  [dim italic]{oneliner}[/dim italic]")
+            from armillary.utils import excerpt_one_liner
+
+            console.print(
+                f"  [dim italic]{excerpt_one_liner(md.readme_excerpt)}[/dim italic]"
+            )
         # Revenue inline
         rev = get_revenue(str(s.project.path))
         rev_str = f" · [green]${rev}/mo[/green]" if rev else ""

@@ -28,6 +28,12 @@ SPARK_COLOR_FALLING = "#f0ad4e"
 SPARK_COLOR_DEAD = "#8b949e"
 SPARK_COLOR_NEUTRAL = "#c9d1d9"
 
+# Semantic accent colors — referenced by both CSS tokens and Python
+# builders, so the strip / chip / banner code never hardcodes hex.
+ACCENT_WARNING = STATUS_COLORS["STALLED"]  # #f0ad4e — amber
+ACCENT_DANGER = "#f85149"  # matches --arm-danger in the CSS
+ACCENT_FORGOTTEN = STATUS_COLORS["IDEA"]  # #a371f7 — purple
+
 
 _CSS = """
 <style>
@@ -469,6 +475,38 @@ def spark_color_for_trend(trend: str | None) -> str:
     if trend == "dead":
         return SPARK_COLOR_DEAD
     return SPARK_COLOR_NEUTRAL
+
+
+SPARK_CHARS = " \u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
+
+
+def sparkline_text(values: list[int]) -> str:
+    """Unicode block-character sparkline (no HTML wrapper)."""
+    if not values:
+        return ""
+    peak = max(values) or 1
+    return "".join(SPARK_CHARS[min(int(v / peak * 7), 7)] for v in values)
+
+
+def sparkline_html(
+    values: list[int],
+    *,
+    color: str | None = None,
+    trend: str | None = None,
+    css_class: str = "",
+) -> str:
+    """Block-character sparkline wrapped in the shared ``.arm-spark`` span.
+
+    Resolves color from ``color`` arg, or ``trend`` via
+    ``spark_color_for_trend``. ``css_class`` adds tone modifiers
+    (``"rising"``, ``"falling"``, ``"dead"``) for CSS-only styling.
+    """
+    text = sparkline_text(values)
+    if not text:
+        return ""
+    resolved = color or spark_color_for_trend(trend)
+    class_attr = f"arm-spark {css_class}".strip()
+    return f'<span class="{class_attr}" style="color:{resolved};">{text}</span>'
 
 
 def spark_color_for_status(status: str) -> str:

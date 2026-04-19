@@ -23,7 +23,10 @@ from armillary.ui.helpers import (
 from armillary.ui.search import _render_search_section
 from armillary.ui.sidebar import _render_sidebar
 from armillary.ui.style import (
-    spark_color_for_trend,
+    ACCENT_DANGER,
+    ACCENT_FORGOTTEN,
+    ACCENT_WARNING,
+    sparkline_html,
     status_strip,
     status_strip_cell,
 )
@@ -255,25 +258,22 @@ def _render_next_suggestions() -> None:
         if purpose:
             purpose_line = purpose
         elif md and md.readme_excerpt:
-            excerpt = md.readme_excerpt
-            dot = excerpt.find(". ")
-            purpose_line = excerpt[: dot + 1] if 0 < dot < 80 else excerpt[:80]
+            from armillary.utils import excerpt_one_liner
+
+            purpose_line = excerpt_one_liner(md.readme_excerpt)
 
         spark_html = ""
         if md and md.monthly_commits and any(c > 0 for c in md.monthly_commits):
-            chars = "".join(
-                _spark_char(c, md.monthly_commits) for c in md.monthly_commits
-            )
-            color = spark_color_for_trend(getattr(md, "velocity_trend", None))
             css_class = {
                 "momentum": "rising",
                 "zombie": "falling",
                 "forgotten_gold": "dead",
                 "archive_candidate": "dead",
             }.get(s.category, "")
-            spark_html = (
-                f'<span class="arm-spark {css_class}" style="color:{color};">'
-                f"{chars}</span>"
+            spark_html = sparkline_html(
+                md.monthly_commits,
+                trend=getattr(md, "velocity_trend", None),
+                css_class=css_class,
             )
 
         headline, unit = _big_number_parts(s)
@@ -457,21 +457,21 @@ def _render_status_strip(
     cells = [
         status_strip_cell(
             icon="\u26a0\ufe0f",
-            color="#f0ad4e",
+            color=ACCENT_WARNING,
             count=len(zombies),
             label="zombies",
             sub="no commit 14+ days" if zombies else "none \u2014 nice",
         ),
         status_strip_cell(
             icon="\U0001f4dd",
-            color="#f85149",
+            color=ACCENT_DANGER,
             count=len(at_risk),
             label="at risk",
             sub=(f"{at_risk_hours:.0f}h uncommitted" if at_risk else "all committed"),
         ),
         status_strip_cell(
             icon="\U0001f4b0",
-            color="#a371f7",
+            color=ACCENT_FORGOTTEN,
             count=len(dormant),
             label="forgotten",
             sub=(f"{dormant_hours:.0f}h invested" if dormant else "none dormant"),
@@ -574,80 +574,7 @@ def _render_empty_cache_state(cfg: Config | None) -> None:
             )
 
 
-_SPARK_CHARS = " \u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
-
-
-def _spark_char(value: int, all_values: list[int]) -> str:
-    """Single sparkline character for a value within a series."""
-    peak = max(all_values) or 1
-    return _SPARK_CHARS[min(int(value / peak * 7), 7)]
-
-
-def _render_zombie_alert_dashboard(rows: list[OverviewRow]) -> None:
-    """Zombie alert in dashboard — mirrors CLI _print_zombie_alert."""
-    from datetime import datetime, timedelta
-
-    cutoff = datetime.now() - timedelta(days=14)
-    zombies = [
-        r
-        for r in rows
-        if r.status_raw == "ACTIVE"
-        and r.last_modified < cutoff
-        and r.work_hours
-        and r.work_hours > 10
-    ]
-    if zombies:
-        names = ", ".join(r.name for r in zombies[:3])
-        more = f" +{len(zombies) - 3}" if len(zombies) > 3 else ""
-        st.warning(
-            f"**{len(zombies)} zombie"
-            f"{'s' if len(zombies) > 1 else ''}: "
-            f"{names}{more}** \u2014 no commit in 14+ days",
-            icon=":material/warning:",
-        )
-
-
-def _render_dying_metric(
-    rows: list[OverviewRow],
-    *,
-    exclude_paths: set[str] | None = None,
-) -> None:
-    """'Uncommitted work at risk' — panel consensus 3/3."""
-    at_risk = find_at_risk_projects(rows, exclude_paths=exclude_paths)
-
-    if not at_risk:
-        return
-
-    at_risk.sort(key=lambda r: r.work_hours or 0, reverse=True)
-    total = len(at_risk)
-    total_hours = sum(r.work_hours or 0 for r in at_risk)
-
-    st.warning(
-        f"**{total} project{'s have' if total > 1 else ' has'} "
-        f"uncommitted work** \u2014 {total_hours:.0f}h across these projects",
-        icon=":material/priority_high:",
-    )
-
-    with st.expander(
-        f"Show {total} project{'s' if total > 1 else ''}",
-        expanded=False,
-    ):
-        for r in at_risk:
-            hours = f"{r.work_hours:.0f}h" if r.work_hours else "0h"
-            dirty_label = f"{r.dirty} file{'s' if r.dirty > 1 else ''}"
-            col_info, col_act = st.columns([4, 1])
-            with col_info:
-                st.markdown(
-                    f"**{r.name}** \u2014 {dirty_label} uncommitted \u00b7 {hours}"
-                )
-            with col_act:
-                if st.button(
-                    "Open",
-                    key=f"dying_{r.path}",
-                    icon=":material/open_in_new:",
-                ):
-                    st.query_params["project"] = r.path
-                    st.rerun()
+# Sparkline text/HTML lives in armillary.ui.style (sparkline_text/_html).
 
 
 def apply_status_filter(
@@ -919,16 +846,13 @@ def _render_time_grouped_tables(rows: list[OverviewRow]) -> None:
     """Show projects in time groups: last month, last year, older.
 
     Only non-empty groups are rendered. Each gets a subheader + table.
+    Uses the pure ``group_by_time`` helper so both prod and tests share
+    the same bucketing logic.
     """
-    from datetime import datetime, timedelta
-
-    now = datetime.now()
-    month_ago = now - timedelta(days=30)
-    year_ago = now - timedelta(days=365)
-
-    this_month = [r for r in rows if r.last_modified >= month_ago]
-    this_year = [r for r in rows if month_ago > r.last_modified >= year_ago]
-    older = [r for r in rows if r.last_modified < year_ago]
+    groups = group_by_time(rows)
+    this_month = groups["last_month"]
+    this_year = groups["last_year"]
+    older = groups["older"]
 
     if this_month:
         st.caption(f"Last month \u2014 {len(this_month)} projects")

@@ -13,6 +13,21 @@ from armillary.models import Project
 _T = TypeVar("_T")
 
 
+def excerpt_one_liner(text: str, max_chars: int = 80) -> str:
+    """First sentence of ``text``, or the first ``max_chars`` characters.
+
+    Used to turn a README excerpt into a one-liner for suggestion cards,
+    detail headers, and CLI summaries. Returns an empty string for empty
+    input.
+    """
+    if not text:
+        return ""
+    dot = text.find(". ")
+    if 0 < dot < max_chars:
+        return text[: dot + 1]
+    return text[:max_chars]
+
+
 def shorten_home(path: Path) -> str:
     """Replace the user's home directory prefix with ``~``."""
     home = str(Path.home())
