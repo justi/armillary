@@ -51,25 +51,47 @@ one. The target layout for the dashboard:
 
 ```
 ui/
-  app.py              — entrypoint + routing (thin)
-  overview.py         — project table + filters + hero suggestions
-  detail.py           — single project view
-  settings.py         — config editor entrypoint
-  settings_tabs.py    — settings tab renderers
-  settings_editors.py — per-umbrella / per-launcher editors
-  search.py           — search bar + results
-  sidebar.py          — sidebar with filters + action buttons
-  actions.py          — shared navigation + refresh + save helpers
-  style.py            — design-system CSS + HTML builders (status chip,
-                        big suggestion card, status strip, timeline, …)
-  launcher_support.py — platform-specific launcher detection
-  helpers.py          — shared small utilities (_shorten_home, etc.)
+  app.py                   — entrypoint + routing (thin)
+  overview.py              — overview orchestrator
+  overview_suggestions.py  — hero + big-number cards + yesterday + transitions
+  overview_status.py       — merged strip + dormant banner + pure filter/at-risk
+  overview_today.py        — today tab
+  overview_table.py        — time-grouped tables + pure group_by_time
+  overview_portfolio.py    — pulse + 12-month heatmap
+  detail.py                — detail orchestrator + reference + danger zone
+  detail_header.py         — title + status chip + purpose + launcher
+  detail_glance.py         — 5-metric at-a-glance strip
+  detail_work.py           — dirty/clean + narrative + timeline + skip
+  settings.py              — settings entrypoint
+  settings_tabs.py         — settings tab renderers
+  settings_editors.py      — per-umbrella / per-launcher editors
+  search.py                — search bar + results
+  sidebar.py               — sidebar with filters + action buttons
+  actions.py               — shared navigation + refresh + save helpers
+  style.py                 — design tokens + inject_css + HTML builders
+  dashboard.css            — raw CSS (~320 lines, imported by style.py)
+  launcher_support.py      — platform-specific launcher detection
+  helpers.py               — shared small utilities (_shorten_home, etc.)
 ```
 
-Over-size modules today (flagged as tech debt, not exceptions):
-`overview.py` / `detail.py` / `cli_tools.py` / `style.py` / `cli.py`
-all exceed the 400-line target and should be split as opportunities
-arise — new work should not add to them.
+CLI modules follow the same pattern — commands grouped by concern:
+
+```
+cli.py              — typer app wiring + start + scan + list
+cli_config.py       — config command
+cli_config_ceremony.py — first-run setup walk-through
+cli_tools.py        — search + open + install-claude-bridge + mcp-serve
+cli_context.py      — armillary context
+cli_next.py         — armillary next
+cli_lifecycle.py    — exclude / include / archive / activate / purpose / talked / revenue
+cli_share.py        — share / card / pulse
+cli_helpers.py      — shared CLI helpers (_resolve_project_or_report, _print_delight_card, …)
+```
+
+All UI and CLI modules are under the 400-line target as of this
+writing. A handful of non-UI modules (``metadata.py``, ``cache.py``,
+``mcp_server.py``) remain above 400 and are tracked as follow-up tech
+debt — new work should not add to them.
 
 ### 4. Prefer typed models over dict[str, Any]
 
