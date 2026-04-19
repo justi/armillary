@@ -1,6 +1,7 @@
 # Private development plan — not for public repo
 PLAN.md
 docs/adr/
+docs/feature-tree.yaml
 notes/
 .notes/
 TODO-private.md
