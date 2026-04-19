@@ -22,6 +22,11 @@ from armillary.ui.helpers import (
 )
 from armillary.ui.search import _render_search_section
 from armillary.ui.sidebar import _render_sidebar
+from armillary.ui.style import (
+    spark_color_for_trend,
+    status_strip,
+    status_strip_cell,
+)
 
 
 def _render_overview() -> None:
@@ -57,17 +62,14 @@ def _render_overview() -> None:
     if not dormant_explore:
         _render_next_suggestions()
 
-    # Zombie alert — ACTIVE projects going stale (M3)
-    if not dormant_explore:
-        _render_zombie_alert_dashboard(rows)
-
-    # "Dying projects" hook — below next, excludes already-suggested projects
+    # Merged status strip — replaces zombie/at-risk/forgotten separate banners
     if not dormant_explore:
         from armillary.next_service import get_suggestions
 
         suggested_paths = {str(s.project.path) for s in get_suggestions()}
-        _render_dying_metric(rows, exclude_paths=suggested_paths)
+        _render_status_strip(rows, exclude_paths=suggested_paths)
 
+    # Dormant explore action + "at risk" details still exposed via expanders
     _render_dormant_banner(rows, exploring=dormant_explore)
 
     # Apply filters — dormant explore bypasses normal filter
@@ -93,14 +95,17 @@ def _render_overview() -> None:
         all_visible = [r for r in rows if r.status_raw != "ARCHIVED"]
         _render_time_grouped_tables(all_visible)
 
-    # Search bar below table
-    _render_search_section([r for r in rows if r.status_raw != "ARCHIVED"], cfg)
-
-    # Weekly pulse (ADR 0018) — collapsible
-    _render_pulse_section()
-
-    # Activity heatmap (ADR 0020) — collapsible at bottom
-    _render_activity_heatmap()
+    # Portfolio tab — pulse + heatmap + search (design change #3)
+    tab_today, tab_portfolio = st.tabs(["Today", "Portfolio"])
+    with tab_today:
+        st.caption(
+            "Focus signals live above. Switch to Portfolio for history, "
+            "search, and the heatmap."
+        )
+    with tab_portfolio:
+        _render_search_section([r for r in rows if r.status_raw != "ARCHIVED"], cfg)
+        _render_pulse_section()
+        _render_activity_heatmap()
 
 
 def _render_header() -> None:
@@ -217,46 +222,64 @@ def _render_next_suggestions() -> None:
     if not suggestions:
         return
 
-    st.subheader(
-        "What should you work on today?",
-        anchor=False,
+    # HERO kicker + big heading (design system fs-display)
+    st.markdown(
+        '<div class="arm-hero-kicker">TODAY\u2019S FOCUS</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<h2 class="arm-hero">What should you work on today?</h2>',
+        unsafe_allow_html=True,
     )
 
     # Yesterday's activity — retention hook
     _render_yesterday_line(suggestions)
 
     for s in suggestions:
-        icon = _CATEGORY_ICONS.get(s.category, "\u2022")
-        label = _CATEGORY_LABELS.get(s.category, s.category)
+        emoji = _CATEGORY_ICONS.get(s.category, "\u2022")
         path_str = _shorten_home(s.project.path)
 
         purpose = get_purpose(str(s.project.path))
         md = s.project.metadata
-        oneliner = ""
+        purpose_line = ""
         if purpose:
-            oneliner = f"*{purpose}*  \n"
+            purpose_line = purpose
         elif md and md.readme_excerpt:
             excerpt = md.readme_excerpt
             dot = excerpt.find(". ")
-            short = excerpt[: dot + 1] if 0 < dot < 80 else excerpt[:80]
-            oneliner = f"*{short}*  \n"
+            purpose_line = excerpt[: dot + 1] if 0 < dot < 80 else excerpt[:80]
 
-        # Sparkline inline
-        spark = ""
+        spark_html = ""
         if md and md.monthly_commits and any(c > 0 for c in md.monthly_commits):
             chars = "".join(
                 _spark_char(c, md.monthly_commits) for c in md.monthly_commits
             )
-            spark = f"  \n`{chars}` (6mo)"
-
-        col_info, col_open, col_skip = st.columns([4, 1, 1])
-        with col_info:
-            st.markdown(
-                f"{icon} **{s.project.name}** \u2014 {label}  \n"
-                f"{oneliner}"
-                f"{s.reason}{spark}"
+            color = spark_color_for_trend(getattr(md, "velocity_trend", None))
+            css_class = {
+                "momentum": "rising",
+                "zombie": "falling",
+                "forgotten_gold": "dead",
+                "archive_candidate": "dead",
+            }.get(s.category, "")
+            spark_html = (
+                f'<span class="arm-spark {css_class}" style="color:{color};">'
+                f"{chars}</span>"
             )
-            st.caption(f"`{path_str}`")
+
+        headline, unit = _big_number_parts(s)
+        card_html = _big_suggestion_html(
+            category=s.category,
+            emoji=emoji,
+            name=s.project.name,
+            headline=headline,
+            unit=unit,
+            purpose=purpose_line,
+            path=path_str,
+            spark_html=spark_html,
+        )
+        col_card, col_open, col_skip = st.columns([7, 1, 1])
+        with col_card:
+            st.markdown(card_html, unsafe_allow_html=True)
         with col_open:
             if st.button(
                 "Open",
@@ -279,6 +302,168 @@ def _render_next_suggestions() -> None:
                 st.rerun()
 
     st.markdown("---")
+
+
+def _big_number_parts(suggestion) -> tuple[str, str]:
+    """Extract a dominant headline + unit caption from a Suggestion.
+
+    Pure function — operates on ``Suggestion.project.metadata`` only.
+    """
+    from datetime import datetime
+
+    md = suggestion.project.metadata
+    hours = (md.work_hours or 0) if md else 0
+    last = md.last_commit_ts if md else None
+    dirty = (md.dirty_count or 0) if md else 0
+    days_since = None
+    if last:
+        days_since = int((datetime.now() - last).total_seconds() / 86400)
+
+    cat = suggestion.category
+    if cat == "momentum":
+        # Headline: days since last commit (or "today")
+        if days_since is None or days_since <= 0:
+            headline = "today"
+            unit = "last commit \u00b7 keep shipping"
+        else:
+            headline = f"{days_since}d"
+            dirty_note = f" \u00b7 {dirty} dirty" if dirty else ""
+            unit = f"since last commit{dirty_note}"
+    elif cat == "zombie":
+        headline = f"{days_since or 0}d"
+        dirty_note = f" \u00b7 {dirty} dirty" if dirty else ""
+        unit = f"since last commit{dirty_note}"
+    elif cat == "forgotten_gold":
+        headline = f"{hours:.0f}h"
+        months = max(1, round((days_since or 30) / 30))
+        unit = f"invested \u00b7 dormant {months}mo"
+    elif cat == "archive_candidate":
+        headline = f"{hours:.0f}h"
+        unit = "invested \u00b7 dead 4wk"
+    else:
+        headline = "\u2014"
+        unit = suggestion.reason[:60]
+    return headline, unit
+
+
+def _big_suggestion_html(
+    *,
+    category: str,
+    emoji: str,
+    name: str,
+    headline: str,
+    unit: str,
+    purpose: str,
+    path: str,
+    spark_html: str,
+) -> str:
+    """Dominant-number suggestion card HTML (see ui/style.py .arm-big)."""
+    import html as _html
+
+    css_cat = {
+        "momentum": "momentum",
+        "zombie": "zombie",
+        "forgotten_gold": "gold",
+        "archive_candidate": "archive",
+    }.get(category, "")
+    purpose_html = (
+        f'<div class="arm-big-purpose">{_html.escape(purpose)}</div>' if purpose else ""
+    )
+    meta_sep = '<span style="color:#30363d;">\u00b7</span>' if spark_html else ""
+    return (
+        f'<div class="arm-big {css_cat}">'
+        "<div>"
+        f'<div class="arm-big-number">{_html.escape(headline)}</div>'
+        f'<div class="arm-big-unit">{_html.escape(unit)}</div>'
+        "</div>"
+        '<div style="min-width:0;">'
+        f'<div class="arm-big-name">{emoji} '
+        f"<span>{_html.escape(name)}</span></div>"
+        f"{purpose_html}"
+        '<div class="arm-big-meta">'
+        f"<span>{_html.escape(path)}</span>"
+        f"{meta_sep}{spark_html}"
+        "</div></div></div>"
+    )
+
+
+def _render_status_strip(
+    rows: list[OverviewRow],
+    *,
+    exclude_paths: set[str] | None = None,
+) -> None:
+    """Merged 3-cell strip replacing separate zombie/at-risk/forgotten banners.
+
+    Change #2 from the design handoff: one grid, three icons + numbers.
+    """
+    from datetime import datetime, timedelta
+
+    cutoff = datetime.now() - timedelta(days=14)
+    zombies = [
+        r
+        for r in rows
+        if r.status_raw == "ACTIVE"
+        and r.last_modified < cutoff
+        and r.work_hours
+        and r.work_hours > 10
+    ]
+    at_risk = find_at_risk_projects(rows, exclude_paths=exclude_paths)
+    dormant = [r for r in rows if r.status_raw == "DORMANT"]
+
+    if not zombies and not at_risk and not dormant:
+        return
+
+    dormant_hours = sum(r.work_hours or 0 for r in dormant)
+    at_risk_hours = sum(r.work_hours or 0 for r in at_risk)
+
+    cells = [
+        status_strip_cell(
+            icon="\u26a0\ufe0f",
+            color="#f0ad4e",
+            count=len(zombies),
+            label="zombies",
+            sub="no commit 14+ days" if zombies else "none \u2014 nice",
+        ),
+        status_strip_cell(
+            icon="\U0001f4dd",
+            color="#f85149",
+            count=len(at_risk),
+            label="at risk",
+            sub=(f"{at_risk_hours:.0f}h uncommitted" if at_risk else "all committed"),
+        ),
+        status_strip_cell(
+            icon="\U0001f4b0",
+            color="#a371f7",
+            count=len(dormant),
+            label="forgotten",
+            sub=(f"{dormant_hours:.0f}h invested" if dormant else "none dormant"),
+        ),
+    ]
+    st.markdown(status_strip(cells), unsafe_allow_html=True)
+
+    # Surface the action + details for at-risk projects (list under expander)
+    if at_risk:
+        with st.expander(
+            f"Show {len(at_risk)} at-risk project{'s' if len(at_risk) > 1 else ''}",
+            expanded=False,
+        ):
+            for r in at_risk:
+                hours_s = f"{r.work_hours:.0f}h" if r.work_hours else "0h"
+                dirty_label = f"{r.dirty} file{'s' if r.dirty > 1 else ''}"
+                col_info, col_act = st.columns([4, 1])
+                with col_info:
+                    st.markdown(
+                        f"**{r.name}** \u2014 {dirty_label} uncommitted "
+                        f"\u00b7 {hours_s}"
+                    )
+                with col_act:
+                    if st.button(
+                        "Open",
+                        key=f"strip_atrisk_{r.path}",
+                        icon=":material/open_in_new:",
+                    ):
+                        st.query_params["project"] = r.path
+                        st.rerun()
 
 
 def _render_dormant_banner(rows: list[OverviewRow], *, exploring: bool) -> None:
@@ -306,21 +491,16 @@ def _render_dormant_banner(rows: list[OverviewRow], *, exploring: bool) -> None:
                 st.session_state["_dormant_explore"] = False
                 st.rerun()
     else:
-        col_msg, col_btn = st.columns([4, 1])
-        with col_msg:
-            st.warning(
-                f"**{len(dormant)} forgotten projects** — {total_hours:.0f}h invested",
-                icon=":material/savings:",
-            )
-        with col_btn:
-            if st.button(
-                "Explore",
-                icon=":material/explore:",
-                key="explore_dormant",
-                type="primary",
-            ):
-                st.session_state["_dormant_explore"] = True
-                st.rerun()
+        # Compact Explore action — the count/hours are already in status strip
+        _ = total_hours  # kept for clarity; strip displays the aggregate
+        if st.button(
+            f"Explore {len(dormant)} forgotten projects",
+            icon=":material/savings:",
+            key="explore_dormant",
+            type="secondary",
+        ):
+            st.session_state["_dormant_explore"] = True
+            st.rerun()
 
 
 def _render_empty_cache_state(cfg: Config | None) -> None:

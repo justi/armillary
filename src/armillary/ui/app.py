@@ -36,9 +36,11 @@ st.set_page_config(
 from armillary.ui.detail import _render_project_detail  # noqa: E402
 from armillary.ui.overview import _render_overview  # noqa: E402
 from armillary.ui.settings import _render_settings_page  # noqa: E402
+from armillary.ui.style import inject_css  # noqa: E402
 
 
 def main() -> None:
+    inject_css()
     params = st.query_params
     page = params.get("page")
     project_path = params.get("project")

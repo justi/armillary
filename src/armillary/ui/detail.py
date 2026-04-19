@@ -17,12 +17,17 @@ from armillary.config import Config, LauncherConfig
 from armillary.models import Project, Status
 from armillary.ui.actions import go_to_overview
 from armillary.ui.helpers import (
-    _STATUS_EMOJI,
     _load_project,
     _safe_load_config,
     _shorten_home,
 )
 from armillary.ui.launcher_support import detect_launcher_compat
+from armillary.ui.style import (
+    glance_strip,
+    purpose_quote,
+    section_header,
+    status_chip,
+)
 
 
 @dataclass(frozen=True)
@@ -157,38 +162,7 @@ def _render_project_detail(project_path: str) -> None:
         if ctx and ctx.is_git:
             _render_dirty_or_clean(ctx)
 
-        # --- Archive button (after dirty warning — user sees risk first) ---
-        show_archive_top = (
-            not is_archived
-            and md
-            and md.status
-            in (
-                Status.STALLED,
-                Status.DORMANT,
-            )
-        )
-        if show_archive_top:
-            st.caption("Why are you archiving?")
-            reason = st.text_input(
-                "Why are you archiving?",
-                placeholder="e.g. no traction, finished, pivoted",
-                key="archive_reason_top",
-                label_visibility="collapsed",
-            )
-            if st.button(
-                "Archive this project",
-                key="detail_archive_top",
-                icon=":material/archive:",
-                type="secondary",
-            ):
-                from armillary.purpose_service import set_archive_reason
-                from armillary.status_override import set_override
-
-                set_override(str(project.path), Status.ARCHIVED)
-                if reason:
-                    set_archive_reason(str(project.path), reason)
-                st.toast(f"Archived {project.name}")
-                st.rerun()
+        # Archive UI moved to unified Danger zone at bottom.
 
         # --- Row 3: Branch + Last commit narrative ---
         if ctx and ctx.is_git:
@@ -209,32 +183,39 @@ def _render_project_detail(project_path: str) -> None:
                     for b in ctx.recent_branches:
                         st.markdown(f"- `{b.name}` — {b.relative_time}")
 
-    # --- Section: Reference ---
-    st.markdown("---")
-    st.subheader("Reference", anchor=False)
+    # --- Section: Reference (2-col grid per design spec) ---
+    st.markdown(
+        section_header("Reference", "docs, notes, history"),
+        unsafe_allow_html=True,
+    )
 
     is_dormant = md and md.status in (Status.DORMANT, Status.STALLED)
+    ref_col_a, ref_col_b = st.columns(2)
 
-    if md and md.readme_excerpt:
-        with st.expander(
-            "README",
-            icon=":material/description:",
-            expanded=bool(is_dormant),
-        ):
-            st.markdown(md.readme_excerpt)
+    with ref_col_a:
+        if md and md.readme_excerpt:
+            with st.expander(
+                "README",
+                icon=":material/description:",
+                expanded=bool(is_dormant),
+            ):
+                st.markdown(md.readme_excerpt)
+        if md and md.adr_paths:
+            with st.expander(
+                f"ADRs ({len(md.adr_paths)})",
+                icon=":material/architecture:",
+            ):
+                for adr in md.adr_paths:
+                    st.markdown(f"- `{adr.name}` \u2014 `{adr}`")
 
-    if md and md.note_paths:
-        with st.expander(f"Notes ({len(md.note_paths)})", icon=":material/note:"):
-            for note in md.note_paths:
-                st.markdown(f"- `{note.name}` \u2014 `{note}`")
-
-    if md and md.adr_paths:
-        with st.expander(
-            f"ADRs ({len(md.adr_paths)})",
-            icon=":material/architecture:",
-        ):
-            for adr in md.adr_paths:
-                st.markdown(f"- `{adr.name}` \u2014 `{adr}`")
+    with ref_col_b:
+        if md and md.note_paths:
+            with st.expander(
+                f"Notes ({len(md.note_paths)})",
+                icon=":material/note:",
+            ):
+                for note in md.note_paths:
+                    st.markdown(f"- `{note.name}` \u2014 `{note}`")
 
     # Last discussed with user
     from armillary.purpose_service import (
@@ -283,25 +264,22 @@ def _render_project_detail(project_path: str) -> None:
     # --- Collapsed details (path, umbrella, stats) ---
     _render_details_expander(project)
 
-    # --- Archive action for ACTIVE projects (STALLED/DORMANT have it at top) ---
-    if (
-        not is_archived
-        and md
-        and md.status
-        not in (
-            Status.STALLED,
-            Status.DORMANT,
+    # --- Danger zone — unified archive box for non-archived projects ---
+    if not is_archived:
+        st.markdown(
+            '<div class="arm-danger-zone">'
+            '<div class="kicker">Danger zone \u2014 archive</div>'
+            "</div>",
+            unsafe_allow_html=True,
         )
-    ):
-        st.markdown("---")
         reason_bottom = st.text_input(
             "Why are you archiving?",
-            placeholder="e.g. no traction, finished, pivoted",
+            placeholder="Why? (e.g. no traction, finished, pivoted)",
             key="archive_reason_bottom",
             label_visibility="collapsed",
         )
         if st.button(
-            "Archive this project",
+            "Archive project",
             key="detail_archive",
             icon=":material/archive:",
             type="secondary",
@@ -345,85 +323,64 @@ def _render_header_tombstone(project: Project) -> None:
 def _render_header_with_launcher(project: Project) -> None:
     """Name + status badge + velocity trend + launcher dropdown."""
     md = project.metadata
-    status_str = ""
-    if md and md.status:
-        emoji = _STATUS_EMOJI.get(md.status.value, "\u00b7")
-        status_str = f" — {emoji} {md.status.value}"
-
-    # S1: velocity trend
-    trend_labels = {
-        "rising": ":material/trending_up: trending up",
-        "falling": ":material/trending_down: trending down",
-        "flat": ":material/trending_flat: steady",
-        "dead": ":material/block: no recent activity",
-    }
-    trend_str = ""
-    if md and md.velocity_trend:
-        trend_str = f" · {trend_labels.get(md.velocity_trend, md.velocity_trend)}"
 
     col_title, col_launcher = st.columns([5, 2])
     with col_title:
-        st.title(f"{project.name}{status_str}")
-        # Purpose or README one-liner
+        # Title alone; status rendered as chip on its own line
+        st.title(project.name, anchor=False)
+        if md and md.status:
+            st.markdown(status_chip(md.status.value), unsafe_allow_html=True)
+
+        # Purpose: italic quote when set, else editable input with placeholder
         from armillary.purpose_service import get_purpose, set_purpose
 
         purpose = get_purpose(str(project.path))
-        st.caption("Purpose:")
-        new_purpose = st.text_input(
-            "Purpose",
-            value=purpose or "",
-            placeholder="Why does this project exist? One sentence.",
-            key=f"purpose_{project.path}",
-            label_visibility="collapsed",
-        )
-        if new_purpose != (purpose or "") and new_purpose:
-            set_purpose(str(project.path), new_purpose)
-            st.rerun()
-        elif not new_purpose and purpose:
-            from armillary.purpose_service import clear_purpose
+        if purpose:
+            st.markdown(purpose_quote(purpose), unsafe_allow_html=True)
+            with st.expander("Edit purpose", expanded=False):
+                new_purpose = st.text_input(
+                    "Purpose",
+                    value=purpose,
+                    key=f"purpose_{project.path}",
+                    label_visibility="collapsed",
+                )
+                if new_purpose != purpose and new_purpose:
+                    set_purpose(str(project.path), new_purpose)
+                    st.rerun()
+                elif not new_purpose:
+                    from armillary.purpose_service import clear_purpose
 
-            clear_purpose(str(project.path))
-            st.rerun()
-        if not purpose and not new_purpose and md and md.readme_excerpt:
-            excerpt = md.readme_excerpt
-            dot = excerpt.find(". ")
-            oneliner = excerpt[: dot + 1] if 0 < dot < 80 else excerpt[:80]
-            st.caption(f"*{oneliner}*")
-        # S5: project age + intensity
+                    clear_purpose(str(project.path))
+                    st.rerun()
+        else:
+            # No purpose yet — show README excerpt as italic quote, offer input
+            if md and md.readme_excerpt:
+                excerpt = md.readme_excerpt
+                dot = excerpt.find(". ")
+                oneliner = excerpt[: dot + 1] if 0 < dot < 80 else excerpt[:80]
+                st.markdown(purpose_quote(oneliner), unsafe_allow_html=True)
+            new_purpose = st.text_input(
+                "Purpose",
+                value="",
+                placeholder="Why does this project exist? One sentence.",
+                key=f"purpose_{project.path}",
+                label_visibility="collapsed",
+            )
+            if new_purpose:
+                set_purpose(str(project.path), new_purpose)
+                st.rerun()
+
+        st.caption(f"`{_shorten_home(project.path)}`")
         _render_project_age(md)
     with col_launcher:
         cfg = _safe_load_config()
         if cfg is not None and cfg.launchers:
             _render_launcher_compact(project, cfg)
 
-    # Sunk cost + sparkline + trend + days since in one info row
-    info_parts: list[str] = []
-    from armillary.purpose_service import get_revenue as _get_rev
+    # At-a-glance strip — 5 metric cells (design change #2 for detail)
+    _render_glance_strip(project)
 
-    _rev = _get_rev(str(project.path))
-    if _rev is not None and _rev > 0:
-        info_parts.append(f":material/attach_money: **${_rev}/mo**")
-    if md and md.work_hours is not None:
-        info_parts.append(f"**{md.work_hours:.0f}h** invested")
-    if md and md.monthly_commits and any(c > 0 for c in md.monthly_commits):
-        spark = _sparkline_text(md.monthly_commits)
-        info_parts.append(f"Activity {spark} (6mo)")
-    if trend_str:
-        info_parts.append(trend_str)
-    if md and md.last_commit_ts:
-        from datetime import datetime
-
-        days_ago = (datetime.now() - md.last_commit_ts).days
-        if days_ago > 90:
-            info_parts.append(f":material/error: **{days_ago}d** since last commit")
-        elif days_ago > 30:
-            info_parts.append(f":material/warning: **{days_ago}d** since last commit")
-    if info_parts:
-        st.caption(" \u00b7 ".join(info_parts))
-
-    # Last discussed — moved to Reference section (fix #17)
-
-    # Revenue/MRR (ADR 0022 M2) — shown in info row when >0
+    # Revenue (unchanged expander)
     from armillary.purpose_service import get_revenue, set_revenue
 
     current_rev = get_revenue(str(project.path))
@@ -438,6 +395,9 @@ def _render_header_with_launcher(project: Project) -> None:
         if st.button("Save", key=f"save_rev_{project.path}"):
             set_revenue(str(project.path), int(new_rev))
             st.rerun()
+
+    # Last discussed — moved to Reference section (fix #17)
+    # Revenue moved into the header flow above (single location).
 
 
 def _render_launcher_compact(project: Project, cfg: Config) -> None:
@@ -478,6 +438,94 @@ def _render_launcher_compact(project: Project, cfg: Config) -> None:
             st.success(f"Opened in `{target_id}`.")
         else:
             st.error(result.error or "Launch failed.")
+
+
+def _render_glance_strip(project: Project) -> None:
+    """5-cell 'at a glance' metric strip (Last commit / Uncommitted /
+    Invested / Commits / Activity). Falls back gracefully when fields
+    are missing."""
+    from datetime import datetime
+
+    md = project.metadata
+
+    # Last commit
+    if md and md.last_commit_ts:
+        days = (datetime.now() - md.last_commit_ts).days
+        if days == 0:
+            last_val, last_sub = "today", "last commit"
+        elif days == 1:
+            last_val, last_sub = "1d", "ago"
+        elif days < 30:
+            last_val, last_sub = f"{days}d", "ago"
+        elif days < 365:
+            last_val, last_sub = f"{days // 30}mo", "ago"
+        else:
+            last_val, last_sub = f"{days // 365}y", "ago"
+        last_tone = "warning" if days > 30 else ("danger" if days > 90 else None)
+    else:
+        last_val, last_sub, last_tone = "\u2014", "no commits", None
+
+    # Uncommitted
+    dirty = (md.dirty_count if md else None) or 0
+    dirty_tone = "warning" if dirty > 0 else None
+    dirty_val = str(dirty)
+    dirty_sub = "files" if dirty != 1 else "file"
+
+    # Invested
+    hours = md.work_hours if md else None
+    invested_val = f"{hours:.0f}h" if hours else "\u2014"
+    invested_sub = ""
+    if md and md.first_commit_ts and md.last_commit_ts:
+        span_days = max((md.last_commit_ts - md.first_commit_ts).days, 1)
+        if span_days >= 30:
+            invested_sub = f"over {span_days // 30}mo"
+
+    # Commits
+    commits_val = str(md.commit_count) if md and md.commit_count else "\u2014"
+    commits_sub = "total"
+
+    # Activity sparkline (6mo)
+    activity_val: str = "\u2014"
+    activity_sub = "6 months"
+    if md and md.monthly_commits and any(c > 0 for c in md.monthly_commits):
+        spark = _sparkline_text(md.monthly_commits)
+        trend = getattr(md, "velocity_trend", None)
+        from armillary.ui.style import spark_color_for_trend
+
+        color = spark_color_for_trend(trend)
+        activity_val = f'<span class="arm-spark" style="color:{color};">{spark}</span>'
+
+    cells = [
+        {
+            "label": "Last commit",
+            "value": last_val,
+            "sub": last_sub,
+            "tone": last_tone,
+        },
+        {
+            "label": "Uncommitted",
+            "value": dirty_val,
+            "sub": dirty_sub,
+            "tone": dirty_tone,
+        },
+        {
+            "label": "Invested",
+            "value": invested_val,
+            "sub": invested_sub,
+        },
+        {
+            "label": "Commits",
+            "value": commits_val,
+            "sub": commits_sub,
+        },
+        {
+            "label": "Activity",
+            "value": activity_val,
+            "sub": activity_sub,
+            "is_spark": True,
+        },
+    ]
+    st.markdown(glance_strip(cells), unsafe_allow_html=True)
 
 
 def _render_dirty_or_clean(ctx: object) -> None:
@@ -604,12 +652,24 @@ def _render_recent_commits(
         st.caption("_No commit history available._")
         return
 
-    with st.expander("Recent commits", expanded=True):
-        for commit in commits:
-            st.markdown(
-                f"- **`{commit['sha']}`** \u2014 {commit['message']}  \n"
-                f"  _{commit['date']} \u00b7 {commit['author']}_"
-            )
+    import html as _html
+
+    parts = ['<div class="arm-timeline">']
+    for i, c in enumerate(commits):
+        latest_cls = " latest" if i == 0 else ""
+        parts.append(
+            f'<div class="arm-timeline-item{latest_cls}">'
+            '<div class="dot"></div>'
+            '<div class="line">'
+            f'<code class="sha">{_html.escape(c["sha"])}</code>'
+            f'<span class="msg">{_html.escape(c["message"])}</span>'
+            "</div>"
+            '<div class="meta">'
+            f"{_html.escape(c['date'])} \u00b7 {_html.escape(c['author'])}"
+            "</div></div>"
+        )
+    parts.append("</div>")
+    st.markdown("".join(parts), unsafe_allow_html=True)
 
 
 def _git_log_recent(repo_path: Path, *, limit: int = 5) -> list[dict[str, str]]:
