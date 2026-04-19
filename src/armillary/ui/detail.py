@@ -1,76 +1,46 @@
-"""Project detail page — narrative layout per ADR 0014.
+"""Project detail page — thin orchestrator for the sibling detail modules.
 
-Hierarchy: Name+Status+Open → Dirty/Clean → Branch+LastCommit →
-           Recent Commits → Branches → Reference (README, Notes, ADRs, Details).
+The detail page composes: header / glance strip / work signals /
+reference grid / details expander / danger-zone archive. Each section
+lives in its own module (``detail_header``, ``detail_glance``,
+``detail_work``) to keep every file under the architecture target
+(ADR 0001 §3). This file holds the orchestrator + the reference /
+details / archive blocks that don't belong to any single section.
+
+Re-exports ``LauncherOption`` and ``build_launcher_options`` so existing
+imports (tests, tooling) keep working after the split.
 """
 
 from __future__ import annotations
 
-import subprocess
-from dataclasses import dataclass
 from pathlib import Path
 
 import streamlit as st
 
-from armillary import launcher as launcher_mod
-from armillary.config import Config, LauncherConfig
 from armillary.models import Project, Status
 from armillary.ui.actions import go_to_overview
-from armillary.ui.helpers import (
-    _load_project,
-    _safe_load_config,
-    _shorten_home,
+from armillary.ui.detail_glance import _render_glance_strip
+from armillary.ui.detail_header import (
+    LauncherOption,
+    _render_header_tombstone,
+    _render_header_with_launcher,
+    build_launcher_options,
 )
-from armillary.ui.launcher_support import detect_launcher_compat
-from armillary.ui.style import (
-    glance_strip,
-    purpose_quote,
-    section_header,
-    status_chip,
+from armillary.ui.detail_work import (
+    _render_dirty_or_clean,
+    _render_narrative_context,
+    _render_recent_commits,
+    _render_skip_history,
 )
+from armillary.ui.helpers import _load_project, _shorten_home
+from armillary.ui.style import section_header
 
-
-@dataclass(frozen=True)
-class LauncherOption:
-    """View-model for one entry in the launcher dropdown."""
-
-    target_id: str
-    label: str
-    availability_mode: str
-    detail: str | None = None
-
-
-def build_launcher_options(
-    launchers: dict[str, LauncherConfig],
-) -> tuple[list[LauncherOption], list[str], list[str], list[str]]:
-    """Filter terminal launchers, detect availability, build display options."""
-    available: list[LauncherOption] = []
-    missing_labels: list[str] = []
-    terminal_only_labels: list[str] = []
-    app_labels: list[str] = []
-    for target_id, launcher_cfg in launchers.items():
-        label = (
-            f"{launcher_cfg.icon + ' ' if launcher_cfg.icon else ''}"
-            f"{launcher_cfg.label}"
-        )
-        if launcher_cfg.terminal:
-            terminal_only_labels.append(launcher_cfg.label)
-            continue
-        availability = detect_launcher_compat(launcher_cfg)
-        if availability.available:
-            available.append(
-                LauncherOption(
-                    target_id=target_id,
-                    label=label,
-                    availability_mode=availability.mode,
-                    detail=availability.detail,
-                )
-            )
-            if availability.mode == "macos-app":
-                app_labels.append(label)
-        else:
-            missing_labels.append(label)
-    return available, missing_labels, terminal_only_labels, app_labels
+__all__ = [
+    "LauncherOption",
+    "build_launcher_options",
+    "_render_project_detail",
+    "_render_glance_strip",
+]
 
 
 def _render_project_detail(project_path: str) -> None:
@@ -105,9 +75,6 @@ def _render_project_detail(project_path: str) -> None:
                 st.session_state.pop(key)
     st.session_state["_arm_view"] = current_view
 
-    md = project.metadata
-
-    # Back navigation in content area (not just sidebar)
     if st.button(
         "← Overview",
         key="detail_back",
@@ -118,84 +85,94 @@ def _render_project_detail(project_path: str) -> None:
     from armillary.status_override import get_override
 
     override = get_override(str(project.path))
-    # Override is the sole source of truth for ARCHIVED.
-    # Cache may have stale ARCHIVED from a previous scan — ignore it.
-    # After Activate (clear_override), override=None → not archived,
-    # even if cache still says ARCHIVED until next scan.
+    # Override is the sole source of truth for ARCHIVED. Cache may have
+    # stale ARCHIVED from a previous scan — ignore it. After Activate
+    # (clear_override), override=None → not archived, even if cache
+    # still says ARCHIVED until next scan.
     is_archived = override == Status.ARCHIVED
 
-    # --- Row 1: Name + Status + Launcher (top-right) ---
     if is_archived:
         _render_header_tombstone(project)
     else:
         _render_header_with_launcher(project)
 
-    # --- Skip history (S2) ---
     _render_skip_history(project)
 
     if is_archived:
-        # Tombstone: minimal view, no work context
-        from armillary.purpose_service import get_archive_reason
-
-        archive_reason = get_archive_reason(str(project.path))
-        tombstone_msg = (
-            "This project is **archived** \u2014 code is on disk but "
-            "hidden from next, search, and overview."
-        )
-        if archive_reason:
-            tombstone_msg += f"\n\nReason: *{archive_reason}*"
-        st.info(tombstone_msg, icon=":material/archive:")
-        if st.button(
-            "Reactivate",
-            key="detail_activate",
-            icon=":material/unarchive:",
-            type="primary",
-        ):
-            from armillary.status_override import clear_override
-
-            clear_override(str(project.path))
-            st.rerun()
+        _render_archived_body(project)
     else:
-        # --- Dirty/Clean signal (BEFORE archive button — informs decision) ---
-        import contextlib
+        _render_active_body(project)
 
-        from armillary.context_service import get_context
+    _render_reference_section(project)
+    _render_transition_journal(project)
+    _render_details_expander(project)
 
-        ctx = None
-        if project.type.value == "git":
-            with contextlib.suppress(ValueError, Exception):
-                ctx = get_context(project.name)
+    if not is_archived:
+        _render_danger_zone(project)
 
-        if ctx and ctx.is_git:
-            _render_dirty_or_clean(ctx)
 
-        # Archive UI moved to unified Danger zone at bottom.
+def _render_archived_body(project: Project) -> None:
+    """Minimal tombstone view — no work context for archived projects."""
+    from armillary.purpose_service import get_archive_reason
 
-        # --- Row 3: Branch + Last commit narrative ---
-        if ctx and ctx.is_git:
-            _render_narrative_context(ctx)
+    archive_reason = get_archive_reason(str(project.path))
+    tombstone_msg = (
+        "This project is **archived** \u2014 code is on disk but "
+        "hidden from next, search, and overview."
+    )
+    if archive_reason:
+        tombstone_msg += f"\n\nReason: *{archive_reason}*"
+    st.info(tombstone_msg, icon=":material/archive:")
+    if st.button(
+        "Reactivate",
+        key="detail_activate",
+        icon=":material/unarchive:",
+        type="primary",
+    ):
+        from armillary.status_override import clear_override
 
-        # --- Section: Recent work ---
-        if project.type.value == "git":
-            st.markdown("---")
-            st.subheader("Recent work", anchor=False)
-            skip_first = bool(ctx and ctx.recent_commits)
-            _render_recent_commits(project.path, skip_first=skip_first)
-            if ctx and ctx.recent_branches:
-                with st.expander(
-                    "Recent branches",
-                    icon=":material/fork_right:",
-                    expanded=False,
-                ):
-                    for b in ctx.recent_branches:
-                        st.markdown(f"- `{b.name}` — {b.relative_time}")
+        clear_override(str(project.path))
+        st.rerun()
 
-    # --- Section: Reference (2-col grid per design spec) ---
+
+def _render_active_body(project: Project) -> None:
+    """Dirty/clean → narrative → recent work for non-archived projects."""
+    import contextlib
+
+    from armillary.context_service import get_context
+
+    ctx = None
+    if project.type.value == "git":
+        with contextlib.suppress(ValueError, Exception):
+            ctx = get_context(project.name)
+
+    if ctx and ctx.is_git:
+        _render_dirty_or_clean(ctx)
+        _render_narrative_context(ctx)
+
+    if project.type.value == "git":
+        st.markdown("---")
+        st.subheader("Recent work", anchor=False)
+        skip_first = bool(ctx and ctx.recent_commits)
+        _render_recent_commits(project.path, skip_first=skip_first)
+        if ctx and ctx.recent_branches:
+            with st.expander(
+                "Recent branches",
+                icon=":material/fork_right:",
+                expanded=False,
+            ):
+                for b in ctx.recent_branches:
+                    st.markdown(f"- `{b.name}` — {b.relative_time}")
+
+
+def _render_reference_section(project: Project) -> None:
+    """README / ADR / Notes in a 2-column grid (design spec)."""
     st.markdown(
         section_header("Reference", "docs, notes, history"),
         unsafe_allow_html=True,
     )
 
+    md = project.metadata
     is_dormant = md and md.status in (Status.DORMANT, Status.STALLED)
     ref_col_a, ref_col_b = st.columns(2)
 
@@ -224,12 +201,12 @@ def _render_project_detail(project_path: str) -> None:
                 for note in md.note_paths:
                     st.markdown(f"- `{note.name}` \u2014 `{note}`")
 
-    # "Last discussed" date_input removed — dead field (panel consensus).
 
-    # --- Transition journal (ADR 0025) ---
-    import contextlib as _ctx2
+def _render_transition_journal(project: Project) -> None:
+    """Status transition history (ADR 0025)."""
+    import contextlib
 
-    with _ctx2.suppress(Exception):
+    with contextlib.suppress(Exception):
         from armillary.transition_service import load_journal
 
         journal = load_journal(str(project.path))
@@ -245,375 +222,6 @@ def _render_project_detail(project_path: str) -> None:
                         f"- {entry['date']}  "
                         f"{entry['from']} \u2192 {entry['to']}{reason}"
                     )
-
-    # --- Collapsed details (path, umbrella, stats) ---
-    _render_details_expander(project)
-
-    # --- Danger zone — unified archive box for non-archived projects ---
-    if not is_archived:
-        confirm_key = f"_archive_confirm_{project.path}"
-        confirm_archive = st.session_state.get(confirm_key, False)
-        st.markdown(
-            '<div class="arm-danger-zone">'
-            '<div class="kicker">Danger zone \u2014 archive</div>'
-            "</div>",
-            unsafe_allow_html=True,
-        )
-        reason_bottom = st.text_input(
-            "Why are you archiving?",
-            placeholder="Why? (e.g. no traction, finished, pivoted)",
-            key="archive_reason_bottom",
-            label_visibility="collapsed",
-        )
-        if confirm_archive:
-            st.warning("Click again to confirm archive", icon=":material/warning:")
-        if st.button(
-            "Archive project",
-            key="detail_archive",
-            icon=":material/archive:",
-            type="secondary",
-        ):
-            if not confirm_archive:
-                st.session_state[confirm_key] = True
-                st.rerun()
-            from armillary.purpose_service import set_archive_reason
-            from armillary.status_override import set_override
-
-            st.session_state.pop(confirm_key, None)
-            set_override(str(project.path), Status.ARCHIVED)
-            if reason_bottom:
-                set_archive_reason(str(project.path), reason_bottom)
-            st.toast(f"Archived {project.name}")
-            st.rerun()
-
-
-def _render_header_tombstone(project: Project) -> None:
-    """Minimal header for ARCHIVED projects — no launcher."""
-    md = project.metadata
-    st.title(f"{project.name} \u2014 :material/archive: ARCHIVED")
-    # Purpose or README
-    from armillary.purpose_service import get_purpose
-
-    purpose = get_purpose(str(project.path))
-    if purpose:
-        st.caption(f"*{purpose}*")
-    elif md and md.readme_excerpt:
-        from armillary.utils import excerpt_one_liner
-
-        st.caption(f"*{excerpt_one_liner(md.readme_excerpt)}*")
-    # Sunk cost summary
-    parts: list[str] = []
-    if md and md.work_hours is not None:
-        parts.append(f"**{md.work_hours:.0f}h** invested")
-    if md and md.commit_count is not None:
-        parts.append(f"{md.commit_count} commits")
-    _render_project_age(md)
-    if parts:
-        st.caption(" \u00b7 ".join(parts))
-
-
-def _render_header_with_launcher(project: Project) -> None:
-    """Name + status badge + velocity trend + launcher dropdown."""
-    md = project.metadata
-
-    col_title, col_launcher = st.columns([5, 2])
-    with col_title:
-        # Title alone; status rendered as chip on its own line
-        st.title(project.name, anchor=False)
-        if md and md.status:
-            st.markdown(status_chip(md.status.value), unsafe_allow_html=True)
-
-        # Purpose: inline click-to-edit — italic quote with a pencil
-        # button that swaps into a text_input. No more nested expander.
-        from armillary.purpose_service import (
-            clear_purpose,
-            get_purpose,
-            set_purpose,
-        )
-
-        purpose = get_purpose(str(project.path))
-        edit_key = f"_edit_purpose_{project.path}"
-        editing = st.session_state.get(edit_key, False)
-
-        if purpose and not editing:
-            col_quote, col_edit = st.columns([10, 1])
-            with col_quote:
-                st.markdown(purpose_quote(purpose), unsafe_allow_html=True)
-            with col_edit:
-                if st.button(
-                    "",
-                    icon=":material/edit:",
-                    key=f"edit_btn_{project.path}",
-                    help="Click to edit purpose",
-                    type="secondary",
-                ):
-                    st.session_state[edit_key] = True
-                    st.rerun()
-        else:
-            # No purpose yet OR user clicked edit — show input, with
-            # README excerpt as a visual placeholder if empty
-            if not purpose and md and md.readme_excerpt:
-                from armillary.utils import excerpt_one_liner
-
-                st.markdown(
-                    purpose_quote(excerpt_one_liner(md.readme_excerpt)),
-                    unsafe_allow_html=True,
-                )
-            new_purpose = st.text_input(
-                "Purpose",
-                value=purpose or "",
-                placeholder="Why does this project exist? One sentence.",
-                key=f"purpose_input_{project.path}",
-                label_visibility="collapsed",
-            )
-            trimmed = new_purpose.strip()
-            if trimmed and trimmed != (purpose or ""):
-                set_purpose(str(project.path), trimmed)
-                st.session_state[edit_key] = False
-                st.rerun()
-            elif not trimmed and purpose:
-                clear_purpose(str(project.path))
-                st.session_state[edit_key] = False
-                st.rerun()
-
-        st.caption(f"`{_shorten_home(project.path)}`")
-        _render_project_age(md)
-    with col_launcher:
-        cfg = _safe_load_config()
-        if cfg is not None and cfg.launchers:
-            _render_launcher_compact(project, cfg)
-
-    # At-a-glance strip — 5 metric cells (design change #2 for detail)
-    _render_glance_strip(project)
-
-    # Revenue (unchanged expander)
-    from armillary.purpose_service import get_revenue, set_revenue
-
-    current_rev = get_revenue(str(project.path))
-    with st.expander("Set revenue", expanded=False):
-        new_rev = st.number_input(
-            "Monthly revenue (USD)",
-            value=current_rev or 0,
-            min_value=0,
-            step=10,
-            key=f"revenue_{project.path}",
-        )
-        if st.button("Save", key=f"save_rev_{project.path}"):
-            set_revenue(str(project.path), int(new_rev))
-            st.rerun()
-
-    # Last discussed — moved to Reference section (fix #17)
-    # Revenue moved into the header flow above (single location).
-
-
-def _render_launcher_compact(project: Project, cfg: Config) -> None:
-    """Compact launcher: selectbox + Open button, top-right."""
-    available, missing_labels, terminal_only_labels, app_labels = (
-        build_launcher_options(cfg.launchers)
-    )
-
-    if terminal_only_labels:
-        st.caption(
-            f"Terminal: {', '.join(terminal_only_labels)} "
-            "\u2014 use CLI `armillary open`"
-        )
-
-    if not available:
-        return
-
-    options_map = {opt.target_id: opt.label for opt in available}
-    st.caption("Open with:")
-    target_id = st.selectbox(
-        "Open with",
-        options=list(options_map),
-        format_func=lambda tid: options_map[tid],
-        label_visibility="collapsed",
-        key=f"launcher_pick_{project.path}",
-    )
-    clicked = st.button(
-        "Open",
-        icon=":material/launch:",
-        width="stretch",
-        key=f"launcher_open_{project.path}",
-        type="primary",
-    )
-
-    if clicked:
-        result = launcher_mod.launch(project, target_id, launchers=cfg.launchers)
-        if result.ok:
-            st.success(f"Opened in `{target_id}`.")
-        else:
-            st.error(result.error or "Launch failed.")
-
-
-def _render_glance_strip(project: Project) -> None:
-    """5-cell 'at a glance' metric strip (Last commit / Uncommitted /
-    Invested / Commits / Activity). Falls back gracefully when fields
-    are missing."""
-    from datetime import datetime
-
-    md = project.metadata
-
-    # Last commit
-    if md and md.last_commit_ts:
-        days = (datetime.now() - md.last_commit_ts).days
-        if days == 0:
-            last_val, last_sub = "today", "last commit"
-        elif days == 1:
-            last_val, last_sub = "1d", "ago"
-        elif days < 30:
-            last_val, last_sub = f"{days}d", "ago"
-        elif days < 365:
-            last_val, last_sub = f"{days // 30}mo", "ago"
-        else:
-            last_val, last_sub = f"{days // 365}y", "ago"
-        # 90+ days is the stricter threshold, so check it first — otherwise
-        # anything over 30 shortcircuits into warning and danger is unreachable.
-        last_tone = "danger" if days > 90 else ("warning" if days > 30 else None)
-    else:
-        last_val, last_sub, last_tone = "\u2014", "no commits", None
-
-    # Uncommitted
-    dirty = (md.dirty_count if md else None) or 0
-    dirty_tone = "warning" if dirty > 0 else None
-    dirty_val = str(dirty)
-    dirty_sub = "files" if dirty != 1 else "file"
-
-    # Invested
-    hours = md.work_hours if md else None
-    invested_val = f"{hours:.0f}h" if hours else "\u2014"
-    invested_sub = ""
-    if md and md.first_commit_ts and md.last_commit_ts:
-        span_days = max((md.last_commit_ts - md.first_commit_ts).days, 1)
-        if span_days >= 30:
-            invested_sub = f"over {span_days // 30}mo"
-
-    # Revenue (killer metric) with Commits as fallback — panel feedback
-    from armillary.purpose_service import get_revenue
-
-    revenue = get_revenue(str(project.path))
-    if revenue is not None and revenue > 0:
-        fourth_label = "Revenue"
-        fourth_val = f"${revenue}"
-        fourth_sub = "monthly"
-        fourth_tone = None
-    else:
-        fourth_label = "Commits"
-        fourth_val = str(md.commit_count) if md and md.commit_count else "\u2014"
-        fourth_sub = "total"
-        fourth_tone = None
-
-    # Activity sparkline (6mo)
-    activity_val: str = "\u2014"
-    activity_sub = "6 months"
-    if md and md.monthly_commits and any(c > 0 for c in md.monthly_commits):
-        from armillary.ui.style import sparkline_html
-
-        activity_val = sparkline_html(
-            md.monthly_commits,
-            trend=getattr(md, "velocity_trend", None),
-        )
-
-    cells = [
-        {
-            "label": "Last commit",
-            "value": last_val,
-            "sub": last_sub,
-            "tone": last_tone,
-        },
-        {
-            "label": "Uncommitted",
-            "value": dirty_val,
-            "sub": dirty_sub,
-            "tone": dirty_tone,
-        },
-        {
-            "label": "Invested",
-            "value": invested_val,
-            "sub": invested_sub,
-        },
-        {
-            "label": fourth_label,
-            "value": fourth_val,
-            "sub": fourth_sub,
-            "tone": fourth_tone,
-        },
-        {
-            "label": "Activity",
-            "value": activity_val,
-            "sub": activity_sub,
-            "is_spark": True,
-        },
-    ]
-    st.markdown(glance_strip(cells), unsafe_allow_html=True)
-
-
-def _render_dirty_or_clean(ctx: object) -> None:
-    """Full-width dirty warning or clean success signal."""
-    if ctx.dirty_count > 0:
-        s = "s" if ctx.dirty_count > 1 else ""
-        # S3: dirty file age
-        age_hint = ""
-        if ctx.dirty_max_age_seconds is not None:
-            age_hint = f" \u2014 {_format_age(ctx.dirty_max_age_seconds)} stale"
-        st.warning(
-            f"**{ctx.dirty_count} uncommitted file{s}{age_hint}**",
-            icon=":material/edit_note:",
-        )
-        with st.expander("Uncommitted files", expanded=ctx.dirty_count <= 5):
-            for f in ctx.dirty_files:
-                st.code(_humanize_porcelain(f), language=None)
-            if ctx.dirty_count > len(ctx.dirty_files):
-                more = ctx.dirty_count - len(ctx.dirty_files)
-                st.caption(f"and {more} more")
-    else:
-        st.success("No uncommitted work", icon=":material/check_circle:")
-
-
-def _render_narrative_context(ctx: object) -> None:
-    """Branch + last commit + session + branch/remote as narrative lines."""
-    if ctx.branch:
-        st.markdown(f"Branch: `{ctx.branch}`")
-    if ctx.recent_commits:
-        c = ctx.recent_commits[0]
-        st.markdown(
-            f"Last: {c.relative_time} \u2014 `{c.short_hash}` \u201c{c.subject}\u201d"
-        )
-    # S4: last session
-    if ctx.last_session is not None:
-        dur = ctx.last_session.duration_seconds
-        if dur >= 3600:
-            dur_str = f"{dur / 3600:.1f}h"
-        elif dur >= 60:
-            dur_str = f"{dur / 60:.0f}min"
-        else:
-            dur_str = "<1min"
-        n = ctx.last_session.commit_count
-        c_word = "commit" if n == 1 else "commits"
-        st.markdown(
-            f"Last session: **{dur_str}**, "
-            f"{n} {c_word}, "
-            f"{ctx.last_session.ended_relative}"
-        )
-    # S6: branch count + remote + unmerged
-    parts: list[str] = []
-    if ctx.branch_count is not None and ctx.branch_count > 1:
-        parts.append(f"{ctx.branch_count} local branches")
-    if ctx.unmerged_branches:
-        n = len(ctx.unmerged_branches)
-        parts.append(f"**{n} unmerged**")
-    if ctx.has_remote is False:
-        parts.append("**no remote \u2014 push before archiving**")
-    if parts:
-        st.caption(" \u00b7 ".join(parts))
-    if ctx.unmerged_branches:
-        with st.expander(
-            f"{len(ctx.unmerged_branches)} unmerged branches",
-            icon=":material/fork_right:",
-            expanded=False,
-        ):
-            for b in ctx.unmerged_branches:
-                st.markdown(f"- `{b}`")
 
 
 def _render_details_expander(project: Project) -> None:
@@ -661,159 +269,46 @@ def _render_details_expander(project: Project) -> None:
                     st.metric("Files", md.file_count, border=True)
 
 
-def _render_recent_commits(
-    repo_path: Path, limit: int = 5, *, skip_first: bool = False
-) -> None:
-    """Show the last commits in an expanded expander."""
-    commits = _git_log_recent(repo_path, limit=limit + (1 if skip_first else 0))
-    if skip_first:
-        commits = commits[1:]
-    if not commits:
-        st.caption("_No commit history available._")
-        return
+def _render_danger_zone(project: Project) -> None:
+    """Unified archive box for non-archived projects (2-step confirm)."""
+    confirm_key = f"_archive_confirm_{project.path}"
+    confirm_archive = st.session_state.get(confirm_key, False)
+    st.markdown(
+        '<div class="arm-danger-zone">'
+        '<div class="kicker">Danger zone \u2014 archive</div>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    reason_bottom = st.text_input(
+        "Why are you archiving?",
+        placeholder="Why? (e.g. no traction, finished, pivoted)",
+        key="archive_reason_bottom",
+        label_visibility="collapsed",
+    )
+    if confirm_archive:
+        st.warning("Click again to confirm archive", icon=":material/warning:")
+    if st.button(
+        "Archive project",
+        key="detail_archive",
+        icon=":material/archive:",
+        type="secondary",
+    ):
+        if not confirm_archive:
+            st.session_state[confirm_key] = True
+            st.rerun()
+        from armillary.purpose_service import set_archive_reason
+        from armillary.status_override import set_override
 
-    import html as _html
-
-    parts = ['<div class="arm-timeline">']
-    for i, c in enumerate(commits):
-        latest_cls = " latest" if i == 0 else ""
-        parts.append(
-            f'<div class="arm-timeline-item{latest_cls}">'
-            '<div class="dot"></div>'
-            '<div class="line">'
-            f'<code class="sha">{_html.escape(c["sha"])}</code>'
-            f'<span class="msg">{_html.escape(c["message"])}</span>'
-            "</div>"
-            '<div class="meta">'
-            f"{_html.escape(c['date'])} \u00b7 {_html.escape(c['author'])}"
-            "</div></div>"
-        )
-    parts.append("</div>")
-    st.markdown("".join(parts), unsafe_allow_html=True)
-
-
-def _git_log_recent(repo_path: Path, *, limit: int = 5) -> list[dict[str, str]]:
-    try:
-        proc = subprocess.run(
-            [
-                "git",
-                "log",
-                f"-{limit}",
-                "--no-merges",
-                "--format=%h\x1f%s\x1f%ar\x1f%an",
-            ],
-            cwd=str(repo_path),
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return []
-    if proc.returncode != 0:
-        return []
-
-    commits: list[dict[str, str]] = []
-    for line in proc.stdout.strip().splitlines():
-        parts = line.split("\x1f")
-        if len(parts) != 4:
-            continue
-        commits.append(
-            {
-                "sha": parts[0],
-                "message": parts[1],
-                "date": parts[2],
-                "author": parts[3],
-            }
-        )
-    return commits
-
-
-_PORCELAIN_MAP = {
-    "??": "new     ",
-    " M": "modified",
-    "M ": "staged  ",
-    " D": "deleted ",
-    "D ": "deleted ",
-    "A ": "added   ",
-    "MM": "modified",
-    "AM": "added   ",
-}
-
-
-def _humanize_porcelain(line: str) -> str:
-    """Translate git status porcelain prefixes to human-readable labels."""
-    if len(line) >= 3:
-        prefix = line[:2]
-        path = line[3:]
-        label = _PORCELAIN_MAP.get(prefix, prefix)
-        return f"{label} {path}"
-    return line
-
-
-def _render_skip_history(project: Project) -> None:
-    """Show skip history if this project was previously skipped."""
-    from armillary.next_service import _load_skips
-
-    skips = _load_skips()
-    entry = skips.get(str(project.path))
-    if not entry:
-        return
-    count = entry.get("count", 0)
-    reason = entry.get("reason")
-    if count <= 0:
-        return
-    parts = [f"Skipped {count}x from suggestions"]
-    if reason:
-        parts.append(f"last reason: *{reason}*")
-    st.info(" \u2014 ".join(parts), icon=":material/skip_next:")
-
-
-def _format_age(seconds: float) -> str:
-    """Human-readable age from seconds."""
-    if seconds < 3600:
-        return f"{seconds / 60:.0f}min"
-    if seconds < 86400:
-        return f"{seconds / 3600:.0f}h"
-    days = seconds / 86400
-    if days < 30:
-        return f"{days:.0f}d"
-    return f"{days / 30:.0f}mo"
-
-
-def _render_project_age(md: object | None) -> None:
-    """S5: Show project age + work intensity below the title.
-
-    Intensity = work_hours / active_span (first→last commit).
-    Only shown when active span >= 30 days — shorter spans produce
-    misleading h/mo values.
-    """
-    if md is None or not md.first_commit_ts or not md.work_hours:
-        return
-    from datetime import datetime
-
-    age_days = (datetime.now() - md.first_commit_ts).days
-    if age_days <= 0:
-        return
-    if age_days >= 365:
-        age_str = f"{age_days / 365:.1f}y"
-    elif age_days >= 30:
-        age_str = f"{age_days / 30.44:.0f}mo"
-    else:
-        age_str = f"{age_days}d"
-    # Intensity: h/mo over active span (first→last commit), not first→now
-    intensity_str = ""
-    if md.last_commit_ts and md.first_commit_ts:
-        span_days = max((md.last_commit_ts - md.first_commit_ts).days, 1)
-        if span_days >= 30:
-            span_months = span_days / 30.44
-            intensity = md.work_hours / span_months
-            intensity_str = f" \u00b7 {intensity:.0f} hours/month"
-    st.caption(f"Age {age_str}{intensity_str}")
+        st.session_state.pop(confirm_key, None)
+        set_override(str(project.path), Status.ARCHIVED)
+        if reason_bottom:
+            set_archive_reason(str(project.path), reason_bottom)
+        st.toast(f"Archived {project.name}")
+        st.rerun()
 
 
 def _format_bytes(n: int) -> str:
-    """Format `n` bytes as KB / MB / GB with one decimal place."""
+    """Format ``n`` bytes as KB / MB / GB with one decimal place."""
     if n < 1024:
         return f"{n} B"
     if n < 1024 * 1024:
