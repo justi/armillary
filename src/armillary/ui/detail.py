@@ -217,29 +217,7 @@ def _render_project_detail(project_path: str) -> None:
                 for note in md.note_paths:
                     st.markdown(f"- `{note.name}` \u2014 `{note}`")
 
-    # Last discussed with user
-    from armillary.purpose_service import (
-        get_last_conversation,
-        set_last_conversation,
-    )
-
-    last_convo = get_last_conversation(str(project.path))
-    import contextlib as _ctx
-    from datetime import date as _date
-
-    parsed_date = None
-    if last_convo:
-        with _ctx.suppress(ValueError):
-            parsed_date = _date.fromisoformat(last_convo)
-    new_date = st.date_input(
-        "Last discussed with user",
-        value=parsed_date,
-        key=f"last_convo_{project.path}",
-    )
-    new_str = new_date.isoformat() if new_date else None
-    if new_str and new_str != (last_convo or ""):
-        set_last_conversation(str(project.path), new_str)
-        st.rerun()
+    # "Last discussed" date_input removed — dead field (panel consensus).
 
     # --- Transition journal (ADR 0025) ---
     import contextlib as _ctx2
@@ -331,43 +309,55 @@ def _render_header_with_launcher(project: Project) -> None:
         if md and md.status:
             st.markdown(status_chip(md.status.value), unsafe_allow_html=True)
 
-        # Purpose: italic quote when set, else editable input with placeholder
-        from armillary.purpose_service import get_purpose, set_purpose
+        # Purpose: inline click-to-edit — italic quote with a pencil
+        # button that swaps into a text_input. No more nested expander.
+        from armillary.purpose_service import (
+            clear_purpose,
+            get_purpose,
+            set_purpose,
+        )
 
         purpose = get_purpose(str(project.path))
-        if purpose:
-            st.markdown(purpose_quote(purpose), unsafe_allow_html=True)
-            with st.expander("Edit purpose", expanded=False):
-                new_purpose = st.text_input(
-                    "Purpose",
-                    value=purpose,
-                    key=f"purpose_{project.path}",
-                    label_visibility="collapsed",
-                )
-                if new_purpose != purpose and new_purpose:
-                    set_purpose(str(project.path), new_purpose)
-                    st.rerun()
-                elif not new_purpose:
-                    from armillary.purpose_service import clear_purpose
+        edit_key = f"_edit_purpose_{project.path}"
+        editing = st.session_state.get(edit_key, False)
 
-                    clear_purpose(str(project.path))
+        if purpose and not editing:
+            col_quote, col_edit = st.columns([10, 1])
+            with col_quote:
+                st.markdown(purpose_quote(purpose), unsafe_allow_html=True)
+            with col_edit:
+                if st.button(
+                    "",
+                    icon=":material/edit:",
+                    key=f"edit_btn_{project.path}",
+                    help="Edit purpose",
+                    type="tertiary",
+                ):
+                    st.session_state[edit_key] = True
                     st.rerun()
         else:
-            # No purpose yet — show README excerpt as italic quote, offer input
-            if md and md.readme_excerpt:
+            # No purpose yet OR user clicked edit — show input, with
+            # README excerpt as a visual placeholder if empty
+            if not purpose and md and md.readme_excerpt:
                 excerpt = md.readme_excerpt
                 dot = excerpt.find(". ")
                 oneliner = excerpt[: dot + 1] if 0 < dot < 80 else excerpt[:80]
                 st.markdown(purpose_quote(oneliner), unsafe_allow_html=True)
             new_purpose = st.text_input(
                 "Purpose",
-                value="",
+                value=purpose or "",
                 placeholder="Why does this project exist? One sentence.",
-                key=f"purpose_{project.path}",
+                key=f"purpose_input_{project.path}",
                 label_visibility="collapsed",
             )
-            if new_purpose:
-                set_purpose(str(project.path), new_purpose)
+            trimmed = new_purpose.strip()
+            if trimmed and trimmed != (purpose or ""):
+                set_purpose(str(project.path), trimmed)
+                st.session_state[edit_key] = False
+                st.rerun()
+            elif not trimmed and purpose:
+                clear_purpose(str(project.path))
+                st.session_state[edit_key] = False
                 st.rerun()
 
         st.caption(f"`{_shorten_home(project.path)}`")
@@ -480,9 +470,20 @@ def _render_glance_strip(project: Project) -> None:
         if span_days >= 30:
             invested_sub = f"over {span_days // 30}mo"
 
-    # Commits
-    commits_val = str(md.commit_count) if md and md.commit_count else "\u2014"
-    commits_sub = "total"
+    # Revenue (killer metric) with Commits as fallback — panel feedback
+    from armillary.purpose_service import get_revenue
+
+    revenue = get_revenue(str(project.path))
+    if revenue is not None and revenue > 0:
+        fourth_label = "Revenue"
+        fourth_val = f"${revenue}"
+        fourth_sub = "monthly"
+        fourth_tone = None
+    else:
+        fourth_label = "Commits"
+        fourth_val = str(md.commit_count) if md and md.commit_count else "\u2014"
+        fourth_sub = "total"
+        fourth_tone = None
 
     # Activity sparkline (6mo)
     activity_val: str = "\u2014"
@@ -514,9 +515,10 @@ def _render_glance_strip(project: Project) -> None:
             "sub": invested_sub,
         },
         {
-            "label": "Commits",
-            "value": commits_val,
-            "sub": commits_sub,
+            "label": fourth_label,
+            "value": fourth_val,
+            "sub": fourth_sub,
+            "tone": fourth_tone,
         },
         {
             "label": "Activity",

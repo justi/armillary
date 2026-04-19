@@ -95,11 +95,19 @@ def _render_overview() -> None:
         all_visible = [r for r in rows if r.status_raw != "ARCHIVED"]
         _render_time_grouped_tables(all_visible)
 
-    # Portfolio tab — pulse + heatmap + search (design change #3)
-    tab_today, tab_portfolio = st.tabs(["Today", "Portfolio"])
-    with tab_today:
-        _render_today_activity(rows)
-    with tab_portfolio:
+    # Portfolio tab — pulse + heatmap + search (design change #3).
+    # Today tab is conditional: no point showing an empty placeholder
+    # if nothing changed in the last 24h (panel feedback).
+    today_rows = find_today_activity(rows)
+    if today_rows:
+        tab_today, tab_portfolio = st.tabs(["Today", "Portfolio"])
+        with tab_today:
+            _render_today_activity(rows)
+        with tab_portfolio:
+            _render_search_section([r for r in rows if r.status_raw != "ARCHIVED"], cfg)
+            _render_pulse_section()
+            _render_activity_heatmap()
+    else:
         _render_search_section([r for r in rows if r.status_raw != "ARCHIVED"], cfg)
         _render_pulse_section()
         _render_activity_heatmap()
@@ -219,13 +227,18 @@ def _render_next_suggestions() -> None:
     if not suggestions:
         return
 
-    # HERO kicker + big heading (design system fs-display)
+    # HERO kicker + dynamic verdict headline (design system fs-display).
+    # Panel feedback: "what should you work on today?" is too polite.
+    # Devs want a verdict, not a question.
+    headline = build_hero_headline(suggestions)
     st.markdown(
         '<div class="arm-hero-kicker">TODAY\u2019S FOCUS</div>',
         unsafe_allow_html=True,
     )
+    import html as _html
+
     st.markdown(
-        '<h2 class="arm-hero">What should you work on today?</h2>',
+        f'<h2 class="arm-hero">{_html.escape(headline)}</h2>',
         unsafe_allow_html=True,
     )
 
@@ -301,6 +314,34 @@ def _render_next_suggestions() -> None:
     st.markdown("---")
 
 
+def build_hero_headline(suggestions: list) -> str:
+    """Dynamic verdict headline from active suggestions.
+
+    Harry Dry feedback: a question ("What should you work on today?") is
+    too soft; devs want specificity. Turns the suggestion mix into a
+    one-line verdict. Pure function — testable without Streamlit.
+    """
+    if not suggestions:
+        return "Nothing urgent. Go ship."
+    n = len(suggestions)
+    has_zombie = any(s.category == "zombie" for s in suggestions)
+    has_momentum = any(s.category == "momentum" for s in suggestions)
+    has_gold = any(s.category == "forgotten_gold" for s in suggestions)
+    word = "projects" if n != 1 else "project"
+
+    if has_zombie and has_momentum:
+        return f"{n} {word} calling. One dying."
+    if has_zombie:
+        return f"{n} {word} calling. One's on life support."
+    if has_momentum and has_gold:
+        return f"{n} {word} calling. One has momentum, one is forgotten gold."
+    if has_momentum:
+        return f"{n} {word} with momentum. Keep shipping."
+    if has_gold:
+        return f"{n} forgotten {word}. Revive or archive."
+    return f"{n} {word} calling."
+
+
 def _big_number_parts(suggestion) -> tuple[str, str]:
     """Extract a dominant headline + unit caption from a Suggestion.
 
@@ -324,11 +365,11 @@ def _big_number_parts(suggestion) -> tuple[str, str]:
             unit = "last commit \u00b7 keep shipping"
         else:
             headline = f"{days_since}d"
-            dirty_note = f" \u00b7 {dirty} dirty" if dirty else ""
+            dirty_note = f" \u00b7 {dirty} waiting" if dirty else ""
             unit = f"since last commit{dirty_note}"
     elif cat == "zombie":
         headline = f"{days_since or 0}d"
-        dirty_note = f" \u00b7 {dirty} dirty" if dirty else ""
+        dirty_note = f" \u00b7 {dirty} waiting" if dirty else ""
         unit = f"since last commit{dirty_note}"
     elif cat == "forgotten_gold":
         headline = f"{hours:.0f}h"
