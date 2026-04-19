@@ -1,30 +1,33 @@
 <svg class="rich-terminal" viewBox="0 0 1141 367.2" xmlns="http://www.w3.org/2000/svg">
+    <!-- Generated with Rich https://www.textualize.io -->
     <style>
+
     @font-face {
         font-family: "Fira Code";
-        src: local("FiraCode-Regular"),
-             url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff2/FiraCode-Regular.woff2") format("woff2");
+        src: local("FiraCode-Regular");
         font-style: normal;
         font-weight: 400;
     }
     @font-face {
         font-family: "Fira Code";
-        src: local("FiraCode-Bold"),
-             url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff2/FiraCode-Bold.woff2") format("woff2");
-        font-style: bold;
+        src: local("FiraCode-Bold");
+        font-style: normal;
         font-weight: 700;
     }
+
     .terminal-2597491631-matrix {
         font-family: Fira Code, monospace;
         font-size: 20px;
         line-height: 24.4px;
         font-variant-east-asian: full-width;
     }
+
     .terminal-2597491631-title {
         font-size: 18px;
         font-weight: bold;
         font-family: arial;
     }
+
     .terminal-2597491631-r1 { fill: #98a84b;font-weight: bold }
 .terminal-2597491631-r2 { fill: #c5c8c6 }
 .terminal-2597491631-r3 { fill: #c5c8c6;font-weight: bold }
@@ -33,6 +36,7 @@
 .terminal-2597491631-r6 { fill: #d0b344 }
 .terminal-2597491631-r7 { fill: #68a0b3;font-weight: bold }
     </style>
+
     <defs>
     <clipPath id="terminal-2597491631-clip-terminal">
       <rect x="0" y="0" width="1121.3999999999999" height="316.2" />
@@ -73,7 +77,8 @@
 <clipPath id="terminal-2597491631-line-11">
     <rect x="0" y="269.9" width="1122.4" height="24.65"/>
             </clipPath>
-    </defs>
+    <clipPath id="terminal-2597491631-line-12"><rect x="0" y="294.29999999999995" width="1141" height="24.65"/></clipPath></defs>
+
     <rect fill="#292929" stroke="rgba(255,255,255,0.35)" stroke-width="1" x="1" y="1" width="1139" height="365.2" rx="8"/><text class="terminal-2597491631-title" fill="#c5c8c6" text-anchor="middle" x="569" y="27">armillary&#160;pulse</text>
             <g transform="translate(26,22)">
             <circle cx="0" cy="0" r="7" fill="#ff5f57"/>
