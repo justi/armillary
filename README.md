@@ -49,6 +49,8 @@ Your AI coding agent (Claude Code, Cursor) gets the same data automatically via 
 - **Tracks metadata** — status, branch, commits, work hours, dirty files, README, ADRs, notes
 - **Recommends** what to work on — momentum, zombies, forgotten gold (`next`)
 - **Restores context** — branch, dirty files, recent commits in sub-second (`context`)
+- **Weekly pulse** — what changed, what went dormant, what's waiting (`pulse`)
+- **Activity heatmap** — 12-month contribution view, exportable as a shareable HTML card (`card`)
 - **Searches** across ALL projects with ripgrep
 - **MCP server** — your AI agent knows your full project history
 - **Launches** projects into Cursor, VS Code, Zed, Claude Code, terminal, Finder
@@ -102,9 +104,14 @@ armillary start
 |---|---|
 | `armillary next` | What should I work on today? Momentum, zombies, forgotten gold |
 | `armillary context <name>` | Where was I? Branch, dirty files, recent commits — sub-second |
+| `armillary pulse` | Weekly pulse — what you worked on, what went dormant, what's waiting |
 | `armillary search "<query>"` | ripgrep across all projects |
 | `armillary list` | Rich terminal table with `--status`, `--type`, `--umbrella` filters |
 | `armillary open <name>` | Launch project in configured editor (`--target cursor`/`vscode`/`zed`) |
+| `armillary archive <name>` / `activate <name>` | Mark project done / restore to automatic status |
+| `armillary exclude <name>` / `include <name>` | Hide / unhide a project across all armillary output |
+| `armillary purpose <name>` | Set or show a project's one-line purpose |
+| `armillary share` / `card` | Generate shareable tweet / heatmap HTML card |
 | `armillary config --init` | First-run setup: umbrella picker → scan → Claude Code bridge → MCP |
 | `armillary scan` | Full scan of all umbrellas, persist to cache |
 | `armillary start` | Incremental scan + Streamlit dashboard |
@@ -148,8 +155,9 @@ armillary exposes five MCP tools that Claude Code / Cursor can call:
 ```bash
 uv sync --extra dev
 
-# 295 tests covering scanner / metadata / status / cache / config /
-# launcher / search / exporter / bootstrap / CLI / MCP / next / context
+# 375 tests covering scanner / metadata / status / cache / config /
+# launcher / search / exporter / bootstrap / CLI / MCP / next / context /
+# pulse / share / heatmap / transitions / purpose / revenue
 .venv/bin/python -m pytest
 
 # lint + format
