@@ -33,15 +33,15 @@
 
 `armillary next` — what should I work on today?
 
-<p><img src=".github/previews/next.svg" alt="armillary next output — yesterday line + three categorized suggestions (acme-dashboard momentum, acme-subscriptions zombie, acme-voice-lab forgotten gold) with sparklines and cd hints" width="820"></p>
+<p><a href="#see-it-in-action"><img src=".github/previews/next.svg" alt="armillary next output — yesterday line + three categorized suggestions (acme-dashboard momentum, acme-subscriptions zombie, acme-voice-lab forgotten gold) with sparklines and cd hints" width="820"></a></p>
 
 `armillary pulse` — weekly check-in:
 
-<p><img src=".github/previews/pulse.svg" alt="armillary pulse output — worked-on, went-dormant, and uncommitted-work sections" width="820"></p>
+<p><a href="#see-it-in-action"><img src=".github/previews/pulse.svg" alt="armillary pulse output — worked-on, went-dormant, and uncommitted-work sections" width="820"></a></p>
 
 `armillary context <name>` — instant re-entry:
 
-<p><img src=".github/previews/context.svg" alt="armillary context acme-subscriptions — status, activity sparkline, last session, recent commits, unmerged branches" width="820"></p>
+<p><a href="#see-it-in-action"><img src=".github/previews/context.svg" alt="armillary context acme-subscriptions — status, activity sparkline, last session, recent commits, unmerged branches" width="820"></a></p>
 
 Your AI coding agent sees the same data through MCP — ask Claude Code _"what should I work on?"_ and it calls `armillary_next` under the hood.
 
