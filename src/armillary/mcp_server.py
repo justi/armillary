@@ -56,13 +56,19 @@ def _project_context(project_name: str) -> dict[str, object]:
     }
 
 
-def _hit_to_dict(hit: SearchHit, project_meta: dict[str, object]) -> dict[str, object]:
-    """Convert a SearchHit + project metadata to a flat dict."""
+def _hit_to_dict(hit: SearchHit, project_name: str) -> dict[str, object]:
+    """Convert a SearchHit to a compact dict tagged by project name.
+
+    Project-level metadata (path, status, description) is emitted once
+    per project under the top-level ``projects`` map by
+    :func:`armillary_search` — this keeps each hit small when the same
+    repo contributes many matches.
+    """
     preview = hit.preview
     if len(preview) > _PREVIEW_MAX_LEN:
         preview = preview[:_PREVIEW_MAX_LEN] + "…"
     return {
-        **project_meta,
+        "project": project_name,
         "file": str(hit.path),
         "line": hit.line,
         "preview": preview,
@@ -90,6 +96,41 @@ def _safe_json(results: list[dict[str, object]], total: int, shown: int) -> str:
         if len(output) <= _RESPONSE_MAX_CHARS:
             return output
     return _serialize(results, total)
+
+
+def _serialize_search(
+    projects: dict[str, dict[str, object]],
+    hits: list[dict[str, object]],
+    dropped: int,
+) -> str:
+    """Compact ``{projects, hits}`` payload — description emitted once."""
+    # Drop projects whose hits were trimmed, so the map stays tight.
+    referenced = {str(h["project"]) for h in hits}
+    pruned = {k: v for k, v in projects.items() if k in referenced}
+    payload: dict[str, object] = {"projects": pruned, "hits": hits}
+    if dropped > 0:
+        payload["truncated"] = dropped
+    return json.dumps(payload, separators=(",", ":"), default=str)
+
+
+def _safe_search_json(
+    projects: dict[str, dict[str, object]],
+    hits: list[dict[str, object]],
+    total: int,
+    shown: int,
+) -> str:
+    """Serialize ``armillary_search`` payload, trimming hits to fit budget."""
+    dropped = total - shown if shown < total else 0
+    output = _serialize_search(projects, hits, dropped)
+    if len(output) <= _RESPONSE_MAX_CHARS:
+        return output
+    while hits:
+        hits.pop()
+        dropped = total - len(hits)
+        output = _serialize_search(projects, hits, dropped)
+        if len(output) <= _RESPONSE_MAX_CHARS:
+            return output
+    return _serialize_search(projects, hits, total)
 
 
 def _clamp_max_results(max_results: int) -> int:
@@ -128,6 +169,7 @@ def armillary_search(query: str, max_results: int = 20) -> str:
         return "ripgrep (`rg`) is not installed. Install it: `brew install ripgrep`."
     backend = LiteralSearch()
     results: list[dict[str, object]] = []
+    projects_meta: dict[str, dict[str, object]] = {}
     project_roots = _get_project_roots()
     total_hits = 0
 
@@ -141,13 +183,19 @@ def armillary_search(query: str, max_results: int = 20) -> str:
             continue
         total_hits += len(hits)
         if hits:
-            meta = _project_context(name)
-            results.extend(_hit_to_dict(h, meta) for h in hits)
+            if name not in projects_meta:
+                projects_meta[name] = _project_context(name)
+            results.extend(_hit_to_dict(h, name) for h in hits)
 
     if not results:
         return f"No matches for '{query}' across {len(project_roots)} projects."
 
-    return _safe_json(results[:max_results], total_hits, len(results[:max_results]))
+    return _safe_search_json(
+        projects_meta,
+        results[:max_results],
+        total_hits,
+        len(results[:max_results]),
+    )
 
 
 @mcp.tool()

@@ -91,31 +91,35 @@ def test_project_context_returns_metadata_for_existing_project(
 # --- _hit_to_dict -----------------------------------------------------------
 
 
-def test_hit_to_dict_merges_meta_and_hit() -> None:
-    meta = {"path": "/tmp/foo", "status": "ACTIVE", "description": "Foo app"}
+def test_hit_to_dict_tags_project_name() -> None:
+    """Each hit carries only the project name; metadata lives in the
+    top-level ``projects`` map built by ``armillary_search``."""
     hit = SearchHit(
         path=Path("/tmp/foo/bar.py"), line=42, preview="def bar():", backend="ripgrep"
     )
 
-    result = _hit_to_dict(hit, meta)
+    result = _hit_to_dict(hit, "foo")
 
-    assert result["path"] == "/tmp/foo"
-    assert result["status"] == "ACTIVE"
+    assert result["project"] == "foo"
     assert result["file"] == "/tmp/foo/bar.py"
     assert result["line"] == 42
     assert result["preview"] == "def bar():"
+    # Metadata intentionally absent per-hit — it would duplicate across
+    # every match from the same repo.
+    assert "path" not in result
+    assert "status" not in result
+    assert "description" not in result
 
 
 def test_hit_to_dict_truncates_long_preview() -> None:
     long_preview = "x" * 300
-    meta = {"path": "/tmp/foo", "status": "ACTIVE", "description": None}
     hit = SearchHit(
         path=Path("/tmp/foo/bar.py"),
         line=1,
         preview=long_preview,
         backend="ripgrep",
     )
-    result = _hit_to_dict(hit, meta)
+    result = _hit_to_dict(hit, "foo")
     assert len(result["preview"]) == _PREVIEW_MAX_LEN + 1  # +1 for "…"
     assert result["preview"].endswith("…")
 
@@ -254,6 +258,57 @@ def test_armillary_search_clamps_zero_max_results_before_backend_call(
 
     assert calls == [1]
     assert result == "No matches for 'needle' across 1 projects."
+
+
+def test_armillary_search_emits_project_meta_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Many hits in the same repo should not repeat the description."""
+    import json as _json
+
+    alpha_hits = [
+        SearchHit(path=Path("/tmp/alpha/a.py"), line=1, preview="x", backend="rg"),
+        SearchHit(path=Path("/tmp/alpha/b.py"), line=2, preview="y", backend="rg"),
+        SearchHit(path=Path("/tmp/alpha/c.py"), line=3, preview="z", backend="rg"),
+    ]
+
+    class FakeLiteralSearch:
+        @staticmethod
+        def is_available() -> bool:
+            return True
+
+        def search(
+            self, query: str, *, root: Path, max_results: int = 50
+        ) -> list[SearchHit]:
+            return alpha_hits if "alpha" in str(root) else []
+
+    monkeypatch.setattr("armillary.mcp_server.LiteralSearch", FakeLiteralSearch)
+    monkeypatch.setattr(
+        "armillary.mcp_server._get_project_roots",
+        lambda: [("alpha", Path("/tmp/alpha"))],
+    )
+    monkeypatch.setattr(
+        "armillary.mcp_server._project_context",
+        lambda name: {
+            "path": "/tmp/alpha",
+            "status": "ACTIVE",
+            "description": "The Alpha project — does alpha things.",
+        },
+    )
+
+    result = armillary_search("needle", max_results=10)
+    payload = _json.loads(result)
+
+    # Exactly one projects-map entry, regardless of hit count
+    assert set(payload["projects"].keys()) == {"alpha"}
+    assert payload["projects"]["alpha"]["description"].startswith("The Alpha")
+    # All 3 hits carry only the project name, not the description
+    assert len(payload["hits"]) == 3
+    for h in payload["hits"]:
+        assert h["project"] == "alpha"
+        assert "description" not in h
+    # Description appears once in the serialized output, not 3×
+    assert result.count("The Alpha") == 1
 
 
 # --- armillary_context -------------------------------------------------------

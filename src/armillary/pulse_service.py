@@ -63,14 +63,20 @@ def generate_pulse(
         if md is None:
             continue
 
-        # Projects with commits this week
+        # Projects with commits this week. The "invested" suffix is
+        # total lifetime hours for context (helps answer "is this a
+        # big or small project?") — not hours logged this week, which
+        # wasn't what the old "active this week · Xh" copy suggested.
         if md.last_commit_ts and md.last_commit_ts >= week_ago:
-            hours = f"{md.work_hours:.0f}h" if md.work_hours else ""
+            if md.work_hours:
+                message = f"active this week · {md.work_hours:.0f}h invested"
+            else:
+                message = "active this week"
             worked_on.append(
                 PulseEntry(
                     icon="🔨",
                     project_name=p.name,
-                    message=f"active this week · {hours}",
+                    message=message,
                 )
             )
 
