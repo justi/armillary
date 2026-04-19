@@ -163,6 +163,9 @@ armillary exposes five MCP tools that Claude Code / Cursor can call:
 }
 ```
 
+For details on the transport, lifecycle, cache-staleness semantics, and
+how to debug tool calls, see [`docs/mcp.md`](docs/mcp.md).
+
 ## Privacy
 
 `armillary` **never sends data off-device**. Project index, metadata, cache, and config all live on your local disk.
