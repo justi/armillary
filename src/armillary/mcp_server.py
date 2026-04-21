@@ -304,6 +304,66 @@ def armillary_next() -> str:
 
 
 @mcp.tool()
+def armillary_steal(
+    query: str,
+    limit: int = 5,
+    language: str | None = None,
+) -> str:
+    """Find reusable code the user has already written in another repo.
+
+    Returns ranked code blocks (whole 40-line windows, not just matched
+    lines) from the user's indexed repositories. Ranking favours recent
+    and active projects. Use this when the user asks "how did I do X
+    before?" or is about to write something they've likely already
+    written — payment webhooks, PDF parsers, auth flows.
+
+    Args:
+        query: literal search term(s). Multi-word queries are ANDed.
+        limit: max blocks to return (default 5, capped).
+        language: optional file-extension filter (``py``, ``rb``,
+            ``ts``, ``go``, ...).
+
+    Examples:
+    - armillary_steal("stripe webhook") → prior webhook handlers
+    - armillary_steal("parse_price", language="py") → Python price parsers
+    """
+    from armillary.steal_service import steal
+
+    limit = _clamp_max_results(limit)
+    try:
+        results = steal(query, limit=limit, language=language)
+    except Exception as exc:  # noqa: BLE001
+        return f"Steal failed: {exc}"
+    if not results:
+        return f"No reusable blocks for '{query}'."
+
+    payload: list[dict[str, object]] = []
+    for r in results:
+        content = r.block.content
+        # Trim to keep responses within MCP token budget. 60 lines is
+        # plenty for an agent to see the shape of the function; the CLI
+        # returns the untrimmed version.
+        lines = content.splitlines()
+        if len(lines) > 60:
+            lines = [*lines[:60], f"… (+{len(content.splitlines()) - 60} lines)"]
+            content = "\n".join(lines)
+        payload.append(
+            {
+                "project": r.project_name,
+                "status": r.project_status,
+                "file": r.block.path,
+                "start_line": r.block.start_line,
+                "end_line": r.block.end_line,
+                "language": r.block.language_ext,
+                "symbol": r.block.symbol,
+                "score": round(r.score, 3),
+                "content": content,
+            }
+        )
+    return _safe_json(payload, len(payload), len(payload))
+
+
+@mcp.tool()
 def armillary_pulse() -> str:
     """Weekly pulse — what changed across your projects this week.
 

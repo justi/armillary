@@ -5,6 +5,8 @@ Extracted from cli.py to keep modules under 400 lines.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import typer
 from rich.console import Console
 
@@ -201,6 +203,116 @@ def install_claude_bridge(
                 f"  · {claude_md} already imports armillary — left untouched.",
                 fg=typer.colors.CYAN,
             )
+
+
+@app.command("steal")
+def steal_command(
+    query: str = typer.Argument(..., help="What to steal (e.g. 'stripe webhook')."),
+    limit: int = typer.Option(
+        5, "--limit", "-n", min=1, max=20, help="How many blocks to return."
+    ),
+    language: str | None = typer.Option(
+        None,
+        "--lang",
+        "-l",
+        help="File-extension filter (py, rb, ts, go, ...).",
+    ),
+    copy: int | None = typer.Option(
+        None,
+        "--copy",
+        "-c",
+        help="Copy the Nth result (1-based) to clipboard via pbcopy.",
+    ),
+    vote: int | None = typer.Option(
+        None,
+        "--vote",
+        help="After copy, record a thumbs vote for the query (1 = up, -1 = down).",
+    ),
+) -> None:
+    """Cross-repo ranked code search — steal from your own projects (ADR 0027)."""
+    import subprocess as _sp
+
+    from armillary.feedback_service import record_vote
+    from armillary.steal_service import steal
+    from armillary.transition_service import record_steal
+
+    if not query.strip():
+        typer.secho("Query is empty.", fg=typer.colors.YELLOW)
+        raise typer.Exit(2)
+
+    try:
+        results = steal(query, limit=limit, language=language)
+    except RuntimeError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(2) from exc
+
+    if not results:
+        typer.secho(
+            f"No reusable blocks for '{query}'. Run `armillary scan` first?",
+            fg=typer.colors.YELLOW,
+        )
+        return
+
+    console = Console()
+    for i, r in enumerate(results, start=1):
+        header = (
+            f"[bold cyan]{i}. {r.project_name}[/bold cyan] "
+            f"[dim]({r.project_status or 'unknown'}, score={r.score:.2f})[/dim]"
+        )
+        console.print(header)
+        symbol_part = f"[magenta]{r.block.symbol}[/magenta]  " if r.block.symbol else ""
+        console.print(
+            f"   {symbol_part}[dim]{r.block.path}:"
+            f"{r.block.start_line}-{r.block.end_line}[/dim]"
+        )
+        console.print(f"[dim]{'─' * 60}[/dim]")
+        console.print(r.block.content)
+        console.print()
+
+    if copy is None:
+        return
+
+    if copy < 1 or copy > len(results):
+        typer.secho(
+            f"--copy {copy} is out of range (1..{len(results)}).",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    chosen = results[copy - 1]
+    content_bytes = chosen.block.content.encode("utf-8")
+    try:
+        _sp.run(  # noqa: S603 — fixed argv, no shell
+            ["pbcopy"],
+            input=content_bytes,
+            check=True,
+            timeout=5,
+        )
+        typer.secho(
+            f"Copied block from {chosen.project_name} to clipboard.",
+            fg=typer.colors.GREEN,
+        )
+    except (FileNotFoundError, _sp.CalledProcessError, _sp.TimeoutExpired):
+        typer.secho(
+            "pbcopy unavailable — dumping the block content:",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+        console.print(chosen.block.content)
+
+    # Journal + feedback — only after a successful "take".
+    import contextlib as _ctx
+
+    with _ctx.suppress(Exception):
+        record_steal(
+            query=query,
+            src_path=chosen.block.path,
+            dst_path=str(Path.cwd()),
+        )
+
+    if vote is not None:
+        record_vote(query, chosen.block.path, chosen.block.start_line, vote)
 
 
 @app.command("mcp-serve")

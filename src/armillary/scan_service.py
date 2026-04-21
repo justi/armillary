@@ -64,7 +64,40 @@ def full_scan(
 
         detect_and_store_transitions()
 
+    # Index code blocks for Steal (ADR 0027). Best-effort — failures
+    # must never break the scan. Skip idea projects (no git tree).
+    with contextlib.suppress(Exception):
+        _index_code_blocks(projects)
+
     return projects
+
+
+def _index_code_blocks(projects: list[Project]) -> None:
+    """Populate the Steal code-block index from tracked files.
+
+    Isolated in its own helper so `contextlib.suppress` in `full_scan`
+    catches the whole sub-pipeline (FTS5 unsupported, disk full, etc.)
+    without swallowing more than we intend.
+    """
+    import contextlib as _ctx
+
+    from .code_block_service import build_blocks_for_repo
+    from .code_index import CodeIndex
+
+    with CodeIndex() as idx:
+        for project in projects:
+            if project.type is not ProjectType.GIT:
+                continue
+            with _ctx.suppress(Exception):
+                blocks = build_blocks_for_repo(project.path)
+                # Group by file path — upsert per-file so a partial
+                # failure leaves earlier files indexed.
+                by_file: dict[str, list] = {}
+                for blk in blocks:
+                    by_file.setdefault(blk.path, []).append(blk)
+                idx.delete_repo(str(project.path))
+                for path_str, file_blocks in by_file.items():
+                    idx.upsert_blocks(str(project.path), path_str, file_blocks)
 
 
 def initial_scan(umbrellas: list[UmbrellaFolder]) -> list[Project]:

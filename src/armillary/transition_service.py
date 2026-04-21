@@ -18,6 +18,7 @@ from .exclude_service import filter_excluded
 _PREVIOUS_FILENAME = "status-previous.json"
 _JOURNAL_FILENAME = "transition-journal.json"
 _PENDING_FILENAME = "transitions-pending.json"
+_STEAL_JOURNAL_FILENAME = "steal-journal.json"
 
 _MAX_DISPLAY = 5
 
@@ -178,6 +179,48 @@ def record_journal_entry(
 
     data[project_path] = entries
     _save_json(path, data)
+
+
+def _steal_journal_path(db_path: Path | None = None) -> Path:
+    base = db_path.parent if db_path else default_db_path().parent
+    return base / _STEAL_JOURNAL_FILENAME
+
+
+def record_steal(
+    query: str,
+    src_path: str,
+    dst_path: str,
+    *,
+    db_path: Path | None = None,
+) -> None:
+    """Append a "stole from X into Y" entry to the Steal journal.
+
+    ADR 0027: Sunday Portfolio Review reads this file to answer
+    "what is replicating between my projects?" — the signal for
+    extracting an internal library.
+    """
+    path = _steal_journal_path(db_path)
+    data = _load_json(path)
+    if not isinstance(data, list):
+        data = []
+    data.append(
+        {
+            "date": datetime.now().isoformat()[:10],
+            "query": query,
+            "from": src_path,
+            "into": dst_path,
+        }
+    )
+    _save_json(path, data)
+
+
+def load_steal_journal(
+    *,
+    db_path: Path | None = None,
+) -> list[dict]:
+    """Read the full Steal journal (most-recent-last)."""
+    data = _load_json(_steal_journal_path(db_path))
+    return data if isinstance(data, list) else []
 
 
 def format_transitions(transitions: list[dict]) -> str:
