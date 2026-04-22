@@ -110,32 +110,34 @@ def test_steal_empty_query(isolated_cache: Path) -> None:
     assert steal("   ") == []
 
 
-def test_steal_ranks_by_recency(
-    isolated_cache: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_steal_bm25_relevance_dominates(isolated_cache: Path) -> None:
+    """Dense BM25 match in an old file beats a weak match in a fresh one.
+
+    Ranking mistake we want to avoid: actively-edited but off-topic code
+    saturated the top of the results because recency alone was the
+    dominant signal. BM25 rank position corrects this.
+    """
     from armillary.steal_service import steal
 
     now = time.time()
-    old = _make_block(
-        path="/repo/a/old.py",
-        content="needle old",
-        updated_at=now - 86400 * 365,  # 1 year old
-    )
-    fresh = _make_block(
-        path="/repo/a/new.py",
-        content="needle fresh",
+    weak_fresh = _make_block(
+        path="/repo/a/fresh.py",
+        content="the word needle appears here once, surrounded by filler",
         updated_at=now - 60,
     )
+    dense_old = _make_block(
+        path="/repo/a/old.py",
+        content="needle needle needle needle needle",
+        updated_at=now - 86400 * 365,
+    )
     with CodeIndex() as idx:
-        idx.upsert_blocks(old.repo_path, old.path, [old])
-        idx.upsert_blocks(fresh.repo_path, fresh.path, [fresh])
+        idx.upsert_blocks(weak_fresh.repo_path, weak_fresh.path, [weak_fresh])
+        idx.upsert_blocks(dense_old.repo_path, dense_old.path, [dense_old])
 
-    # With empty cache (no projects), status defaults apply equally; recency
-    # should decide ordering.
     results = steal("needle", limit=5)
     assert len(results) == 2
-    assert results[0].block.path.endswith("new.py")
-    assert results[1].block.path.endswith("old.py")
+    assert results[0].block.path.endswith("old.py")
+    assert results[1].block.path.endswith("fresh.py")
 
 
 def test_steal_language_filter(isolated_cache: Path) -> None:
@@ -150,3 +152,38 @@ def test_steal_language_filter(isolated_cache: Path) -> None:
     results = steal("needle", limit=5, language="py")
     assert len(results) == 1
     assert results[0].block.language_ext == "py"
+
+
+def test_code_outranks_docs_and_data(isolated_cache: Path) -> None:
+    """Same age + same (empty) project status → code file wins over .md and .json."""
+    from armillary.steal_service import steal
+
+    now = time.time()
+    doc = _make_block(
+        path="/r/a/readme.md",
+        content="stripe webhook docs",
+        ext="md",
+        updated_at=now,
+    )
+    data = _make_block(
+        path="/r/a/fixtures.json",
+        content="stripe webhook fixture",
+        ext="json",
+        updated_at=now,
+    )
+    code = _make_block(
+        path="/r/a/handler.py",
+        content="stripe webhook handler",
+        ext="py",
+        updated_at=now,
+    )
+    with CodeIndex() as idx:
+        idx.upsert_blocks(doc.repo_path, doc.path, [doc])
+        idx.upsert_blocks(data.repo_path, data.path, [data])
+        idx.upsert_blocks(code.repo_path, code.path, [code])
+
+    results = steal("stripe webhook", limit=5)
+    assert len(results) == 3
+    # Ordering: code (1.0) > doc (0.55) > data (0.4)
+    exts = [r.block.language_ext for r in results]
+    assert exts == ["py", "md", "json"]

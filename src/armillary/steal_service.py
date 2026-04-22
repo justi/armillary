@@ -1,9 +1,11 @@
 """Ranked cross-repo code retrieval (ADR 0027 — Steal).
 
 Given a query, returns a ranked list of code blocks drawn from every
-indexed repo. Ranking is heuristic — recency and project status only
-— per the ADR's "ship v1 with two signals" directive. More signals
-wait for real feedback-loop data.
+indexed repo. Ranking combines three signals: BM25 relevance (from
+the FTS index), recency, and project status — multiplied by a
+content-type weight that demotes docs and data files. BM25 is the
+dominant signal: without it, actively-edited but off-topic code
+saturated the results.
 """
 
 from __future__ import annotations
@@ -19,13 +21,20 @@ from .exclude_service import filter_excluded
 from .models import Project, Status
 from .status_override import filter_archived, get_override
 
-_OVERFETCH_MULTIPLIER = 10
+_OVERFETCH_MULTIPLIER = 20
+# Cap per repo in the overfetch pool so one noisy repo (many hits in
+# comments/fixtures) cannot dominate the final ranking slice.
+_MAX_PER_REPO_IN_OVERFETCH = 3
 
-# ADR 0027 ranking: 2 signals only. Weights are deliberately simple so
-# the feedback loop (thumbs up/down) generates the data we need before
-# adding more dimensions.
-_RECENCY_WEIGHT = 0.7
-_STATUS_WEIGHT = 0.3
+# ADR 0027 ranking — 3 signals, BM25 relevance dominant.
+# Earlier design used only recency + status; observed in the wild:
+# actively-edited repos dominated unrelated queries because recency
+# saturated near 1.0 and the match-quality signal was missing entirely.
+# BM25 rank position (from CodeIndex.search) answers "does this block
+# actually match the query?" — without it, ranking is blind.
+_RELEVANCE_WEIGHT = 0.6
+_RECENCY_WEIGHT = 0.25
+_STATUS_WEIGHT = 0.15
 _RECENCY_DECAY_DAYS = 180.0
 
 _STATUS_SCORES: dict[str, float] = {
@@ -37,6 +46,92 @@ _STATUS_SCORES: dict[str, float] = {
     Status.ARCHIVED.value: 0.0,
 }
 _STATUS_SCORE_DEFAULT = 0.5
+
+# Content-type multiplier (v1 correction — see ADR 0027).
+# Observed in the wild: BM25 promotes translation bundles (.pot),
+# docs (.md), and configs to the top when they happen to contain the
+# query string. This is a multiplicative noise filter, not a third
+# ranking dimension — the 2-signal mental model stays intact.
+_CODE_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        "py",
+        "rb",
+        "ts",
+        "tsx",
+        "js",
+        "jsx",
+        "mjs",
+        "cjs",
+        "go",
+        "rs",
+        "java",
+        "kt",
+        "swift",
+        "m",
+        "mm",
+        "c",
+        "cc",
+        "cpp",
+        "cxx",
+        "h",
+        "hh",
+        "hpp",
+        "cs",
+        "fs",
+        "vb",
+        "php",
+        "ex",
+        "exs",
+        "erl",
+        "elm",
+        "clj",
+        "cljs",
+        "scala",
+        "sc",
+        "sh",
+        "bash",
+        "zsh",
+        "fish",
+        "ps1",
+        "sql",
+        "pl",
+        "pm",
+        "lua",
+        "r",
+        "jl",
+        "nim",
+        "zig",
+        "dart",
+        "hs",
+        "ml",
+        "mli",
+        "coffee",
+        "tcl",
+    }
+)
+_DOC_EXTENSIONS: frozenset[str] = frozenset(
+    {"md", "rst", "txt", "adoc", "org", "tex", "pot", "po", "html", "htm"}
+)
+_DATA_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        "json",
+        "yaml",
+        "yml",
+        "toml",
+        "ini",
+        "cfg",
+        "conf",
+        "env",
+        "xml",
+        "csv",
+        "tsv",
+        "log",
+    }
+)
+_CONTENT_MULTIPLIER_CODE = 1.0
+_CONTENT_MULTIPLIER_UNKNOWN = 0.8
+_CONTENT_MULTIPLIER_DOC = 0.55
+_CONTENT_MULTIPLIER_DATA = 0.4
 
 
 @dataclass(frozen=True)
@@ -73,16 +168,33 @@ def steal(
     if not rows:
         return []
 
+    # Diversify the re-ranking pool: keep at most N hits per repo so a
+    # single repo with many incidental matches (docstrings, fixtures)
+    # cannot crowd out other repos.
+    per_repo: dict[str, int] = {}
+    diversified = []
+    for row in rows:
+        count = per_repo.get(row.repo_path, 0)
+        if count >= _MAX_PER_REPO_IN_OVERFETCH:
+            continue
+        per_repo[row.repo_path] = count + 1
+        diversified.append(row)
+    rows = diversified
+
     project_lookup = _build_project_lookup()
     now = time.time()
 
+    pool_size = max(1, len(rows))
     scored: list[StealResult] = []
-    for row in rows:
+    for position, row in enumerate(rows):
         project = _find_owning_project(row.repo_path, project_lookup)
         status_value = _effective_status(project)
         score = _score_block(
             updated_at=row.updated_at,
             status_value=status_value,
+            language_ext=row.language_ext,
+            bm25_position=position,
+            pool_size=pool_size,
             now=now,
         )
         scored.append(
@@ -161,8 +273,15 @@ def _score_block(
     *,
     updated_at: float,
     status_value: str | None,
+    language_ext: str,
+    bm25_position: int,
+    pool_size: int,
     now: float,
 ) -> float:
+    # BM25 position inside the diversified pool — 0 is the best match,
+    # pool_size-1 is the worst. We turn it into a relevance score in
+    # [0, 1] where 1.0 = top hit. This is the dominant signal.
+    relevance = 1.0 - (bm25_position / pool_size)
     age_days = max(0.0, (now - updated_at) / 86400.0)
     recency = math.exp(-age_days / _RECENCY_DECAY_DAYS)
     status_score = (
@@ -170,4 +289,20 @@ def _score_block(
         if status_value is not None
         else _STATUS_SCORE_DEFAULT
     )
-    return recency * _RECENCY_WEIGHT + status_score * _STATUS_WEIGHT
+    base = (
+        relevance * _RELEVANCE_WEIGHT
+        + recency * _RECENCY_WEIGHT
+        + status_score * _STATUS_WEIGHT
+    )
+    return base * _content_multiplier(language_ext)
+
+
+def _content_multiplier(language_ext: str) -> float:
+    ext = language_ext.lower()
+    if ext in _CODE_EXTENSIONS:
+        return _CONTENT_MULTIPLIER_CODE
+    if ext in _DOC_EXTENSIONS:
+        return _CONTENT_MULTIPLIER_DOC
+    if ext in _DATA_EXTENSIONS:
+        return _CONTENT_MULTIPLIER_DATA
+    return _CONTENT_MULTIPLIER_UNKNOWN

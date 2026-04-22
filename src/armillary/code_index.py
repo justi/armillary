@@ -220,12 +220,15 @@ class CodeIndex:
         limit: int,
         language_ext: str | None = None,
     ) -> list[CodeBlockRow]:
-        """FTS5 MATCH. Returns up to ``limit`` rows, unranked.
+        """FTS5 MATCH, ordered by BM25 relevance.
 
-        ``steal_service`` re-ranks with project status + recency — this
-        method only does the FTS fetch. Empty or whitespace-only query
-        returns an empty list. Malformed FTS syntax is swallowed; the
-        caller sees an empty result, not a crash.
+        Without an explicit ``ORDER BY``, FTS5 returns rows in rowid
+        order — which is "insertion order", i.e. whichever repo was
+        indexed first saturates the overfetch window. BM25 makes the
+        overfetch *relevance-representative* so ``steal_service`` can
+        re-rank the top candidates by recency and project status.
+        Empty/whitespace query returns []; malformed FTS syntax is
+        swallowed to an empty result.
         """
         if not query.strip():
             return []
@@ -243,6 +246,8 @@ class CodeIndex:
         if language_ext is not None:
             sql_parts.append("AND m.language_ext = ?")
             params.append(language_ext)
+        # bm25() returns smaller = better match. ORDER BY ascending.
+        sql_parts.append("ORDER BY bm25(code_blocks_fts)")
         sql_parts.append("LIMIT ?")
         params.append(max(1, limit))
         try:
@@ -287,15 +292,28 @@ _FTS_SPECIAL = set('"*:()[]^+-')
 def _sanitize_fts_query(query: str) -> str:
     """Produce a safe FTS5 MATCH expression from user input.
 
-    We treat each whitespace-delimited token as a literal — quoting it
-    so FTS5 does not interpret special characters. Empty tokens drop
-    out. Colons inside tokens are replaced (they collide with FTS5
-    column-scoped syntax).
+    Each whitespace-delimited token becomes a prefix-matched quoted
+    phrase (``"token" *``). Prefix matching widens the recall: a
+    query like ``linked_flow`` now matches ``linked_flow_policy``,
+    ``linked_flow_service``, etc., which FTS5's simple tokenizer
+    would otherwise treat as distinct tokens.
+
+    CamelCase vs snake_case is a separate concern — FTS5's simple
+    tokenizer does not split ``LinkedFlow`` into ``linked`` + ``flow``,
+    so users searching for ``linked_flow`` will not hit ``LinkedFlow``.
+    Callers who care should submit both variants or use the dedicated
+    matcher (future work).
+
+    Colons and other FTS5 operators are stripped from tokens to avoid
+    injecting column-scoped / boolean syntax.
     """
     tokens: list[str] = []
     for raw in query.split():
         cleaned = "".join("_" if ch in _FTS_SPECIAL else ch for ch in raw)
         cleaned = cleaned.strip("_")
         if cleaned:
-            tokens.append(f'"{cleaned}"')
+            # Prefix form: ``token*`` (no quotes — quotes disable prefix).
+            # ``cleaned`` has already had FTS operators replaced, so it is
+            # safe to embed directly.
+            tokens.append(f"{cleaned}*")
     return " ".join(tokens)

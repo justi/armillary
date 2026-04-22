@@ -149,8 +149,20 @@ own SQL column.
 
 ## Visibility rule
 
-Every user-facing feature must be clickable in the UI or set up during
-`config --init`. CLI-only / YAML-only features do not count as shipped.
+Every user-facing feature must be reachable through at least one
+first-class surface. Three surfaces count as first-class:
+
+1. **UI** — clickable in the Streamlit dashboard (sidebar / overview /
+   detail).
+2. **MCP** — exposed as an `armillary_*` tool on the MCP server,
+   documented in its tool docstring so agents can discover it.
+3. **`config --init`** — set up during interactive bootstrap.
+
+CLI-only or YAML-only features do not count as shipped. A feature
+that is MCP-only (no UI, no config) still counts — MCP is an
+interface, just not a human one. Features that ship MCP-first should
+be tracked with a follow-up ADR for the UI surface so the dashboard
+does not fall behind the agent-facing capabilities.
 
 ## Commit conventions
 

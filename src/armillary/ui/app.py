@@ -36,6 +36,7 @@ st.set_page_config(
 from armillary.ui.detail import _render_project_detail  # noqa: E402
 from armillary.ui.overview import _render_overview  # noqa: E402
 from armillary.ui.settings import _render_settings_page  # noqa: E402
+from armillary.ui.steal import _render_steal_page  # noqa: E402
 from armillary.ui.style import inject_css  # noqa: E402
 
 
@@ -46,6 +47,8 @@ def main() -> None:
     project_path = params.get("project")
     if page == "settings":
         _render_settings_page()
+    elif page == "steal":
+        _render_steal_page()
     elif project_path:
         _render_project_detail(project_path)
     else:

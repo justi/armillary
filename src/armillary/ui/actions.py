@@ -42,6 +42,13 @@ def go_to_settings() -> None:
     st.rerun()
 
 
+def go_to_steal() -> None:
+    """Navigate to Steal (cross-repo code search) page."""
+    st.query_params["page"] = "steal"
+    st.query_params.pop("project", None)
+    st.rerun()
+
+
 def run_scan_with_feedback(cfg: Config | None) -> None:
     """Run scan with spinner, show result, rerun on success."""
     with st.spinner("Scanning\u2026"):

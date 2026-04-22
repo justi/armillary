@@ -13,6 +13,7 @@ from armillary.config import Config
 from armillary.ui.actions import (
     go_to_overview,
     go_to_settings,
+    go_to_steal,
     run_scan_with_feedback,
 )
 from armillary.ui.helpers import OverviewRow, _safe_load_config
@@ -35,6 +36,14 @@ def _render_sidebar(
             key="sidebar_overview",
         ):
             go_to_overview()
+        if st.button(
+            "Steal",
+            icon=":material/content_copy:",
+            width="stretch",
+            key="sidebar_steal",
+            help="Cross-repo ranked code search (ADR 0027).",
+        ):
+            go_to_steal()
         if st.button(
             "Settings",
             icon=":material/settings:",
@@ -82,6 +91,14 @@ def _render_nav_sidebar() -> None:
             key="sidebar_back_overview",
         ):
             go_to_overview()
+        if st.button(
+            "Steal",
+            icon=":material/content_copy:",
+            width="stretch",
+            key="sidebar_back_steal",
+            help="Cross-repo ranked code search (ADR 0027).",
+        ):
+            go_to_steal()
         if st.button(
             "Settings",
             icon=":material/settings:",
