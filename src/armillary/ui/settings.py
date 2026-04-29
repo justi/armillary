@@ -14,6 +14,7 @@ from armillary.ui.settings_editors import (
     render_settings_launchers,
     render_settings_umbrellas,
 )
+from armillary.ui.settings_revive import render_revive_settings
 from armillary.ui.settings_tabs import render_settings_integrations
 
 _SETTINGS_TOAST_KEY = "_settings_toast"
@@ -66,6 +67,7 @@ def _render_settings_page() -> None:
             ":material/launch: Launchers",
             ":material/visibility_off: Exclusions",
             ":material/extension: Integrations",
+            ":material/auto_stories: Revive",
         ]
     )
     with tabs[0]:
@@ -76,6 +78,8 @@ def _render_settings_page() -> None:
         _render_settings_exclusions()
     with tabs[3]:
         render_settings_integrations()
+    with tabs[4]:
+        render_revive_settings(_active_stalled_project_paths())
 
 
 def _render_settings_exclusions() -> None:
@@ -140,6 +144,28 @@ def _render_settings_exclusions() -> None:
                 st.caption("No excluded projects.")
             for p in filtered_excl:
                 _render_exclusion_row(p, action="include")
+
+
+def _active_stalled_project_paths() -> list:
+    """Paths of all non-archived ACTIVE/STALLED projects, override-aware."""
+    from pathlib import Path
+
+    from armillary.cache import Cache
+    from armillary.models import Status
+    from armillary.status_override import get_override
+
+    with Cache() as cache:
+        projects = cache.list_projects()
+
+    paths: list[Path] = []
+    for project in projects:
+        override = get_override(str(project.path))
+        if override == Status.ARCHIVED:
+            continue
+        status = override or (project.metadata.status if project.metadata else None)
+        if status in (Status.ACTIVE, Status.STALLED):
+            paths.append(Path(project.path))
+    return paths
 
 
 def _ownership_score(project: object) -> float:

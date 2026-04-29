@@ -227,6 +227,8 @@ def armillary_projects(status_filter: str | None = None) -> str:
             and p.metadata.status.value == status_upper
         ]
 
+    from armillary.revive_service import project_status as revive_project_status
+
     rows = []
     for p in projects:
         md = p.metadata
@@ -237,11 +239,17 @@ def armillary_projects(status_filter: str | None = None) -> str:
             if override
             else (md.status.value if md and md.status else None)
         )
+        rstatus = revive_project_status(p.path)
         rows.append(
             {
                 "path": str(p.path),
                 "status": status_val,
                 "description": md.readme_excerpt if md else None,
+                "revive": {
+                    "static_exists": rstatus.static_exists,
+                    "brief_state": rstatus.brief_state,
+                    "hook_scope": rstatus.hook_scope,
+                },
             }
         )
 

@@ -4,6 +4,14 @@
 
 - Python 3.11+, typer CLI, Streamlit dashboard, GitPython, Pydantic v2, SQLite, ruff, PyYAML
 - Tests: `.venv/bin/python -m pytest -q` (ALWAYS run before completing a task)
+  - E2E tests are opt-in via `pytest.mark.e2e` and skipped by default
+    (`addopts = "-m 'not e2e'"`). They spawn real `claude` / `revive` /
+    git binaries and cost API credits or a Max-plan slot.
+    - Run all: `.venv/bin/python -m pytest -m e2e -q`
+    - Single test: `.venv/bin/python -m pytest tests/test_revive_runner_e2e.py::test_e2e_dirty_tree_skipped -m e2e -v`
+      (the `-m e2e` flag is REQUIRED to override the default deselect.)
+    - Tests self-skip when their required binary (`claude` or `revive`)
+      is missing from PATH.
 - Lint: `.venv/bin/ruff check .` + `.venv/bin/ruff format --check .`
 - Dashboard at `src/armillary/ui/` — Streamlit, routed via `st.query_params`
 - Streamlit skills installed at `.claude/skills/` — ALWAYS read relevant skill files before writing Streamlit code:

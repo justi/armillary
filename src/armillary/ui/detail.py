@@ -26,6 +26,7 @@ from armillary.ui.detail_header import (
     _render_header_with_launcher,
     build_launcher_options,
 )
+from armillary.ui.detail_revive import render_revive_section
 from armillary.ui.detail_work import (
     _render_dirty_or_clean,
     _render_narrative_context,
@@ -104,6 +105,8 @@ def _render_project_detail(project_path: str) -> None:
         _render_active_body(project)
 
     _render_reference_section(project)
+    if not is_archived:
+        render_revive_section(project.path)
     _render_transition_journal(project)
     _render_details_expander(project)
 

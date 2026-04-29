@@ -1,0 +1,413 @@
+"""Tests for `armillary.revive_service`."""
+
+from __future__ import annotations
+
+import hashlib
+import subprocess
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from armillary.revive_service import (
+    ReviveError,
+    generate_suggest_prompts,
+    install_hook_global,
+    probe_capability,
+    project_status,
+    revive_show,
+)
+
+
+@pytest.fixture(autouse=True)
+def clear_probe_cache() -> None:
+    probe_capability.cache_clear()
+    yield
+    probe_capability.cache_clear()
+
+
+def _result(
+    *, stdout: str = "", stderr: str = "", returncode: int = 0
+) -> SimpleNamespace:
+    return SimpleNamespace(stdout=stdout, stderr=stderr, returncode=returncode)
+
+
+def _write_hook_settings(base: Path, command: str) -> None:
+    settings = base / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(
+        (
+            '{"hooks":{"UserPromptSubmit":['
+            '{"hooks":[{"type":"command","command":"'
+            f"{command}"
+            '"}]}]}}'
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_probe_capability_missing_binary_returns_neutral(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("armillary.revive_service.shutil.which", lambda _: None)
+
+    capability = probe_capability()
+
+    assert capability.binary_available is False
+    assert capability.binary_path is None
+    assert capability.compatible is False
+    assert capability.version is None
+
+
+def test_probe_capability_marks_incompatible_when_help_is_missing_subcommands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+    monkeypatch.setattr(
+        "armillary.revive_service.subprocess.run",
+        lambda *args, **kwargs: _result(
+            stdout="revive 1.2.3\ncommands: show suggest version\n", returncode=0
+        ),
+    )
+
+    capability = probe_capability()
+
+    assert capability.binary_available is True
+    assert capability.binary_path == Path("/tmp/bin/revive")
+    assert capability.compatible is False
+    assert capability.version == "1.2.3"
+
+
+def test_probe_capability_cache_reuses_first_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def fake_run(cmd, **kwargs):
+        nonlocal calls
+        calls += 1
+        assert cmd == ["/tmp/bin/revive", "--help"]
+        return _result(
+            stdout="revive 2.0.0\nshow\ninstall-hook\ndoctor\n", returncode=0
+        )
+
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+    monkeypatch.setattr("armillary.revive_service.subprocess.run", fake_run)
+
+    first = probe_capability()
+    second = probe_capability()
+
+    assert first == second
+    assert first.compatible is True
+    assert first.version == "2.0.0"
+    assert calls == 1
+
+
+def test_project_status_without_revive_dir_is_missing(tmp_path: Path) -> None:
+    status = project_status(tmp_path, home=tmp_path / "home")
+
+    assert status.static_exists is False
+    assert status.brief_state == "missing"
+    assert status.purpose_line is None
+    assert status.static_path is None
+    assert status.hook_scope == "none"
+
+
+def test_project_status_placeholder_brief(tmp_path: Path) -> None:
+    static_path = tmp_path / ".revive" / "static.md"
+    static_path.parent.mkdir(parents=True)
+    static_path.write_text(
+        "# STATIC\nPURPOSE: (run `revive init` to scaffold .revive/static.md)\n",
+        encoding="utf-8",
+    )
+
+    status = project_status(tmp_path, home=tmp_path / "home")
+
+    assert status.static_exists is True
+    assert status.brief_state == "placeholder"
+    assert status.purpose_line == "(run `revive init` to scaffold .revive/static.md)"
+    assert status.static_path == static_path
+
+
+def test_project_status_configured_brief_sets_purpose_line(tmp_path: Path) -> None:
+    static_path = tmp_path / ".revive" / "static.md"
+    static_path.parent.mkdir(parents=True)
+    static_path.write_text(
+        "# STATIC\n"
+        "PURPOSE: Local-first memory layer for solo devs\n"
+        "INVARIANTS:\n"
+        "  - No migrations: drop and rebuild.\n"
+        "GOTCHAS:\n"
+        "  - CI runs ruff format --check.\n",
+        encoding="utf-8",
+    )
+
+    status = project_status(tmp_path, home=tmp_path / "home")
+
+    assert status.static_exists is True
+    assert status.brief_state == "configured"
+    assert status.purpose_line == "Local-first memory layer for solo devs"
+    assert status.static_path == static_path
+
+
+def test_project_status_stub_when_invariants_and_gotchas_empty(tmp_path: Path) -> None:
+    """`revive init` filled PURPOSE but the suggest/LLM step never ran."""
+    static_path = tmp_path / ".revive" / "static.md"
+    static_path.parent.mkdir(parents=True)
+    static_path.write_text(
+        "PURPOSE: A Rails 8 app converting PDFs to quizzes.\nINVARIANTS:\nGOTCHAS:\n",
+        encoding="utf-8",
+    )
+
+    status = project_status(tmp_path, home=tmp_path / "home")
+
+    assert status.brief_state == "stub"
+    assert status.purpose_line == "A Rails 8 app converting PDFs to quizzes."
+
+
+def test_project_status_configured_when_only_one_section_has_bullets(
+    tmp_path: Path,
+) -> None:
+    """Stub state requires BOTH invariants and gotchas to be empty."""
+    static_path = tmp_path / ".revive" / "static.md"
+    static_path.parent.mkdir(parents=True)
+    static_path.write_text(
+        "PURPOSE: Demo project.\nINVARIANTS:\n  - Real invariant.\nGOTCHAS:\n",
+        encoding="utf-8",
+    )
+
+    status = project_status(tmp_path, home=tmp_path / "home")
+
+    assert status.brief_state == "configured"
+
+
+def test_project_status_unreadable_static_is_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    static_path = tmp_path / ".revive" / "static.md"
+    static_path.parent.mkdir(parents=True)
+    static_path.write_text("# STATIC\nPURPOSE: Hidden\n", encoding="utf-8")
+    original_read_text = Path.read_text
+
+    def fake_read_text(self: Path, *args, **kwargs) -> str:
+        if self == static_path:
+            raise PermissionError("denied")
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+    status = project_status(tmp_path, home=tmp_path / "home")
+
+    assert status.static_exists is True
+    assert status.brief_state == "unknown"
+    assert status.purpose_line is None
+    assert status.static_path == static_path
+
+
+def test_project_status_detects_project_hook(tmp_path: Path) -> None:
+    _write_hook_settings(
+        tmp_path, "/Users/example/.local/bin/revive refresh --project-only"
+    )
+
+    status = project_status(tmp_path, home=tmp_path / "home")
+
+    assert status.hook_scope == "project"
+
+
+def test_project_status_detects_global_hook_with_default_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    _write_hook_settings(home, "/Users/example/.local/bin/revive refresh")
+    monkeypatch.setattr("armillary.revive_service.Path.home", lambda: home)
+
+    status = project_status(tmp_path)
+
+    assert status.hook_scope == "global"
+
+
+def test_project_status_detects_both_hook_scopes(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    _write_hook_settings(tmp_path, "revive refresh --project")
+    _write_hook_settings(home, "revive refresh --global")
+
+    status = project_status(tmp_path, home=home)
+
+    assert status.hook_scope == "both"
+
+
+def test_project_status_malformed_hook_json_is_ignored(tmp_path: Path) -> None:
+    project_settings = tmp_path / ".claude" / "settings.json"
+    project_settings.parent.mkdir(parents=True, exist_ok=True)
+    project_settings.write_text("{not-json", encoding="utf-8")
+    home = tmp_path / "home"
+    _write_hook_settings(home, "revive refresh --global")
+
+    status = project_status(tmp_path, home=home)
+
+    assert status.hook_scope == "global"
+
+
+def test_revive_show_timeout_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+
+    def fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=2.5)
+
+    monkeypatch.setattr("armillary.revive_service.subprocess.run", fake_run)
+
+    with pytest.raises(ReviveError, match=r"revive show timed out after 2.5s"):
+        revive_show(Path("/tmp/project"), timeout=2.5)
+
+
+def test_revive_show_nonzero_exit_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+    monkeypatch.setattr(
+        "armillary.revive_service.subprocess.run",
+        lambda *args, **kwargs: _result(stderr=" bad news \n", returncode=1),
+    )
+
+    with pytest.raises(ReviveError, match=r"revive show failed: bad news"):
+        revive_show(Path("/tmp/project"))
+
+
+def test_revive_show_missing_binary_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("armillary.revive_service.shutil.which", lambda _: None)
+
+    with pytest.raises(ReviveError, match="revive binary not found on PATH"):
+        revive_show(Path("/tmp/project"))
+
+
+def test_install_hook_global_success_returns_combined_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+
+    def fake_run(cmd, **kwargs):
+        assert cmd == ["/tmp/bin/revive", "install-hook", "--global"]
+        return _result(stdout="ok\n", stderr="warn\n", returncode=0)
+
+    monkeypatch.setattr("armillary.revive_service.subprocess.run", fake_run)
+
+    success, output = install_hook_global()
+
+    assert success is True
+    assert output == "ok\nwarn\n"
+
+
+def test_install_hook_global_failure_returns_false_and_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+    monkeypatch.setattr(
+        "armillary.revive_service.subprocess.run",
+        lambda *args, **kwargs: _result(
+            stdout="partial\n", stderr="boom\n", returncode=1
+        ),
+    )
+
+    success, output = install_hook_global()
+
+    assert success is False
+    assert output == "partial\nboom\n"
+
+
+def test_install_hook_global_missing_binary_returns_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("armillary.revive_service.shutil.which", lambda _: None)
+
+    success, output = install_hook_global()
+
+    assert success is False
+    assert output == "revive binary not found on PATH"
+
+
+def test_generate_suggest_prompts_writes_slugged_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "alpha"
+    project.mkdir()
+    (project / ".git").mkdir()
+    output_dir = tmp_path / "out"
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+
+    def fake_run(cmd, *, cwd=None, **kwargs):
+        assert cmd == ["/tmp/bin/revive", "suggest"]
+        assert cwd == project
+        assert kwargs["encoding"] == "utf-8"
+        return _result(stdout="# prompt\n", returncode=0)
+
+    monkeypatch.setattr("armillary.revive_service.subprocess.run", fake_run)
+
+    written = generate_suggest_prompts([project], output_dir=output_dir)
+
+    digest = hashlib.sha256(str(project).encode("utf-8")).hexdigest()[:8]
+    expected = output_dir / f"alpha-{digest}.md"
+    assert written == [expected]
+    assert expected.read_text(encoding="utf-8") == "# prompt\n"
+
+
+def test_generate_suggest_prompts_skips_non_git_and_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    nongit = tmp_path / "notes"
+    nongit.mkdir()
+    timeout_repo = tmp_path / "timeout"
+    timeout_repo.mkdir()
+    (timeout_repo / ".git").mkdir()
+    bad_repo = tmp_path / "bad"
+    bad_repo.mkdir()
+    (bad_repo / ".git").mkdir()
+    good_repo = tmp_path / "good"
+    good_repo.mkdir()
+    (good_repo / ".git").mkdir()
+    output_dir = tmp_path / "out"
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+
+    def fake_run(cmd, *, cwd=None, **kwargs):
+        if cwd == timeout_repo:
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=5.0)
+        if cwd == bad_repo:
+            return _result(stderr="nope\n", returncode=1)
+        if cwd == good_repo:
+            return _result(stdout="usable\n", returncode=0)
+        raise AssertionError(f"unexpected cwd: {cwd}")
+
+    monkeypatch.setattr("armillary.revive_service.subprocess.run", fake_run)
+
+    written = generate_suggest_prompts(
+        [nongit, timeout_repo, bad_repo, good_repo],
+        output_dir=output_dir,
+    )
+
+    assert [path.name for path in written] == [
+        f"good-{hashlib.sha256(str(good_repo).encode('utf-8')).hexdigest()[:8]}.md"
+    ]
+    assert written[0].read_text(encoding="utf-8") == "usable\n"
+
+
+def test_generate_suggest_prompts_missing_binary_returns_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("armillary.revive_service.shutil.which", lambda _: None)
+
+    written = generate_suggest_prompts([tmp_path], output_dir=tmp_path / "out")
+
+    assert written == []
