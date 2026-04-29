@@ -20,6 +20,7 @@ import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
@@ -58,6 +59,7 @@ class ReviveStatus:
     purpose_line: str | None
     static_path: Path | None
     hook_scope: HookScope
+    last_modified: datetime | None = None
 
 
 @functools.cache
@@ -115,8 +117,10 @@ def project_status(project_path: Path, *, home: Path | None = None) -> ReviveSta
             purpose_line=None,
             static_path=None,
             hook_scope=hook_scope,
+            last_modified=None,
         )
 
+    last_modified = _safe_mtime(static_path)
     try:
         content = static_path.read_text(encoding="utf-8")
     except OSError:
@@ -126,6 +130,7 @@ def project_status(project_path: Path, *, home: Path | None = None) -> ReviveSta
             purpose_line=None,
             static_path=static_path,
             hook_scope=hook_scope,
+            last_modified=last_modified,
         )
 
     purpose_line = _purpose_line(content)
@@ -150,7 +155,16 @@ def project_status(project_path: Path, *, home: Path | None = None) -> ReviveSta
         purpose_line=purpose_line,
         static_path=static_path,
         hook_scope=hook_scope,
+        last_modified=last_modified,
     )
+
+
+def _safe_mtime(path: Path) -> datetime | None:
+    """Read a file's mtime as a tz-naive datetime; None on stat failure."""
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime)
+    except OSError:
+        return None
 
 
 def revive_show(project_path: Path, *, timeout: float = 5.0) -> str:

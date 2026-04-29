@@ -121,6 +121,31 @@ def test_project_status_without_revive_dir_is_missing(tmp_path: Path) -> None:
     assert status.purpose_line is None
     assert status.static_path is None
     assert status.hook_scope == "none"
+    assert status.last_modified is None
+
+
+def test_project_status_populates_last_modified_when_static_exists(
+    tmp_path: Path,
+) -> None:
+    """The UI shows the brief's age inline so users do not have to click
+    Preview just to know how stale it is."""
+    import os
+    from datetime import datetime
+
+    static_path = tmp_path / ".revive" / "static.md"
+    static_path.parent.mkdir(parents=True)
+    static_path.write_text(
+        "PURPOSE: demo\nINVARIANTS:\n  - x\nGOTCHAS:\n  - y\n",
+        encoding="utf-8",
+    )
+    # Pin mtime to a known instant so the assertion is deterministic.
+    pinned = datetime(2026, 4, 1, 12, 0, 0).timestamp()
+    os.utime(static_path, (pinned, pinned))
+
+    status = project_status(tmp_path, home=tmp_path / "home")
+
+    assert status.last_modified is not None
+    assert status.last_modified.timestamp() == pinned
 
 
 def test_project_status_placeholder_brief(tmp_path: Path) -> None:

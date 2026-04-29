@@ -17,6 +17,7 @@ work lives in ``armillary.revive_service``.
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
@@ -32,6 +33,7 @@ from armillary.revive_service import (
     revive_show,
     run_revive_init,
 )
+from armillary.ui.detail_work import _format_age
 
 _BRIEF_STATE_LABELS = {
     "configured": "✓ configured",
@@ -71,7 +73,11 @@ def render_revive_section(project_path: Path) -> None:
     status = project_status(project_path)
     label = _BRIEF_STATE_LABELS[status.brief_state]
     hook_label = _HOOK_SCOPE_LABELS[status.hook_scope]
-    st.caption(f"{label} · {hook_label}")
+    age_label = _age_label(status.last_modified)
+    parts = [label, hook_label]
+    if age_label:
+        parts.append(age_label)
+    st.caption(" · ".join(parts))
 
     if status.purpose_line and status.brief_state in ("configured", "stub"):
         st.markdown(f"_{status.purpose_line}_")
@@ -95,6 +101,16 @@ def render_revive_section(project_path: Path) -> None:
 
 
 _FALLBACK_PROMPT_KEY = "_revive_fallback_prompt_"
+
+
+def _age_label(last_modified: datetime | None) -> str | None:
+    """Caption-friendly relative age, e.g. "updated 3d ago"."""
+    if last_modified is None:
+        return None
+    seconds = (datetime.now() - last_modified).total_seconds()
+    if seconds < 60:
+        return "updated just now"
+    return f"updated {_format_age(seconds)} ago"
 
 
 def _render_actions(project_path: Path, brief_state: str) -> None:
