@@ -81,6 +81,7 @@ def generate_brief(
 
     static_path = project_path / ".revive" / "static.md"
     backup_path = static_path.with_name("static.md.bak")
+    was_missing_marker = static_path.with_name("static.md.was_missing")
     static_existed_originally = static_path.exists()
 
     if not static_existed_originally:
@@ -108,6 +109,20 @@ def generate_brief(
                 after="",
                 diff="",
                 error=f"revive init failed: {init_result.stderr.strip()}",
+            )
+        # Drop a marker so reject_proposal() can roll the project back to
+        # its missing state. Without this, reject would leave Claude's
+        # filled static.md on disk because the absent .bak file makes the
+        # restore helper think there is nothing to do.
+        try:
+            was_missing_marker.parent.mkdir(parents=True, exist_ok=True)
+            was_missing_marker.touch()
+        except OSError as exc:
+            return _failed(
+                before="",
+                after="",
+                diff="",
+                error=f"failed to write was_missing marker: {exc}",
             )
 
     had_before = static_path.exists()
@@ -220,8 +235,16 @@ def generate_brief(
             tofile="after",
         )
     )
-    if after == before and backup_path.exists():
-        backup_path.unlink()
+    if after == before:
+        # Claude made no edits. There is nothing to accept or reject, so
+        # drop any leftover backup or missing-marker — the project state
+        # is unchanged from the moment generate_brief was called (modulo
+        # an init scaffold, which we leave on disk so the user can keep
+        # using `revive` without rerunning init).
+        if backup_path.exists():
+            backup_path.unlink()
+        if was_missing_marker.exists():
+            was_missing_marker.unlink()
     return GenerationResult(
         success=True,
         diff=diff,
@@ -233,17 +256,44 @@ def generate_brief(
 
 
 def accept_proposal(project_path: Path) -> None:
-    """Delete `.revive/static.md.bak` if it exists."""
-    backup_path = project_path.resolve() / ".revive" / "static.md.bak"
-    if backup_path.exists():
-        backup_path.unlink()
+    """Discard rollback artefacts after the user accepts a proposal.
 
-
-def reject_proposal(project_path: Path) -> None:
-    """Restore `.revive/static.md` from `.bak`, then delete the backup."""
+    Deletes both the static.md backup and the missing-marker if
+    present. Idempotent — safe to call when neither exists.
+    """
     project_path = project_path.resolve()
     static_path = project_path / ".revive" / "static.md"
     backup_path = static_path.with_name("static.md.bak")
+    marker_path = static_path.with_name("static.md.was_missing")
+    if backup_path.exists():
+        backup_path.unlink()
+    if marker_path.exists():
+        marker_path.unlink()
+
+
+def reject_proposal(project_path: Path) -> None:
+    """Roll back the most recent generate_brief() write.
+
+    Two paths:
+    - If the project had a real `.revive/static.md` before the run, the
+      backup was written; restore from it and delete the backup.
+    - If the project was originally missing (the missing-marker exists),
+      delete the freshly scaffolded static.md and any stray backup so
+      the project returns to its pre-run state.
+
+    Idempotent if neither marker nor backup is present.
+    """
+    project_path = project_path.resolve()
+    static_path = project_path / ".revive" / "static.md"
+    backup_path = static_path.with_name("static.md.bak")
+    marker_path = static_path.with_name("static.md.was_missing")
+    if marker_path.exists():
+        if static_path.exists():
+            static_path.unlink()
+        if backup_path.exists():
+            backup_path.unlink()
+        marker_path.unlink()
+        return
     if not backup_path.exists():
         return
     shutil.copyfile(backup_path, static_path)
@@ -279,6 +329,11 @@ def _restore_original(static_path: Path, backup_path: Path, had_before: bool) ->
         return
     if static_path.exists():
         static_path.unlink()
+    # Clean up the missing-marker too if the run is rolling back; the
+    # project is fully reset to "no .revive/static.md".
+    marker = static_path.with_name("static.md.was_missing")
+    if marker.exists():
+        marker.unlink()
 
 
 # [EDGE_CASE][medium] Concurrent generate_brief calls race on static.md

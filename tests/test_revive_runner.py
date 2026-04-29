@@ -378,9 +378,10 @@ def test_generate_brief_handles_new_static_file_without_backup(
     # the scaffold to claude's filled version.
     assert result.before == "scaffold\n"
     assert result.after == "new brief\n"
-    # No backup is created because the file did not exist originally —
-    # reject_proposal will fall through to deleting the static.md.
+    # No backup is created because the file did not exist originally;
+    # the missing-marker drives reject_proposal() rollback instead.
     assert not (tmp_path / ".revive" / "static.md.bak").exists()
+    assert (tmp_path / ".revive" / "static.md.was_missing").exists()
 
 
 def test_generate_brief_deletes_backup_when_claude_makes_no_change(
@@ -421,6 +422,39 @@ def test_accept_proposal_deletes_backup_idempotently(tmp_path: Path) -> None:
     accept_proposal(tmp_path)
 
     assert not backup_path.exists()
+
+
+def test_reject_proposal_deletes_scaffold_when_marker_present(
+    tmp_path: Path,
+) -> None:
+    """Originally-missing projects: reject must remove the scaffold and
+    the marker so the project returns to its pre-run state."""
+    static_path = tmp_path / ".revive" / "static.md"
+    marker_path = tmp_path / ".revive" / "static.md.was_missing"
+    static_path.parent.mkdir(parents=True)
+    static_path.write_text("filled by claude\n", encoding="utf-8")
+    marker_path.touch()
+
+    reject_proposal(tmp_path)
+
+    assert not static_path.exists()
+    assert not marker_path.exists()
+
+
+def test_accept_proposal_clears_marker_when_present(tmp_path: Path) -> None:
+    """Accepting a brief whose project was originally missing must drop
+    the marker so a future reject for an unrelated edit cannot delete
+    the now-real static.md."""
+    static_path = tmp_path / ".revive" / "static.md"
+    marker_path = tmp_path / ".revive" / "static.md.was_missing"
+    static_path.parent.mkdir(parents=True)
+    static_path.write_text("filled by claude\n", encoding="utf-8")
+    marker_path.touch()
+
+    accept_proposal(tmp_path)
+
+    assert static_path.exists(), "accept must keep the brief on disk"
+    assert not marker_path.exists()
 
 
 def test_reject_proposal_restores_backup_and_is_idempotent(tmp_path: Path) -> None:
