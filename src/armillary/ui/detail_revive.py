@@ -83,8 +83,18 @@ def render_revive_section(project_path: Path) -> None:
             "session to fill them in.",
             icon=":material/info:",
         )
+    elif status.brief_state == "unknown":
+        st.warning(
+            "`.revive/static.md` exists but couldn't be parsed (permission "
+            "or encoding issue). Click Preview to see what `revive show` "
+            "returns, then fix the file by hand.",
+            icon=":material/warning:",
+        )
 
     _render_actions(project_path, status.brief_state)
+
+
+_FALLBACK_PROMPT_KEY = "_revive_fallback_prompt_"
 
 
 def _render_actions(project_path: Path, brief_state: str) -> None:
@@ -97,8 +107,9 @@ def _render_actions(project_path: Path, brief_state: str) -> None:
             _render_copy_audit_button(project_path)
         if brief_state != "missing":
             _render_launch_claude_button(project_path)
-        if brief_state in ("configured", "stub"):
+        if brief_state in ("configured", "stub", "unknown"):
             _render_preview_button(project_path)
+    _render_fallback_prompt(project_path)
 
 
 def _render_init_button(project_path: Path) -> None:
@@ -162,23 +173,59 @@ def _generate_and_copy(project_path: Path, fetch, label: str) -> None:
 
     Single-click UX: no intermediate render of the prompt, no second
     button. Toast on success/failure so the message survives Streamlit
-    reruns.
+    reruns. When ``pbcopy`` is unavailable (Linux/Windows), we keep the
+    generated prompt in session_state so the user still has a way to
+    grab it from a fallback text area instead of losing the result.
     """
+    fallback_key = f"{_FALLBACK_PROMPT_KEY}{project_path}"
     try:
         prompt = fetch(project_path)
     except ReviveError as exc:
         st.toast(f"Could not generate {label} prompt: {exc}", icon="⚠️")
         return
     if copy_to_clipboard(prompt):
+        st.session_state.pop(fallback_key, None)
         st.toast(
             f"{label.capitalize()} prompt copied — paste in a Claude tab.",
             icon="📋",
         )
     else:
+        st.session_state[fallback_key] = (label, prompt)
         st.toast(
-            "`pbcopy` unavailable — re-run from a macOS terminal.",
+            "`pbcopy` unavailable — copy the prompt below manually.",
             icon="⚠️",
         )
+
+
+def _render_fallback_prompt(project_path: Path) -> None:
+    """Render the most recent prompt when clipboard copy failed.
+
+    Lets non-macOS users (or anyone whose pbcopy is broken) still grab
+    the generated prompt instead of losing it to a transient toast.
+    """
+    fallback_key = f"{_FALLBACK_PROMPT_KEY}{project_path}"
+    payload = st.session_state.get(fallback_key)
+    if payload is None:
+        return
+    label, prompt = payload
+    st.markdown(
+        f"**{label.capitalize()} prompt** — clipboard copy failed; "
+        "select the text below and copy it manually:"
+    )
+    st.text_area(
+        f"{label}_fallback",
+        value=prompt,
+        height=200,
+        key=f"revive_fallback_{label}_{project_path}",
+        label_visibility="collapsed",
+    )
+    if st.button(
+        "Dismiss",
+        key=f"revive_fallback_dismiss_{label}_{project_path}",
+        type="tertiary",
+    ):
+        st.session_state.pop(fallback_key, None)
+        st.rerun()
 
 
 def _render_launch_claude_button(project_path: Path) -> None:

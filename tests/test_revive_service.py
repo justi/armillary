@@ -95,7 +95,8 @@ def test_probe_capability_cache_reuses_first_result(
         calls += 1
         assert cmd == ["/tmp/bin/revive", "--help"]
         return _result(
-            stdout="revive 2.0.0\nshow\ninstall-hook\ndoctor\n", returncode=0
+            stdout=("revive 2.0.0\nshow\ninstall-hook\ndoctor\ninit\nsuggest\naudit\n"),
+            returncode=0,
         )
 
     monkeypatch.setattr(
@@ -655,3 +656,85 @@ def test_launch_claude_yolo_returns_false_on_nonzero_exit(
 
     assert success is False
     assert "iTerm" in message
+
+
+def test_launch_claude_yolo_returns_false_when_claude_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If `claude` is not on PATH, fail before opening the iTerm tab.
+
+    Without the preflight the user sees a 🚀 success toast immediately
+    followed by `command not found` in the new tab — confusing.
+    """
+    answers = {"osascript": "/usr/bin/osascript", "claude": None}
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which",
+        lambda name: answers.get(name),
+    )
+
+    success, message = launch_claude_yolo(tmp_path)
+
+    assert success is False
+    assert "claude" in message.lower()
+
+
+def test_launch_claude_yolo_quotes_path_with_spaces_and_metacharacters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Repo paths with spaces, semicolons, $, or quotes must be safely
+    embedded in the `cd` command and escaped for the AppleScript string."""
+    weird = tmp_path / 'with "quoted" and spaces; rm -rf $HOME'
+    weird.mkdir()
+    monkeypatch.setattr("armillary.revive_service.shutil.which", lambda _: "/usr/bin/x")
+    captured: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr("armillary.revive_service.subprocess.run", fake_run)
+
+    success, _ = launch_claude_yolo(weird)
+
+    assert success is True
+    write_text_arg = next(
+        arg for arg in captured["cmd"] if arg.startswith("write text")
+    )
+    # AppleScript wrapping: the inner string is enclosed in literal
+    # double quotes; any literal " inside the path is escaped with \".
+    body = write_text_arg.removeprefix("write text ")
+    assert body.startswith('"') and body.endswith('"')
+    assert '\\"quoted\\"' in body, "literal quotes must be backslash-escaped"
+    # Shell-level: the `cd` argument is shlex-quoted (single quotes),
+    # so the metacharacters land inside that single-quoted string and
+    # cannot break the && claude tail.
+    inner = body[1:-1]
+    cd_part, _, claude_part = inner.partition(" && ")
+    assert cd_part.startswith("cd '")
+    assert cd_part.endswith("'")
+    assert claude_part == "claude --dangerously-skip-permissions"
+
+
+def test_probe_capability_requires_init_suggest_audit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The probe must mark revive incompatible if any of the subcommands
+    armillary actually invokes (init / suggest / audit) is missing from
+    --help, otherwise the UI offers buttons that fail only after click."""
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+    monkeypatch.setattr(
+        "armillary.revive_service.subprocess.run",
+        lambda *_, **__: SimpleNamespace(
+            stdout=(
+                "revive 1.0.0\n"
+                "Commands: show install-hook doctor\n"  # missing init/suggest/audit
+            ),
+            stderr="",
+            returncode=0,
+        ),
+    )
+    capability = probe_capability()
+    assert capability.binary_available is True
+    assert capability.compatible is False

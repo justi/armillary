@@ -16,6 +16,7 @@ import functools
 import hashlib
 import json
 import re
+import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -25,7 +26,14 @@ from typing import Literal
 BriefState = Literal["configured", "stub", "placeholder", "missing", "unknown"]
 HookScope = Literal["none", "project", "global", "both"]
 
-_REQUIRED_SUBCOMMANDS = ("show", "install-hook", "doctor")
+_REQUIRED_SUBCOMMANDS = (
+    "show",
+    "install-hook",
+    "doctor",
+    "init",
+    "suggest",
+    "audit",
+)
 _PLACEHOLDER_MARKER = "run `revive init`"
 _PURPOSE_RE = re.compile(r"^PURPOSE:\s*(.+)$", re.MULTILINE)
 _VERSION_RE = re.compile(r"\b\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.]+)?\b")
@@ -260,7 +268,14 @@ def launch_claude_yolo(
     """
     if shutil.which("osascript") is None:
         return False, "osascript not on PATH (macOS-only feature)"
-    inner = f"cd {project_path} && claude --dangerously-skip-permissions"
+    if shutil.which("claude") is None:
+        # The iTerm tab will still open, but `claude` will fail there.
+        # Surface the missing binary up front so the user does not see
+        # a 🚀 toast followed by a `command not found` in their tab.
+        return False, "`claude` CLI not on PATH — install Claude Code first"
+    quoted_path = shlex.quote(str(project_path))
+    inner_shell = f"cd {quoted_path} && claude --dangerously-skip-permissions"
+    inner_applescript = _escape_applescript_string(inner_shell)
     args = [
         "osascript",
         "-e",
@@ -274,7 +289,7 @@ def launch_claude_yolo(
         "-e",
         "tell current session",
         "-e",
-        f'write text "{inner}"',
+        f'write text "{inner_applescript}"',
         "-e",
         "end tell",
         "-e",
@@ -295,7 +310,12 @@ def launch_claude_yolo(
         return False, f"failed to launch iTerm: {exc}"
     if result.returncode != 0:
         return False, result.stderr.strip() or "osascript exited nonzero"
-    return True, "Launched a new iTerm tab with claude --dangerously-skip-permissions"
+    return True, "Sent to iTerm — paste the prompt in the new tab."
+
+
+def _escape_applescript_string(value: str) -> str:
+    """Escape backslashes and double-quotes for an AppleScript string literal."""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def run_revive_init(project_path: Path, *, timeout: float = 10.0) -> tuple[bool, str]:
