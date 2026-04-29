@@ -114,17 +114,40 @@ def _age_label(last_modified: datetime | None) -> str | None:
 
 
 def _render_actions(project_path: Path, brief_state: str) -> None:
-    with st.container(horizontal=True):
-        if brief_state == "missing":
-            _render_init_button(project_path)
-        if brief_state in ("placeholder", "stub", "configured"):
+    """Pair each Copy button with its own Launch on a 2-column row.
+
+    Layout (per state):
+      missing      → [ Scaffold ]
+      placeholder  → [ Copy suggest | Launch ]
+      stub         → [ Copy suggest | Launch ]
+                     [ Preview brief        ]
+      configured   → [ Copy suggest | Launch ]
+                     [ Copy audit   | Launch ]
+                     [ Preview brief        ]
+      unknown      → [ Preview brief        ]
+    """
+    if brief_state == "missing":
+        _render_init_button(project_path)
+        _render_fallback_prompt(project_path)
+        return
+
+    if brief_state in ("placeholder", "stub", "configured"):
+        col_copy, col_launch = st.columns(2)
+        with col_copy:
             _render_copy_suggest_button(project_path, brief_state)
-        if brief_state == "configured":
+        with col_launch:
+            _render_launch_claude_button(project_path, slot="suggest")
+
+    if brief_state == "configured":
+        col_copy, col_launch = st.columns(2)
+        with col_copy:
             _render_copy_audit_button(project_path)
-        if brief_state != "missing":
-            _render_launch_claude_button(project_path)
-        if brief_state in ("configured", "stub", "unknown"):
-            _render_preview_button(project_path)
+        with col_launch:
+            _render_launch_claude_button(project_path, slot="audit")
+
+    if brief_state in ("configured", "stub", "unknown"):
+        _render_preview_button(project_path)
+
     _render_fallback_prompt(project_path)
 
 
@@ -135,6 +158,7 @@ def _render_init_button(project_path: Path) -> None:
         key=button_key,
         icon=":material/note_add:",
         type="primary",
+        width="stretch",
         help=(
             "Creates `.revive/static.md` with PURPOSE auto-extracted from "
             "README/manifest. No LLM call. After scaffolding, copy the "
@@ -160,6 +184,7 @@ def _render_copy_suggest_button(project_path: Path, brief_state: str) -> None:
         key=button_key,
         icon=":material/content_copy:",
         type="primary" if brief_state in ("placeholder", "stub") else "secondary",
+        width="stretch",
         help=(
             "Copies the `revive suggest` LLM prompt to your clipboard. "
             "Click Launch Claude (yolo) next, then paste in the new tab "
@@ -176,6 +201,7 @@ def _render_copy_audit_button(project_path: Path) -> None:
         key=button_key,
         icon=":material/fact_check:",
         type="secondary",
+        width="stretch",
         help=(
             "Copies the second-pass gap-audit prompt. Paste into a NEW "
             "Claude Code session — fresh context is required by design."
@@ -244,13 +270,16 @@ def _render_fallback_prompt(project_path: Path) -> None:
         st.rerun()
 
 
-def _render_launch_claude_button(project_path: Path) -> None:
-    button_key = f"revive_launch_{project_path}"
+def _render_launch_claude_button(project_path: Path, *, slot: str = "main") -> None:
+    """Streamlit forbids duplicate widget keys; ``slot`` differentiates the
+    two Launch buttons that appear next to Copy suggest / Copy audit."""
+    button_key = f"revive_launch_{slot}_{project_path}"
     if st.button(
         "Launch Claude (yolo)",
         key=button_key,
         icon=":material/rocket_launch:",
         type="secondary",
+        width="stretch",
         help=(
             "Opens a new iTerm tab in this project running "
             "`claude --dangerously-skip-permissions`. Pair with Copy "
@@ -271,6 +300,7 @@ def _render_preview_button(project_path: Path) -> None:
         key=button_key,
         icon=":material/visibility:",
         type="secondary",
+        width="stretch",
     ):
         try:
             output = revive_show(project_path)
