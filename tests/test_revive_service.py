@@ -11,11 +11,14 @@ import pytest
 
 from armillary.revive_service import (
     ReviveError,
+    generate_audit_prompt,
+    generate_suggest_prompt,
     generate_suggest_prompts,
     install_hook_global,
     probe_capability,
     project_status,
     revive_show,
+    run_revive_init,
 )
 
 
@@ -411,3 +414,124 @@ def test_generate_suggest_prompts_missing_binary_returns_empty(
     written = generate_suggest_prompts([tmp_path], output_dir=tmp_path / "out")
 
     assert written == []
+
+
+def test_generate_suggest_prompt_returns_stdout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+
+    def fake_run(cmd, **kwargs):
+        assert cmd == ["/tmp/bin/revive", "suggest"]
+        assert kwargs["cwd"] == tmp_path
+        return SimpleNamespace(stdout="prompt body\n", stderr="", returncode=0)
+
+    monkeypatch.setattr("armillary.revive_service.subprocess.run", fake_run)
+
+    assert generate_suggest_prompt(tmp_path) == "prompt body\n"
+
+
+def test_generate_suggest_prompt_raises_on_missing_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("armillary.revive_service.shutil.which", lambda _: None)
+    with pytest.raises(ReviveError, match="not found on PATH"):
+        generate_suggest_prompt(tmp_path)
+
+
+def test_generate_suggest_prompt_raises_on_nonzero_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+    monkeypatch.setattr(
+        "armillary.revive_service.subprocess.run",
+        lambda *_, **__: SimpleNamespace(stdout="", stderr="kaboom\n", returncode=1),
+    )
+    with pytest.raises(ReviveError, match="kaboom"):
+        generate_suggest_prompt(tmp_path)
+
+
+def test_generate_audit_prompt_invokes_audit_subcommand(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+    seen: list = []
+
+    def fake_run(cmd, **kwargs):
+        seen.append(cmd)
+        return SimpleNamespace(stdout="audit body\n", stderr="", returncode=0)
+
+    monkeypatch.setattr("armillary.revive_service.subprocess.run", fake_run)
+
+    assert generate_audit_prompt(tmp_path) == "audit body\n"
+    assert seen == [["/tmp/bin/revive", "audit"]]
+
+
+def test_generate_audit_prompt_timeout_wraps_into_revive_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+
+    def fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
+
+    monkeypatch.setattr("armillary.revive_service.subprocess.run", fake_run)
+    with pytest.raises(ReviveError, match="timed out"):
+        generate_audit_prompt(tmp_path, timeout=1.0)
+
+
+def test_run_revive_init_returns_success_and_combined_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+    monkeypatch.setattr(
+        "armillary.revive_service.subprocess.run",
+        lambda *_, **__: SimpleNamespace(
+            stdout="created: .revive/static.md\n", stderr="", returncode=0
+        ),
+    )
+
+    success, output = run_revive_init(tmp_path)
+
+    assert success is True
+    assert "created" in output
+
+
+def test_run_revive_init_returns_false_on_missing_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("armillary.revive_service.shutil.which", lambda _: None)
+
+    success, output = run_revive_init(tmp_path)
+
+    assert success is False
+    assert "not found on PATH" in output
+
+
+def test_run_revive_init_returns_false_on_nonzero_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+    monkeypatch.setattr(
+        "armillary.revive_service.subprocess.run",
+        lambda *_, **__: SimpleNamespace(
+            stdout="", stderr="cannot scaffold\n", returncode=1
+        ),
+    )
+
+    success, output = run_revive_init(tmp_path)
+
+    assert success is False
+    assert "cannot scaffold" in output

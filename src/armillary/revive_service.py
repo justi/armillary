@@ -199,6 +199,82 @@ def install_hook_global(*, timeout: float = 10.0) -> tuple[bool, str]:
     return result.returncode == 0, combined_output
 
 
+def generate_suggest_prompt(project_path: Path, *, timeout: float = 10.0) -> str:
+    """Run `revive suggest` and return its stdout (an LLM-ready prompt).
+
+    The user pastes this into a fresh Claude Code session in the target
+    project to fill INVARIANTS / GOTCHAS interactively. Raises
+    ``ReviveError`` on missing binary, timeout, or nonzero exit.
+    """
+    return _run_prompt_command(project_path, "suggest", timeout=timeout)
+
+
+def generate_audit_prompt(project_path: Path, *, timeout: float = 10.0) -> str:
+    """Run `revive audit` and return its stdout.
+
+    Audit is the second-pass gap check. revive's design requires it to
+    run in a *fresh* agent session so the clean context window can
+    surface non-inferable facts the suggest pass missed. The user pastes
+    the returned prompt into a new Claude Code session.
+    """
+    return _run_prompt_command(project_path, "audit", timeout=timeout)
+
+
+def run_revive_init(project_path: Path, *, timeout: float = 10.0) -> tuple[bool, str]:
+    """Run `revive init` to scaffold .revive/static.md from README/manifest.
+
+    Pure file operation (no LLM). Returns ``(success, combined_output)``.
+    Use this to bring a project from "missing" to "placeholder" state
+    before generating a suggest prompt.
+    """
+    binary = shutil.which("revive")
+    if binary is None:
+        return False, "revive binary not found on PATH"
+    try:
+        result = subprocess.run(  # noqa: S603 - args list, no shell
+            [binary, "init"],
+            cwd=project_path,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"revive init timed out after {timeout}s"
+    except FileNotFoundError:
+        return False, "revive binary not found on PATH"
+    except OSError as exc:
+        return False, f"revive init failed: {exc}"
+    combined_output = f"{result.stdout}{result.stderr}"
+    return result.returncode == 0, combined_output
+
+
+def _run_prompt_command(project_path: Path, subcommand: str, *, timeout: float) -> str:
+    binary = shutil.which("revive")
+    if binary is None:
+        raise ReviveError("revive binary not found on PATH")
+    try:
+        result = subprocess.run(  # noqa: S603 - args list, no shell
+            [binary, subcommand],
+            cwd=project_path,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ReviveError(f"revive {subcommand} timed out after {timeout}s") from exc
+    except FileNotFoundError as exc:
+        raise ReviveError("revive binary not found on PATH") from exc
+    except OSError as exc:
+        raise ReviveError(f"revive {subcommand} failed: {exc}") from exc
+    if result.returncode != 0:
+        raise ReviveError(f"revive {subcommand} failed: {result.stderr.strip()}")
+    return result.stdout
+
+
 def generate_suggest_prompts(
     project_paths: list[Path], *, output_dir: Path, timeout: float = 5.0
 ) -> list[Path]:

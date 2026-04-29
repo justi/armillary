@@ -62,12 +62,6 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/armillary"]
 
-[tool.pytest.ini_options]
-markers = [
-    "e2e: opt-in end-to-end tests that spawn real claude / revive (slow, cost money). Run with `pytest -m e2e`.",
-]
-addopts = "-m 'not e2e'"
-
 [tool.ruff]
 line-length = 88
 target-version = "py311"
