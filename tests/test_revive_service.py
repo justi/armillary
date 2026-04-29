@@ -457,6 +457,41 @@ def test_generate_suggest_prompt_raises_on_nonzero_exit(
         generate_suggest_prompt(tmp_path)
 
 
+def test_generate_suggest_prompt_falls_back_to_stdout_when_stderr_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Some revive subcommands write diagnostics to stdout, not stderr.
+
+    The error message should still be informative — never blank or just
+    the exit code when something useful was printed.
+    """
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+    monkeypatch.setattr(
+        "armillary.revive_service.subprocess.run",
+        lambda *_, **__: SimpleNamespace(
+            stdout="missing scaffold\n", stderr="", returncode=2
+        ),
+    )
+    with pytest.raises(ReviveError, match="missing scaffold"):
+        generate_suggest_prompt(tmp_path)
+
+
+def test_generate_suggest_prompt_falls_back_to_exit_code_when_silent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+    monkeypatch.setattr(
+        "armillary.revive_service.subprocess.run",
+        lambda *_, **__: SimpleNamespace(stdout="", stderr="", returncode=7),
+    )
+    with pytest.raises(ReviveError, match="exit code 7"):
+        generate_suggest_prompt(tmp_path)
+
+
 def test_generate_audit_prompt_invokes_audit_subcommand(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

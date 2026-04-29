@@ -349,7 +349,13 @@ def _run_prompt_command(project_path: Path, subcommand: str, *, timeout: float) 
     except OSError as exc:
         raise ReviveError(f"revive {subcommand} failed: {exc}") from exc
     if result.returncode != 0:
-        raise ReviveError(f"revive {subcommand} failed: {result.stderr.strip()}")
+        # Some revive subcommands write diagnostics to stdout, not stderr.
+        # Stitch both (and the exit code) into the surfaced message so the
+        # UI never shows an empty failure reason.
+        detail = (result.stderr.strip() or result.stdout.strip()) or (
+            f"exit code {result.returncode}"
+        )
+        raise ReviveError(f"revive {subcommand} failed: {detail}")
     return result.stdout
 
 

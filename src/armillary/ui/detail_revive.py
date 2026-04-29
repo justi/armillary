@@ -116,10 +116,14 @@ def _render_init_button(project_path: Path) -> None:
         ),
     ):
         success, output = run_revive_init(project_path)
+        # Toast survives the rerun below; inline st.success / st.error
+        # would be wiped before the user can read them.
         if success:
-            st.success("Scaffolded `.revive/static.md`.")
+            st.toast("Scaffolded `.revive/static.md`.", icon="✅")
         else:
-            st.error(f"`revive init` failed: {output}")
+            # `output` already names the action (e.g. "revive init failed:
+            # ...") — surface it verbatim so we don't double-prefix.
+            st.toast(output or "`revive init` failed.", icon="⚠️")
         st.rerun()
 
 
