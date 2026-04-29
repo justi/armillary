@@ -101,3 +101,8 @@ secrets.json
 
 # Streamlit local state
 .streamlit/secrets.toml
+
+# Local Claude Code state — absolute paths, personal hooks, refresh counter
+.claude/settings.json
+.claude/settings.local.json
+.claude/revive-counter
