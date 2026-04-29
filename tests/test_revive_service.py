@@ -11,10 +11,12 @@ import pytest
 
 from armillary.revive_service import (
     ReviveError,
+    copy_to_clipboard,
     generate_audit_prompt,
     generate_suggest_prompt,
     generate_suggest_prompts,
     install_hook_global,
+    launch_claude_yolo,
     probe_capability,
     project_status,
     revive_show,
@@ -535,3 +537,86 @@ def test_run_revive_init_returns_false_on_nonzero_exit(
 
     assert success is False
     assert "cannot scaffold" in output
+
+
+def test_copy_to_clipboard_pipes_text_to_pbcopy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["input"] = kwargs.get("input")
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr("armillary.revive_service.subprocess.run", fake_run)
+
+    assert copy_to_clipboard("hello") is True
+    assert captured["cmd"] == ["pbcopy"]
+    assert captured["input"] == b"hello"
+
+
+def test_copy_to_clipboard_returns_false_when_pbcopy_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args, **kwargs):
+        raise FileNotFoundError("pbcopy")
+
+    monkeypatch.setattr("armillary.revive_service.subprocess.run", fake_run)
+
+    assert copy_to_clipboard("anything") is False
+
+
+def test_launch_claude_yolo_invokes_osascript_with_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/usr/bin/osascript"
+    )
+    captured: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr("armillary.revive_service.subprocess.run", fake_run)
+
+    success, _ = launch_claude_yolo(tmp_path)
+
+    assert success is True
+    assert captured["cmd"][0] == "osascript"
+    write_text_arg = next(
+        arg for arg in captured["cmd"] if arg.startswith("write text")
+    )
+    assert str(tmp_path) in write_text_arg
+    assert "claude --dangerously-skip-permissions" in write_text_arg
+
+
+def test_launch_claude_yolo_returns_false_without_osascript(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("armillary.revive_service.shutil.which", lambda _: None)
+
+    success, message = launch_claude_yolo(tmp_path)
+
+    assert success is False
+    assert "osascript" in message
+
+
+def test_launch_claude_yolo_returns_false_on_nonzero_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/usr/bin/osascript"
+    )
+    monkeypatch.setattr(
+        "armillary.revive_service.subprocess.run",
+        lambda *_, **__: SimpleNamespace(
+            stdout="", stderr="iTerm not running\n", returncode=1
+        ),
+    )
+
+    success, message = launch_claude_yolo(tmp_path)
+
+    assert success is False
+    assert "iTerm" in message

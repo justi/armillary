@@ -23,8 +23,10 @@ import streamlit as st
 
 from armillary.revive_service import (
     ReviveError,
+    copy_to_clipboard,
     generate_audit_prompt,
     generate_suggest_prompt,
+    launch_claude_yolo,
     probe_capability,
     project_status,
     revive_show,
@@ -194,15 +196,56 @@ def _render_pending_prompts(project_path: Path) -> None:
     audit = st.session_state.get(audit_key)
 
     if suggest:
-        st.markdown("**Suggest prompt** — open Claude Code in this project and paste:")
+        st.markdown(
+            "**Suggest prompt** — copy then launch Claude Code in this project:"
+        )
         st.code(suggest, language="markdown")
-        if st.button("Dismiss suggest", key=f"revive_dismiss_suggest_{project_path}"):
-            st.session_state.pop(suggest_key, None)
-            st.rerun()
+        _render_prompt_actions(project_path, "suggest", suggest)
 
     if audit:
-        st.markdown("**Audit prompt** — open a NEW Claude Code session and paste:")
+        st.markdown("**Audit prompt** — copy then launch a NEW Claude Code session:")
         st.code(audit, language="markdown")
-        if st.button("Dismiss audit", key=f"revive_dismiss_audit_{project_path}"):
-            st.session_state.pop(audit_key, None)
+        _render_prompt_actions(project_path, "audit", audit)
+
+
+def _render_prompt_actions(project_path: Path, kind: str, prompt: str) -> None:
+    """Copy / Launch / Dismiss row for a rendered prompt."""
+    prefix = _SUGGEST_KEY_PREFIX if kind == "suggest" else _AUDIT_KEY_PREFIX
+    state_key = f"{prefix}{project_path}"
+    with st.container(horizontal=True):
+        if st.button(
+            "Copy to clipboard",
+            key=f"revive_clip_{kind}_{project_path}",
+            icon=":material/content_copy:",
+            type="primary",
+        ):
+            if copy_to_clipboard(prompt):
+                st.toast("Prompt copied — paste it into Claude Code.", icon="📋")
+            else:
+                st.warning(
+                    "`pbcopy` unavailable — select the block above and copy "
+                    "it manually."
+                )
+        if st.button(
+            "Launch Claude (yolo)",
+            key=f"revive_launch_{kind}_{project_path}",
+            icon=":material/rocket_launch:",
+            type="secondary",
+            help=(
+                "Opens a new iTerm tab in this project and starts "
+                "`claude --dangerously-skip-permissions`. macOS only."
+            ),
+        ):
+            success, message = launch_claude_yolo(project_path)
+            if success:
+                st.toast(message, icon="🚀")
+            else:
+                st.error(f"Could not launch iTerm: {message}")
+        if st.button(
+            "Dismiss",
+            key=f"revive_dismiss_{kind}_{project_path}",
+            icon=":material/close:",
+            type="tertiary",
+        ):
+            st.session_state.pop(state_key, None)
             st.rerun()

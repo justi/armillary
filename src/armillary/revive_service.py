@@ -220,6 +220,84 @@ def generate_audit_prompt(project_path: Path, *, timeout: float = 10.0) -> str:
     return _run_prompt_command(project_path, "audit", timeout=timeout)
 
 
+def copy_to_clipboard(text: str, *, timeout: float = 5.0) -> bool:
+    """Pipe TEXT into the macOS pbcopy clipboard helper.
+
+    Returns True on success, False if pbcopy is missing or errors. The
+    caller is responsible for surfacing that to the UI; this helper
+    intentionally never raises so a missing pbcopy on Linux/Windows
+    gracefully degrades to "select and copy from st.code".
+    """
+    try:
+        subprocess.run(  # noqa: S603 - args list, no shell
+            ["pbcopy"],
+            input=text.encode("utf-8"),
+            check=True,
+            timeout=timeout,
+        )
+    except (
+        FileNotFoundError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        OSError,
+    ):
+        return False
+    return True
+
+
+def launch_claude_yolo(
+    project_path: Path, *, timeout: float = 10.0
+) -> tuple[bool, str]:
+    """Open a new iTerm tab in PROJECT_PATH running claude with skip permissions.
+
+    Mac-only convenience paired with ``copy_to_clipboard`` so the user
+    can click Copy then Launch and immediately paste into a freshly
+    opened session. Mirrors the ``iterm-claude-yolo`` builtin launcher
+    rather than going through the full launcher API to keep this UI
+    surface Project-free.
+
+    Returns ``(success, message)``. Never raises.
+    """
+    if shutil.which("osascript") is None:
+        return False, "osascript not on PATH (macOS-only feature)"
+    inner = f"cd {project_path} && claude --dangerously-skip-permissions"
+    args = [
+        "osascript",
+        "-e",
+        'tell application "iTerm"',
+        "-e",
+        "activate",
+        "-e",
+        "tell current window",
+        "-e",
+        "create tab with default profile",
+        "-e",
+        "tell current session",
+        "-e",
+        f'write text "{inner}"',
+        "-e",
+        "end tell",
+        "-e",
+        "end tell",
+        "-e",
+        "end tell",
+    ]
+    try:
+        result = subprocess.run(  # noqa: S603 - args list, no shell
+            args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=timeout,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+        return False, f"failed to launch iTerm: {exc}"
+    if result.returncode != 0:
+        return False, result.stderr.strip() or "osascript exited nonzero"
+    return True, "Launched a new iTerm tab with claude --dangerously-skip-permissions"
+
+
 def run_revive_init(project_path: Path, *, timeout: float = 10.0) -> tuple[bool, str]:
     """Run `revive init` to scaffold .revive/static.md from README/manifest.
 
