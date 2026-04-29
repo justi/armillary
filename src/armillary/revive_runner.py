@@ -81,6 +81,35 @@ def generate_brief(
 
     static_path = project_path / ".revive" / "static.md"
     backup_path = static_path.with_name("static.md.bak")
+    static_existed_originally = static_path.exists()
+
+    if not static_existed_originally:
+        # `revive suggest` refuses to run without a scaffolded static.md.
+        # `revive init` is a pure file-op (auto-extracts PURPOSE from
+        # README/manifest, no LLM call) so we can run it transparently
+        # before the suggest+claude pass for projects in "missing" state.
+        try:
+            init_result = subprocess.run(  # noqa: S603 - args list, no shell
+                [revive_binary, "init"],
+                cwd=project_path,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=timeout,
+                check=False,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+            return _failed(
+                before="", after="", diff="", error=f"revive init failed: {exc}"
+            )
+        if init_result.returncode != 0:
+            return _failed(
+                before="",
+                after="",
+                diff="",
+                error=f"revive init failed: {init_result.stderr.strip()}",
+            )
+
     had_before = static_path.exists()
     try:
         before = static_path.read_text(encoding="utf-8") if had_before else ""
@@ -114,7 +143,11 @@ def generate_brief(
             error=f"revive suggest failed: {prompt_result.stderr.strip()}",
         )
 
-    if had_before:
+    # Only back up when there was a real prior state. If `revive init`
+    # just scaffolded the file in this run, there is no original to
+    # restore — reject leaves the scaffold in place; users can `rm -rf
+    # .revive/` to fully revert.
+    if static_existed_originally:
         try:
             shutil.copyfile(static_path, backup_path)
         except OSError as exc:

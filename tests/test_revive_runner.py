@@ -252,6 +252,101 @@ def test_generate_brief_returns_diff_and_keeps_backup_on_changed_file(
     )
 
 
+def test_generate_brief_runs_revive_init_when_static_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """For projects without `.revive/static.md`, runner calls `revive init`
+    before `revive suggest` (suggest refuses without a scaffold)."""
+    _patch_binaries(monkeypatch)
+    (tmp_path / ".git").mkdir()
+    static_path = tmp_path / ".revive" / "static.md"
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd == ["git", "status", "--porcelain"]:
+            return _result(stdout="", returncode=0)
+        if cmd == ["/tmp/bin/revive", "init"]:
+            static_path.parent.mkdir(parents=True, exist_ok=True)
+            static_path.write_text("scaffold\n", encoding="utf-8")
+            return _result(returncode=0)
+        if cmd == ["/tmp/bin/revive", "suggest"]:
+            return _result(stdout="prompt", returncode=0)
+        if cmd[0] == "claude":
+            static_path.write_text("filled\n", encoding="utf-8")
+            return _result(returncode=0)
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr("armillary.revive_runner.subprocess.run", fake_run)
+
+    result = generate_brief(tmp_path)
+
+    assert result.success is True
+    assert ["/tmp/bin/revive", "init"] in calls
+    init_index = calls.index(["/tmp/bin/revive", "init"])
+    suggest_index = calls.index(["/tmp/bin/revive", "suggest"])
+    assert init_index < suggest_index, "init must run before suggest"
+
+
+def test_generate_brief_skips_init_when_static_already_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If `.revive/static.md` is already present (stub/placeholder/configured),
+    `revive init` is NOT invoked — suggest+claude run directly."""
+    _patch_binaries(monkeypatch)
+    (tmp_path / ".git").mkdir()
+    static_path = tmp_path / ".revive" / "static.md"
+    static_path.parent.mkdir(parents=True)
+    static_path.write_text("existing\n", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd == ["git", "status", "--porcelain"]:
+            return _result(stdout="", returncode=0)
+        if cmd == ["/tmp/bin/revive", "suggest"]:
+            return _result(stdout="prompt", returncode=0)
+        if cmd[0] == "claude":
+            static_path.write_text("filled\n", encoding="utf-8")
+            return _result(returncode=0)
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr("armillary.revive_runner.subprocess.run", fake_run)
+
+    result = generate_brief(tmp_path)
+
+    assert result.success is True
+    assert ["/tmp/bin/revive", "init"] not in calls
+
+
+def test_generate_brief_returns_error_when_revive_init_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If `revive init` exits nonzero, runner short-circuits before
+    suggest/claude — no backup, no LLM call."""
+    _patch_binaries(monkeypatch)
+    (tmp_path / ".git").mkdir()
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd == ["git", "status", "--porcelain"]:
+            return _result(stdout="", returncode=0)
+        if cmd == ["/tmp/bin/revive", "init"]:
+            return _result(stderr="init exploded\n", returncode=1)
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr("armillary.revive_runner.subprocess.run", fake_run)
+
+    result = generate_brief(tmp_path)
+
+    assert result.success is False
+    assert result.error is not None and "init exploded" in result.error
+    assert ["/tmp/bin/revive", "suggest"] not in calls
+    assert not any(c[0] == "claude" for c in calls)
+    assert not (tmp_path / ".revive" / "static.md.bak").exists()
+
+
 def test_generate_brief_handles_new_static_file_without_backup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -262,10 +357,13 @@ def test_generate_brief_handles_new_static_file_without_backup(
     def fake_run(cmd, **kwargs):
         if cmd == ["git", "status", "--porcelain"]:
             return _result(stdout="", returncode=0)
+        if cmd == ["/tmp/bin/revive", "init"]:
+            static_path.parent.mkdir(parents=True, exist_ok=True)
+            static_path.write_text("scaffold\n", encoding="utf-8")
+            return _result(returncode=0)
         if cmd == ["/tmp/bin/revive", "suggest"]:
             return _result(stdout="prompt", returncode=0)
         if cmd[0] == "claude":
-            static_path.parent.mkdir(parents=True, exist_ok=True)
             static_path.write_text("new brief\n", encoding="utf-8")
             return _result(returncode=0)
         raise AssertionError(f"unexpected command: {cmd}")
@@ -275,9 +373,13 @@ def test_generate_brief_handles_new_static_file_without_backup(
     result = generate_brief(tmp_path)
 
     assert result.success is True
-    assert result.before == ""
+    # `before` is the post-init scaffold (init runs because static.md was
+    # missing). `had_before` becomes True post-init, so the diff is from
+    # the scaffold to claude's filled version.
+    assert result.before == "scaffold\n"
     assert result.after == "new brief\n"
-    assert result.diff == "--- before\n+++ after\n@@ -0,0 +1 @@\n+new brief\n"
+    # No backup is created because the file did not exist originally —
+    # reject_proposal will fall through to deleting the static.md.
     assert not (tmp_path / ".revive" / "static.md.bak").exists()
 
 
@@ -347,11 +449,14 @@ def test_generate_brief_builds_expected_claude_command(
         nonlocal seen_claude
         if cmd == ["git", "status", "--porcelain"]:
             return _result(stdout="", returncode=0)
+        if cmd == ["/tmp/bin/revive", "init"]:
+            static_path.parent.mkdir(parents=True, exist_ok=True)
+            static_path.write_text("scaffold\n", encoding="utf-8")
+            return _result(returncode=0)
         if cmd == ["/tmp/bin/revive", "suggest"]:
             return _result(stdout="prompt text", returncode=0)
         if cmd[0] == "claude":
             seen_claude = cmd
-            static_path.parent.mkdir(parents=True, exist_ok=True)
             static_path.write_text("new\n", encoding="utf-8")
             return _result(returncode=0)
         raise AssertionError(f"unexpected command: {cmd}")
@@ -383,12 +488,15 @@ def test_generate_brief_uses_project_path_as_cwd_for_revive_and_claude(
         cwd = kwargs["cwd"]
         if cmd == ["git", "status", "--porcelain"]:
             return _result(stdout="", returncode=0)
+        if cmd == ["/tmp/bin/revive", "init"]:
+            static_path.parent.mkdir(parents=True, exist_ok=True)
+            static_path.write_text("scaffold\n", encoding="utf-8")
+            return _result(returncode=0)
         if cmd == ["/tmp/bin/revive", "suggest"]:
             seen["revive"] = cwd
             return _result(stdout="prompt", returncode=0)
         if cmd[0] == "claude":
             seen["claude"] = cwd
-            static_path.parent.mkdir(parents=True, exist_ok=True)
             static_path.write_text("new\n", encoding="utf-8")
             return _result(returncode=0)
         raise AssertionError(f"unexpected command: {cmd}")
