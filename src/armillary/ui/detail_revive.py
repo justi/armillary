@@ -46,8 +46,6 @@ _HOOK_SCOPE_LABELS = {
     "global": "global hook",
     "both": "project + global hook",
 }
-_SUGGEST_KEY_PREFIX = "_revive_suggest_prompt_"
-_AUDIT_KEY_PREFIX = "_revive_audit_prompt_"
 
 
 def render_revive_section(project_path: Path) -> None:
@@ -81,13 +79,12 @@ def render_revive_section(project_path: Path) -> None:
     if status.brief_state == "stub":
         st.info(
             "PURPOSE is filled but INVARIANTS and GOTCHAS are empty. "
-            "Copy the suggest prompt below into a fresh Claude Code "
-            "session in this project to fill them in.",
+            "Copy the suggest prompt and paste it in a fresh Claude Code "
+            "session to fill them in.",
             icon=":material/info:",
         )
 
     _render_actions(project_path, status.brief_state)
-    _render_pending_prompts(project_path)
 
 
 def _render_actions(project_path: Path, brief_state: str) -> None:
@@ -98,6 +95,8 @@ def _render_actions(project_path: Path, brief_state: str) -> None:
             _render_copy_suggest_button(project_path, brief_state)
         if brief_state == "configured":
             _render_copy_audit_button(project_path)
+        if brief_state != "missing":
+            _render_launch_claude_button(project_path)
         if brief_state in ("configured", "stub"):
             _render_preview_button(project_path)
 
@@ -129,30 +128,18 @@ def _render_init_button(project_path: Path) -> None:
 
 def _render_copy_suggest_button(project_path: Path, brief_state: str) -> None:
     button_key = f"revive_copy_suggest_{project_path}"
-    label = (
-        "Refresh suggest prompt"
-        if brief_state == "configured"
-        else "Copy suggest prompt"
-    )
     if st.button(
-        label,
+        "Copy suggest prompt",
         key=button_key,
         icon=":material/content_copy:",
         type="primary" if brief_state in ("placeholder", "stub") else "secondary",
         help=(
-            "Generates the LLM-ready prompt that fills INVARIANTS and "
-            "GOTCHAS. Paste it into a fresh Claude Code session in this "
-            "project — Claude reads the repo and edits `.revive/static.md` "
-            "interactively, with your usual approval flow."
+            "Copies the `revive suggest` LLM prompt to your clipboard. "
+            "Click Launch Claude (yolo) next, then paste in the new tab "
+            "to fill INVARIANTS and GOTCHAS."
         ),
     ):
-        try:
-            prompt = generate_suggest_prompt(project_path)
-        except ReviveError as exc:
-            st.error(f"Could not generate suggest prompt: {exc}")
-            return
-        st.session_state[f"{_SUGGEST_KEY_PREFIX}{project_path}"] = prompt
-        st.rerun()
+        _generate_and_copy(project_path, generate_suggest_prompt, "suggest")
 
 
 def _render_copy_audit_button(project_path: Path) -> None:
@@ -163,18 +150,55 @@ def _render_copy_audit_button(project_path: Path) -> None:
         icon=":material/fact_check:",
         type="secondary",
         help=(
-            "Second-pass gap audit. Paste into a NEW Claude Code session "
-            "(fresh context is required by design — catches facts the "
-            "suggest pass missed)."
+            "Copies the second-pass gap-audit prompt. Paste into a NEW "
+            "Claude Code session — fresh context is required by design."
         ),
     ):
-        try:
-            prompt = generate_audit_prompt(project_path)
-        except ReviveError as exc:
-            st.error(f"Could not generate audit prompt: {exc}")
-            return
-        st.session_state[f"{_AUDIT_KEY_PREFIX}{project_path}"] = prompt
-        st.rerun()
+        _generate_and_copy(project_path, generate_audit_prompt, "audit")
+
+
+def _generate_and_copy(project_path: Path, fetch, label: str) -> None:
+    """Run a prompt-producing revive subcommand, then push to clipboard.
+
+    Single-click UX: no intermediate render of the prompt, no second
+    button. Toast on success/failure so the message survives Streamlit
+    reruns.
+    """
+    try:
+        prompt = fetch(project_path)
+    except ReviveError as exc:
+        st.toast(f"Could not generate {label} prompt: {exc}", icon="⚠️")
+        return
+    if copy_to_clipboard(prompt):
+        st.toast(
+            f"{label.capitalize()} prompt copied — paste in a Claude tab.",
+            icon="📋",
+        )
+    else:
+        st.toast(
+            "`pbcopy` unavailable — re-run from a macOS terminal.",
+            icon="⚠️",
+        )
+
+
+def _render_launch_claude_button(project_path: Path) -> None:
+    button_key = f"revive_launch_{project_path}"
+    if st.button(
+        "Launch Claude (yolo)",
+        key=button_key,
+        icon=":material/rocket_launch:",
+        type="secondary",
+        help=(
+            "Opens a new iTerm tab in this project running "
+            "`claude --dangerously-skip-permissions`. Pair with Copy "
+            "suggest / Copy audit. macOS only."
+        ),
+    ):
+        success, message = launch_claude_yolo(project_path)
+        if success:
+            st.toast(message, icon="🚀")
+        else:
+            st.toast(f"Launch failed: {message}", icon="⚠️")
 
 
 def _render_preview_button(project_path: Path) -> None:
@@ -191,65 +215,3 @@ def _render_preview_button(project_path: Path) -> None:
             st.error(f"Could not run `revive show`: {exc}")
             return
         st.code(output, language="markdown")
-
-
-def _render_pending_prompts(project_path: Path) -> None:
-    suggest_key = f"{_SUGGEST_KEY_PREFIX}{project_path}"
-    audit_key = f"{_AUDIT_KEY_PREFIX}{project_path}"
-    suggest = st.session_state.get(suggest_key)
-    audit = st.session_state.get(audit_key)
-
-    if suggest:
-        st.markdown(
-            "**Suggest prompt** — copy then launch Claude Code in this project:"
-        )
-        st.code(suggest, language="markdown")
-        _render_prompt_actions(project_path, "suggest", suggest)
-
-    if audit:
-        st.markdown("**Audit prompt** — copy then launch a NEW Claude Code session:")
-        st.code(audit, language="markdown")
-        _render_prompt_actions(project_path, "audit", audit)
-
-
-def _render_prompt_actions(project_path: Path, kind: str, prompt: str) -> None:
-    """Copy / Launch / Dismiss row for a rendered prompt."""
-    prefix = _SUGGEST_KEY_PREFIX if kind == "suggest" else _AUDIT_KEY_PREFIX
-    state_key = f"{prefix}{project_path}"
-    with st.container(horizontal=True):
-        if st.button(
-            "Copy to clipboard",
-            key=f"revive_clip_{kind}_{project_path}",
-            icon=":material/content_copy:",
-            type="primary",
-        ):
-            if copy_to_clipboard(prompt):
-                st.toast("Prompt copied — paste it into Claude Code.", icon="📋")
-            else:
-                st.warning(
-                    "`pbcopy` unavailable — select the block above and copy "
-                    "it manually."
-                )
-        if st.button(
-            "Launch Claude (yolo)",
-            key=f"revive_launch_{kind}_{project_path}",
-            icon=":material/rocket_launch:",
-            type="secondary",
-            help=(
-                "Opens a new iTerm tab in this project and starts "
-                "`claude --dangerously-skip-permissions`. macOS only."
-            ),
-        ):
-            success, message = launch_claude_yolo(project_path)
-            if success:
-                st.toast(message, icon="🚀")
-            else:
-                st.error(f"Could not launch iTerm: {message}")
-        if st.button(
-            "Dismiss",
-            key=f"revive_dismiss_{kind}_{project_path}",
-            icon=":material/close:",
-            type="tertiary",
-        ):
-            st.session_state.pop(state_key, None)
-            st.rerun()
