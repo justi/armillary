@@ -1,9 +1,9 @@
 """MCP tool implementations.
 
-Decorated with ``@mcp.tool()`` against the FastMCP instance defined in
-``mcp_server``. Importing this module is what registers the tools — so
-``mcp_server.run_server`` imports it eagerly to make sure every tool is
-on the wire by the time the transport starts.
+Decorated with ``@mcp.tool()`` against the FastMCP instance imported
+from ``mcp_instance``. Importing this module registers the tools with
+that shared instance, so they are available once ``mcp_server``
+imports ``mcp_tools`` during startup.
 """
 
 from __future__ import annotations
