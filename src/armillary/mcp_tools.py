@@ -1,0 +1,360 @@
+"""MCP tool implementations.
+
+Decorated with ``@mcp.tool()`` against the FastMCP instance imported
+from ``mcp_instance``. Importing this module registers the tools with
+that shared instance, so they are available once ``mcp_server``
+imports ``mcp_tools`` during startup.
+"""
+
+from __future__ import annotations
+
+import json
+
+from armillary.cache import Cache
+from armillary.exclude_service import filter_excluded
+from armillary.mcp_helpers import (
+    _clamp_max_results,
+    _get_project_roots,
+    _hit_to_dict,
+    _project_context,
+    _safe_json,
+    _safe_search_json,
+)
+from armillary.mcp_instance import mcp
+from armillary.search import LiteralSearch
+from armillary.status_override import filter_archived
+from armillary.status_override import get_override as get_override_fn
+
+
+@mcp.tool()
+def armillary_search(query: str, max_results: int = 20) -> str:
+    """Search code across ALL local repositories using ripgrep (literal/exact match).
+
+    Use this when you know the exact term: function name, class name,
+    variable, error message, import path. Fast (<10ms), works offline.
+    Requires ripgrep (`rg`) on PATH.
+
+    Returns matched lines with file paths, line numbers, and project
+    metadata (path, status, description) so you can assess whether
+    to reuse code from a specific project.
+
+    Examples:
+    - "stripe_webhook_controller" → finds the exact controller
+    - "OPENAI_API_KEY" → finds where API keys are configured
+    - "def parse_price" → finds price parsing functions
+    """
+    max_results = _clamp_max_results(max_results)
+    if not LiteralSearch.is_available():
+        return "ripgrep (`rg`) is not installed. Install it: `brew install ripgrep`."
+    backend = LiteralSearch()
+    results: list[dict[str, object]] = []
+    projects_meta: dict[str, dict[str, object]] = {}
+    project_roots = _get_project_roots()
+    total_hits = 0
+
+    for name, root in project_roots:
+        if len(results) >= max_results:
+            break
+        remaining = max_results - len(results)
+        try:
+            hits = backend.search(query, root=root, max_results=remaining)
+        except Exception:  # noqa: BLE001
+            continue
+        total_hits += len(hits)
+        if hits:
+            if name not in projects_meta:
+                projects_meta[name] = _project_context(name)
+            results.extend(_hit_to_dict(h, name) for h in hits)
+
+    if not results:
+        return f"No matches for '{query}' across {len(project_roots)} projects."
+
+    return _safe_search_json(
+        projects_meta,
+        results[:max_results],
+        total_hits,
+        len(results[:max_results]),
+    )
+
+
+@mcp.tool()
+def armillary_projects(status_filter: str | None = None) -> str:
+    """List all indexed projects with path, status, and description.
+
+    Use this to find projects by concept or status. The agent can
+    then enter the project directory for full details (git log, etc.).
+
+    Optional: filter by status (ACTIVE, STALLED, DORMANT, IDEA, IN_PROGRESS).
+
+    Examples:
+    - armillary_projects() → all projects
+    - armillary_projects(status_filter="ACTIVE") → only active projects
+    - armillary_projects(status_filter="DORMANT") → forgotten projects
+    """
+    with Cache() as cache:
+        projects = cache.list_projects()
+    projects = filter_excluded(projects)
+    projects = filter_archived(projects)
+
+    if status_filter:
+        status_upper = status_filter.upper()
+        projects = [
+            p
+            for p in projects
+            if p.metadata
+            and p.metadata.status
+            and p.metadata.status.value == status_upper
+        ]
+
+    from armillary.revive_service import project_status as revive_project_status
+
+    rows = []
+    for p in projects:
+        md = p.metadata
+        # Check override for correct status display
+        override = get_override_fn(str(p.path))
+        status_val = (
+            override.value
+            if override
+            else (md.status.value if md and md.status else None)
+        )
+        rstatus = revive_project_status(p.path)
+        rows.append(
+            {
+                "path": str(p.path),
+                "status": status_val,
+                "description": md.readme_excerpt if md else None,
+                "revive": {
+                    "static_exists": rstatus.static_exists,
+                    "brief_state": rstatus.brief_state,
+                    "hook_scope": rstatus.hook_scope,
+                },
+            }
+        )
+
+    return _safe_json(rows, len(rows), len(rows))
+
+
+@mcp.tool()
+def armillary_next() -> str:
+    """What should I work on today?
+
+    Returns up to 3 project suggestions based on activity patterns:
+    - **momentum** — active project with recent commits, keep going
+    - **zombie** — marked active but no commit in >7 days, kill or ship
+    - **forgotten_gold** — dormant/paused project with >50h invested,
+      could be finished with AI tools
+
+    Call this at the start of a coding session to get context about
+    the user's project portfolio and recommend where to focus.
+    """
+    from armillary.next_service import get_suggestions
+
+    suggestions = get_suggestions()
+    if not suggestions:
+        return "No suggestions — cache is empty or all projects are skipped."
+
+    # Yesterday's activity
+    from datetime import datetime, timedelta
+
+    yesterday = datetime.now() - timedelta(days=1)
+    start = yesterday.replace(hour=0, minute=0, second=0)
+    end = start + timedelta(days=1)
+    with Cache() as cache:
+        all_projects = cache.list_projects()
+    all_projects = filter_excluded(all_projects)
+    all_projects = filter_archived(all_projects)
+    active_yesterday = [
+        p.name
+        for p in all_projects
+        if p.metadata
+        and p.metadata.last_commit_ts
+        and start <= p.metadata.last_commit_ts < end
+    ]
+
+    result: dict[str, object] = {}
+    if active_yesterday:
+        result["yesterday"] = active_yesterday
+
+    rows = []
+    for s in suggestions:
+        rows.append(
+            {
+                "project": s.project.name,
+                "path": str(s.project.path),
+                "category": s.category,
+                "reason": s.reason,
+            }
+        )
+    result["suggestions"] = rows
+    return json.dumps(result, separators=(",", ":"), default=str)
+
+
+@mcp.tool()
+def armillary_steal(
+    query: str,
+    limit: int = 5,
+    language: str | None = None,
+) -> str:
+    """Find reusable code the user has already written in another repo.
+
+    Returns ranked code blocks (whole 40-line windows, not just matched
+    lines) from the user's indexed repositories. Ranking favours recent
+    and active projects. Use this when the user asks "how did I do X
+    before?" or is about to write something they've likely already
+    written — payment webhooks, PDF parsers, auth flows.
+
+    Args:
+        query: literal search term(s). Multi-word queries are ANDed.
+        limit: max blocks to return (default 5, capped).
+        language: optional file-extension filter (``py``, ``rb``,
+            ``ts``, ``go``, ...).
+
+    Examples:
+    - armillary_steal("stripe webhook") → prior webhook handlers
+    - armillary_steal("parse_price", language="py") → Python price parsers
+    """
+    from armillary.steal_service import steal
+
+    limit = _clamp_max_results(limit)
+    try:
+        results = steal(query, limit=limit, language=language)
+    except Exception as exc:  # noqa: BLE001
+        return f"Steal failed: {exc}"
+    if not results:
+        return f"No reusable blocks for '{query}'."
+
+    payload: list[dict[str, object]] = []
+    for r in results:
+        content = r.block.content
+        # Trim to keep responses within MCP token budget. 60 lines is
+        # plenty for an agent to see the shape of the function; the CLI
+        # returns the untrimmed version.
+        lines = content.splitlines()
+        if len(lines) > 60:
+            lines = [*lines[:60], f"… (+{len(content.splitlines()) - 60} lines)"]
+            content = "\n".join(lines)
+        payload.append(
+            {
+                "project": r.project_name,
+                "status": r.project_status,
+                "file": r.block.path,
+                "start_line": r.block.start_line,
+                "end_line": r.block.end_line,
+                "language": r.block.language_ext,
+                "symbol": r.block.symbol,
+                "score": round(r.score, 3),
+                "content": content,
+            }
+        )
+    return _safe_json(payload, len(payload), len(payload))
+
+
+@mcp.tool()
+def armillary_pulse() -> str:
+    """Weekly pulse — what changed across your projects this week.
+
+    Shows: what you worked on, what went dormant, uncommitted work.
+    Call this at the start of a Monday session or weekly check-in.
+    """
+    from armillary.pulse_service import format_pulse, generate_pulse
+
+    pulse = generate_pulse()
+    return format_pulse(pulse)
+
+
+@mcp.tool()
+def armillary_context(project_name: str) -> str:
+    """Where was I? Get project state for instant re-entry.
+
+    Returns branch, dirty files, recent commits, and recent branches
+    so you can resume work on a project without re-reading code.
+
+    Call this when the user says "switch to X", "where was I on X",
+    or "what's the state of X". NOT auto-triggered on directory change.
+
+    Examples:
+    - armillary_context("pdf_to_quiz") → branch, 1 dirty file, last 5 commits
+    - armillary_context("speak-faster") → dormant, last commit 3 months ago
+    """
+    from armillary.context_service import get_context
+
+    try:
+        ctx = get_context(project_name)
+    except ValueError as exc:
+        return f"Ambiguous project name: {exc}"
+
+    if ctx is None:
+        return f"No project matches '{project_name}'. Run `armillary scan` first."
+
+    result: dict[str, object] = {
+        "name": ctx.name,
+        "path": str(ctx.path),
+        "status": ctx.status,
+        "work_hours": ctx.work_hours,
+        "is_git": ctx.is_git,
+    }
+
+    if ctx.is_git:
+        result["branch"] = ctx.branch
+        result["dirty_count"] = ctx.dirty_count
+        if ctx.dirty_files:
+            result["dirty_files"] = ctx.dirty_files
+        if ctx.recent_commits:
+            result["recent_commits"] = [
+                {
+                    "hash": c.short_hash,
+                    "time": c.relative_time,
+                    "subject": c.subject,
+                }
+                for c in ctx.recent_commits
+            ]
+        if ctx.recent_branches:
+            result["recent_branches"] = [
+                {"name": b.name, "time": b.relative_time} for b in ctx.recent_branches
+            ]
+        if ctx.dirty_max_age_seconds is not None:
+            result["dirty_max_age_seconds"] = round(ctx.dirty_max_age_seconds)
+        if ctx.last_session is not None:
+            result["last_session"] = {
+                "duration_seconds": ctx.last_session.duration_seconds,
+                "commit_count": ctx.last_session.commit_count,
+                "ended": ctx.last_session.ended_relative,
+            }
+        if ctx.velocity_trend is not None:
+            result["velocity_trend"] = ctx.velocity_trend
+        if ctx.commit_velocity is not None:
+            result["commit_velocity"] = ctx.commit_velocity
+        if ctx.first_commit_ts is not None:
+            result["first_commit_ts"] = ctx.first_commit_ts
+        if ctx.branch_count is not None:
+            result["branch_count"] = ctx.branch_count
+        if ctx.has_remote is not None:
+            result["has_remote"] = ctx.has_remote
+        if ctx.unmerged_branches:
+            result["unmerged_branches"] = ctx.unmerged_branches
+        if ctx.monthly_commits is not None:
+            result["monthly_commits"] = ctx.monthly_commits
+        if ctx.readme_oneliner:
+            result["readme_oneliner"] = ctx.readme_oneliner
+
+    # Purpose (user-editable, separate from cache)
+    from armillary.purpose_service import get_purpose
+
+    purpose = get_purpose(str(ctx.path))
+    if purpose:
+        result["purpose"] = purpose
+
+    from armillary.purpose_service import get_last_conversation
+
+    last_convo = get_last_conversation(str(ctx.path))
+    if last_convo:
+        result["last_user_conversation"] = last_convo
+
+    from armillary.purpose_service import get_revenue
+
+    rev = get_revenue(str(ctx.path))
+    if rev is not None:
+        result["monthly_revenue_usd"] = rev
+
+    return json.dumps(result, separators=(",", ":"), default=str)

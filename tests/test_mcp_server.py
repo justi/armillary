@@ -248,9 +248,9 @@ def test_armillary_search_clamps_zero_max_results_before_backend_call(
             calls.append(max_results)
             return []
 
-    monkeypatch.setattr("armillary.mcp_server.LiteralSearch", FakeLiteralSearch)
+    monkeypatch.setattr("armillary.mcp_tools.LiteralSearch", FakeLiteralSearch)
     monkeypatch.setattr(
-        "armillary.mcp_server._get_project_roots",
+        "armillary.mcp_tools._get_project_roots",
         lambda: [("alpha", Path("/tmp/alpha"))],
     )
 
@@ -282,13 +282,13 @@ def test_armillary_search_emits_project_meta_once(
         ) -> list[SearchHit]:
             return alpha_hits if "alpha" in str(root) else []
 
-    monkeypatch.setattr("armillary.mcp_server.LiteralSearch", FakeLiteralSearch)
+    monkeypatch.setattr("armillary.mcp_tools.LiteralSearch", FakeLiteralSearch)
     monkeypatch.setattr(
-        "armillary.mcp_server._get_project_roots",
+        "armillary.mcp_tools._get_project_roots",
         lambda: [("alpha", Path("/tmp/alpha"))],
     )
     monkeypatch.setattr(
-        "armillary.mcp_server._project_context",
+        "armillary.mcp_tools._project_context",
         lambda name: {
             "path": "/tmp/alpha",
             "status": "ACTIVE",
