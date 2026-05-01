@@ -1,4 +1,4 @@
-"""Per-project metadata extraction.
+"""Per-project metadata extraction (orchestrator).
 
 For git projects: branch, head commit (sha + timestamp + author),
 dirty file count via GitPython. For all projects: README excerpt
@@ -17,69 +17,43 @@ modern disks.
 
 No status heuristics here — that lives in `status.py`. This module
 just collects facts.
+
+The actual collection logic lives in three split modules:
+
+- ``metadata_git`` — git fields, commit stats, velocity, monthly activity
+- ``metadata_readme`` — README excerpt extraction
+- ``metadata_files`` — ADR + notes file lists, size + file_count walk
+
+This module orchestrates them and re-exports the private helpers that
+``tests/test_metadata.py`` imports directly.
 """
 
 from __future__ import annotations
 
 import contextlib
-import re
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
-from pathlib import Path
 
-import git
-
+from .metadata_files import (
+    _compute_size_and_count,
+    _find_adr_files,
+    _find_note_files,
+)
+from .metadata_git import _fill_git_fields
+from .metadata_readme import _extract_readme_excerpt, _first_paragraph_plain
 from .models import Project, ProjectMetadata, ProjectType
 
+__all__ = [
+    "DEFAULT_WORKERS",
+    "extract",
+    "extract_all",
+    # Re-exported private helpers for tests.
+    "_extract_readme_excerpt",
+    "_find_adr_files",
+    "_find_note_files",
+    "_first_paragraph_plain",
+]
+
 DEFAULT_WORKERS = 4
-
-# README candidates in priority order. The first existing file wins.
-_README_CANDIDATES = (
-    "README.md",
-    "README.rst",
-    "README.txt",
-    "README",
-    "readme.md",
-)
-
-# Where to look for Architecture Decision Records.
-_ADR_DIRECTORIES = (
-    "adr",
-    "docs/adr",
-    "decisions",
-    "doc/adr",
-)
-
-# Where to look for free-form notes (not ADRs, not README). Markdown files
-# in these directories get listed under `ProjectMetadata.note_paths` so the
-# detail view can link them.
-_NOTE_DIRECTORIES = (
-    ".",  # root-level *.md (excluding README, which lives elsewhere)
-    "notes",
-    "docs",
-)
-
-_README_EXCERPT_MAX_CHARS = 280
-
-# When walking the project tree for size/file_count, ignore noisy
-# directories that bloat the numbers without telling us anything useful.
-_SIZE_WALK_IGNORES = frozenset(
-    {
-        ".git",
-        "node_modules",
-        ".venv",
-        "venv",
-        "env",
-        "__pycache__",
-        ".mypy_cache",
-        ".pytest_cache",
-        ".ruff_cache",
-        ".tox",
-        "dist",
-        "build",
-        ".DS_Store",
-    }
-)
 
 
 def extract(project: Project) -> ProjectMetadata:
@@ -134,388 +108,3 @@ def extract_all(
         results = list(pool.map(extract, projects))
     for project, md in zip(projects, results, strict=True):
         project.metadata = md or ProjectMetadata()
-
-
-# --- git fields ------------------------------------------------------------
-
-
-def _fill_git_fields(repo_path: Path, md: ProjectMetadata) -> None:
-    """Populate the git-specific fields on `md` from a repo at `repo_path`.
-
-    Wrapped by `extract()` in a try/except, so individual exceptions
-    here are fine — they just abort the rest of the git fill.
-    """
-    repo = git.Repo(repo_path)
-
-    # Branch name (None when in detached HEAD state, e.g. mid-rebase).
-    if not repo.head.is_detached:
-        try:
-            md.branch = repo.active_branch.name
-        except (TypeError, ValueError):
-            md.branch = None
-
-    # HEAD commit — use rev-parse via repo.head.commit which is cheap.
-    head = repo.head.commit
-    md.last_commit_sha = head.hexsha
-    md.last_commit_ts = datetime.fromtimestamp(head.committed_date)
-    md.last_commit_author = head.author.name
-
-    # Dirty count: anything that would show up under `git status`.
-    # `index.diff(None)` covers unstaged working-tree edits, but misses
-    # files that are staged-but-uncommitted — we need `index.diff("HEAD")`
-    # for those, otherwise `git add some-file && armillary scan` would
-    # incorrectly look like a clean repo.
-    try:
-        unstaged = len(repo.index.diff(None))
-    except Exception:  # noqa: BLE001
-        unstaged = 0
-    try:
-        staged = len(repo.index.diff("HEAD"))
-    except Exception:  # noqa: BLE001
-        staged = 0
-    try:
-        untracked = len(repo.untracked_files)
-    except Exception:  # noqa: BLE001
-        untracked = 0
-    md.dirty_count = unstaged + staged + untracked
-
-    # Ahead/behind vs upstream tracking branch. None of these fields
-    # apply for repos with no upstream configured (the common case for
-    # local-only branches), so an absent tracking branch leaves both
-    # fields as None rather than 0.
-    if md.branch is not None:
-        with contextlib.suppress(Exception):
-            tracking = repo.active_branch.tracking_branch()
-            if tracking is not None:
-                md.ahead = sum(1 for _ in repo.iter_commits(f"{tracking}..HEAD"))
-                md.behind = sum(1 for _ in repo.iter_commits(f"HEAD..{tracking}"))
-
-    # Commit count + estimated work hours from commit timestamps.
-    with contextlib.suppress(Exception):
-        md.commit_count, md.work_hours = _compute_commit_stats(repo)
-
-    # S1: Commit velocity — 4-week window (ADR 0017).
-    with contextlib.suppress(Exception):
-        md.commit_velocity, md.velocity_trend = _compute_velocity(repo)
-
-    # S5: First commit timestamp (ADR 0017).
-    with contextlib.suppress(Exception):
-        md.first_commit_ts = _first_commit_timestamp(repo)
-
-    # Monthly activity: commit counts per month, last 6 months.
-    with contextlib.suppress(Exception):
-        md.monthly_commits = _monthly_activity(repo)
-
-    # S6: Branch count + has_remote (ADR 0017).
-    with contextlib.suppress(Exception):
-        md.branch_count = len(repo.branches)
-    with contextlib.suppress(Exception):
-        md.has_remote = bool(repo.remotes)
-
-
-# --- commit stats ---------------------------------------------------------
-
-# Maximum gap between two consecutive commits that still counts as
-# "working time". Gaps longer than this are assumed to be breaks
-# (lunch, errands, next day) and excluded from the sum. 4 hours is
-# conservative — a 5-hour gap between commits almost certainly means
-# the developer took a real break, not that they sat coding the
-# whole time without committing.
-_WORK_SESSION_GAP_SECONDS = 4 * 3600  # 4 hours
-
-
-_WORK_HOURS_COMMIT_LIMIT = 2000
-
-
-def _compute_commit_stats(repo: git.Repo) -> tuple[int, float]:
-    """Return (commit_count, estimated_work_hours).
-
-    Two separate git invocations, both fast:
-
-    1. `git rev-list --count --all` for the exact commit count.
-       Reads from the packfile index — instant even on 100k+ repos.
-    2. `git log --format=%at -n 2000` for the work-hours estimate.
-       Limited to the most recent 2000 commits so large repos
-       (ensembl: 21k, matchmaker: 6k) don't block the scan for
-       seconds. 2000 commits covers months of active work which is
-       more than enough for an orientation metric.
-
-    Work-hours algorithm: sort timestamps ascending, sum inter-commit
-    gaps shorter than `_WORK_SESSION_GAP_SECONDS` (4 h). Gaps longer
-    than that are assumed to be breaks (lunch, sleep, next day).
-    """
-    count_raw = repo.git.rev_list("--count", "--all")
-    commit_count = int(count_raw.strip()) if count_raw.strip() else 0
-
-    if commit_count == 0:
-        return 0, 0.0
-
-    raw = repo.git.log("--format=%at", f"-n{_WORK_HOURS_COMMIT_LIMIT}")
-    if not raw.strip():
-        return commit_count, 0.0
-
-    timestamps = sorted(int(ts) for ts in raw.strip().splitlines())
-
-    total_work_seconds = 0
-    for i in range(1, len(timestamps)):
-        gap = timestamps[i] - timestamps[i - 1]
-        if 0 < gap < _WORK_SESSION_GAP_SECONDS:
-            total_work_seconds += gap
-
-    work_hours = round(total_work_seconds / 3600, 1)
-    return commit_count, work_hours
-
-
-# --- decision signals (ADR 0017) ------------------------------------------
-
-_VELOCITY_WEEKS = 4
-_SECONDS_PER_WEEK = 7 * 86400
-
-
-def _compute_velocity(repo: git.Repo) -> tuple[list[int], str]:
-    """Return (commit_counts_per_week, trend) for the last 4 weeks.
-
-    commit_counts_per_week: [week4_ago, week3_ago, week2_ago, week1_ago]
-    trend: "rising" / "falling" / "flat" / "dead"
-    """
-    import time
-
-    now = int(time.time())
-    raw = repo.git.log(
-        "--format=%at",
-        f"--since={_VELOCITY_WEEKS * 7} days ago",
-    )
-    if not raw.strip():
-        return [0] * _VELOCITY_WEEKS, "dead"
-
-    timestamps = [int(ts) for ts in raw.strip().splitlines()]
-    buckets = [0] * _VELOCITY_WEEKS
-    for ts in timestamps:
-        age = now - ts
-        week_idx = min(age // _SECONDS_PER_WEEK, _VELOCITY_WEEKS - 1)
-        # bucket 0 = oldest week, bucket 3 = most recent
-        buckets[_VELOCITY_WEEKS - 1 - week_idx] += 1
-
-    return buckets, _classify_trend(buckets)
-
-
-def _classify_trend(buckets: list[int]) -> str:
-    """Classify a 4-week velocity vector into a human-readable trend."""
-    if all(b == 0 for b in buckets):
-        return "dead"
-    # Compare first half vs second half
-    first_half = sum(buckets[: len(buckets) // 2])
-    second_half = sum(buckets[len(buckets) // 2 :])
-    if second_half > first_half * 1.5:
-        return "rising"
-    if first_half > second_half * 1.5:
-        return "falling"
-    return "flat"
-
-
-_ACTIVITY_MONTHS = 6
-_SECONDS_PER_MONTH = 30 * 86400
-
-
-def _monthly_activity(repo: git.Repo) -> list[int]:
-    """Return commit counts per month for the last 6 months [oldest..newest]."""
-    import time
-
-    now = int(time.time())
-    raw = repo.git.log(
-        "--format=%at",
-        f"--since={_ACTIVITY_MONTHS * 30} days ago",
-    )
-    buckets = [0] * _ACTIVITY_MONTHS
-    if not raw.strip():
-        return buckets
-    for line in raw.strip().splitlines():
-        age = now - int(line)
-        idx = min(age // _SECONDS_PER_MONTH, _ACTIVITY_MONTHS - 1)
-        buckets[_ACTIVITY_MONTHS - 1 - idx] += 1
-    return buckets
-
-
-def _first_commit_timestamp(repo: git.Repo) -> datetime | None:
-    """Return the timestamp of the very first commit in the repo.
-
-    Note: `git log --reverse -1` does NOT work — `-1` limits BEFORE
-    reverse is applied. Use `--diff-filter` with rev-list instead.
-    """
-    raw = repo.git.rev_list("--max-parents=0", "HEAD", "--format=%at")
-    if not raw.strip():
-        return None
-    # rev-list --format outputs "commit <sha>\n<format>" per entry;
-    # take the first timestamp line (oldest root commit).
-    for line in raw.strip().splitlines():
-        if line.startswith("commit "):
-            continue
-        try:
-            return datetime.fromtimestamp(int(line.strip()))
-        except ValueError:
-            continue
-    return None
-
-
-# --- README ---------------------------------------------------------------
-
-_HEADER_RE = re.compile(r"^#{1,6}\s")
-_INLINE_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
-_INLINE_CODE_RE = re.compile(r"`([^`]+)`")
-
-
-def _extract_readme_excerpt(project_path: Path) -> str | None:
-    """Find the first README in `project_path` and return its first
-    paragraph or so as plain text. Returns None if no README exists.
-    """
-    for name in _README_CANDIDATES:
-        readme = project_path / name
-        if readme.is_file():
-            try:
-                content = readme.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                continue
-            return _first_paragraph_plain(content)
-    return None
-
-
-def _first_paragraph_plain(markdown: str) -> str | None:
-    """Strip headers, code blocks, and inline markdown from the first
-    non-empty paragraph and clamp to ~280 characters.
-    """
-    in_code_fence = False
-    paragraph: list[str] = []
-
-    for raw_line in markdown.splitlines():
-        line = raw_line.strip()
-
-        if line.startswith("```"):
-            in_code_fence = not in_code_fence
-            continue
-        if in_code_fence:
-            continue
-
-        if not line:
-            if paragraph:
-                break
-            continue
-
-        if _HEADER_RE.match(line):
-            continue
-
-        # Strip simple inline markdown noise so the excerpt reads naturally.
-        line = _INLINE_LINK_RE.sub(r"\1", line)
-        line = _INLINE_CODE_RE.sub(r"\1", line)
-        paragraph.append(line)
-
-    if not paragraph:
-        return None
-    text = " ".join(paragraph).strip()
-    if len(text) <= _README_EXCERPT_MAX_CHARS:
-        return text
-    cut = text[:_README_EXCERPT_MAX_CHARS]
-    # Avoid cutting mid-word if there is a sensible space to break on.
-    if " " in cut:
-        cut = cut.rsplit(" ", 1)[0]
-    return cut + "…"
-
-
-# --- ADRs -----------------------------------------------------------------
-
-
-def _find_adr_files(project_path: Path) -> list[Path]:
-    """Look for ADRs in conventional locations and return their paths.
-
-    Returns at most one match per directory; we glob *.md alphabetically
-    so the dashboard can show them in a stable order.
-    """
-    found: list[Path] = []
-    for rel in _ADR_DIRECTORIES:
-        adr_dir = project_path / rel
-        if not adr_dir.is_dir():
-            continue
-        try:
-            adrs = sorted(adr_dir.glob("*.md"))
-        except OSError:
-            continue
-        found.extend(adrs)
-    return found
-
-
-# --- notes ----------------------------------------------------------------
-
-# README files are intentionally excluded from notes; they live in their
-# own field. Lowercase comparison so README.md / readme.md / README.MD
-# all collapse to the same exclusion.
-_README_FILENAMES_LOWER = frozenset(name.lower() for name in _README_CANDIDATES)
-
-
-def _find_note_files(project_path: Path) -> list[Path]:
-    """List `.md` files in `./`, `notes/`, and `docs/`.
-
-    Notes detection: list `.md` files in root + `notes/` + `docs/`.
-    Returns sorted, deduplicated paths so the
-    dashboard can render them in a stable order.
-
-    The **project-root** README is excluded because it already has its
-    own dedicated `readme_excerpt` field. README files in subdirectories
-    (`docs/README.md`, `notes/README.md`) are NOT excluded — they are
-    legitimate notes / documentation indexes that nothing else surfaces.
-    """
-    found: set[Path] = set()
-    for rel in _NOTE_DIRECTORIES:
-        is_project_root = rel == "."
-        note_dir = project_path if is_project_root else project_path / rel
-        if not note_dir.is_dir():
-            continue
-        try:
-            for entry in note_dir.iterdir():
-                if not entry.is_file():
-                    continue
-                if entry.suffix.lower() != ".md":
-                    continue
-                # Only the project-root README is covered elsewhere.
-                if is_project_root and entry.name.lower() in _README_FILENAMES_LOWER:
-                    continue
-                found.add(entry)
-        except OSError:
-            continue
-    return sorted(found)
-
-
-# --- size and file count --------------------------------------------------
-
-
-def _compute_size_and_count(project_path: Path) -> tuple[int, int]:
-    """Walk the project tree and return (total_bytes, file_count).
-
-    Skips well-known noise directories (`.git`, `node_modules`, `.venv`,
-    build artifacts, ...) so the numbers reflect "what the user wrote",
-    not "what the package manager downloaded". Symlinks are followed
-    only via `Path.stat()` (no recursion into symlinked directories,
-    matching the scanner's policy).
-    """
-    total_bytes = 0
-    file_count = 0
-    stack: list[Path] = [project_path]
-    while stack:
-        current = stack.pop()
-        try:
-            entries = list(current.iterdir())
-        except (PermissionError, OSError):
-            continue
-        for entry in entries:
-            if entry.name in _SIZE_WALK_IGNORES:
-                continue
-            try:
-                if entry.is_symlink():
-                    # Don't follow directory symlinks (could cycle).
-                    continue
-                if entry.is_dir():
-                    stack.append(entry)
-                elif entry.is_file():
-                    file_count += 1
-                    total_bytes += entry.stat().st_size
-            except (PermissionError, OSError):
-                continue
-    return total_bytes, file_count
