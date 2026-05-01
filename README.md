@@ -72,6 +72,7 @@ Your AI coding agent (Claude Code, Cursor) gets the same data automatically via 
 - **Weekly pulse** — what changed, what went dormant, what's waiting (`pulse`)
 - **Activity heatmap** — 12-month contribution view, exportable as a shareable HTML card (`card`)
 - **Searches** across ALL projects with ripgrep
+- **Revive** — keeps AI agents oriented in long Claude Code sessions via `context-revive` briefs, with scaffold + copy-prompt actions in the dashboard detail page (requires the `revive` CLI on PATH)
 - **MCP server** — your AI agent knows your full project history
 - **Launches** projects into Cursor, VS Code, Zed, Claude Code, terminal, Finder
 
@@ -178,9 +179,9 @@ how to debug tool calls, see [`docs/mcp.md`](docs/mcp.md).
 ```bash
 uv sync --extra dev
 
-# 375 tests covering scanner / metadata / status / cache / config /
+# 440+ tests covering scanner / metadata / status / cache / config /
 # launcher / search / exporter / bootstrap / CLI / MCP / next / context /
-# pulse / share / heatmap / transitions / purpose / revenue
+# pulse / share / heatmap / transitions / purpose / revenue / revive
 .venv/bin/python -m pytest
 
 # lint + format
