@@ -248,7 +248,8 @@ def copy_to_clipboard(text: str, *, timeout: float = 5.0) -> bool:
     Returns True on success, False if pbcopy is missing or errors. The
     caller is responsible for surfacing that to the UI; this helper
     intentionally never raises so a missing pbcopy on Linux/Windows
-    gracefully degrades to "select and copy from st.code".
+    can be handled by the caller (the UI falls back to a manual-copy
+    ``st.text_area`` rendered via ``_render_fallback_prompt``).
     """
     try:
         subprocess.run(  # noqa: S603 - args list, no shell

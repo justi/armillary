@@ -33,7 +33,7 @@ from armillary.revive_service import (
     revive_show,
     run_revive_init,
 )
-from armillary.ui.detail_work import _format_age
+from armillary.ui.helpers import _format_age
 
 _BRIEF_STATE_LABELS = {
     "configured": "✓ configured",
