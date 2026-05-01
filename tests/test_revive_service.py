@@ -11,11 +11,16 @@ import pytest
 
 from armillary.revive_service import (
     ReviveError,
+    copy_to_clipboard,
+    generate_audit_prompt,
+    generate_suggest_prompt,
     generate_suggest_prompts,
     install_hook_global,
+    launch_claude_yolo,
     probe_capability,
     project_status,
     revive_show,
+    run_revive_init,
 )
 
 
@@ -90,7 +95,8 @@ def test_probe_capability_cache_reuses_first_result(
         calls += 1
         assert cmd == ["/tmp/bin/revive", "--help"]
         return _result(
-            stdout="revive 2.0.0\nshow\ninstall-hook\ndoctor\n", returncode=0
+            stdout=("revive 2.0.0\nshow\ninstall-hook\ndoctor\ninit\nsuggest\naudit\n"),
+            returncode=0,
         )
 
     monkeypatch.setattr(
@@ -115,6 +121,31 @@ def test_project_status_without_revive_dir_is_missing(tmp_path: Path) -> None:
     assert status.purpose_line is None
     assert status.static_path is None
     assert status.hook_scope == "none"
+    assert status.last_modified is None
+
+
+def test_project_status_populates_last_modified_when_static_exists(
+    tmp_path: Path,
+) -> None:
+    """The UI shows the brief's age inline so users do not have to click
+    Preview just to know how stale it is."""
+    import os
+    from datetime import datetime
+
+    static_path = tmp_path / ".revive" / "static.md"
+    static_path.parent.mkdir(parents=True)
+    static_path.write_text(
+        "PURPOSE: demo\nINVARIANTS:\n  - x\nGOTCHAS:\n  - y\n",
+        encoding="utf-8",
+    )
+    # Pin mtime to a known instant so the assertion is deterministic.
+    pinned = datetime(2026, 4, 1, 12, 0, 0).timestamp()
+    os.utime(static_path, (pinned, pinned))
+
+    status = project_status(tmp_path, home=tmp_path / "home")
+
+    assert status.last_modified is not None
+    assert status.last_modified.timestamp() == pinned
 
 
 def test_project_status_placeholder_brief(tmp_path: Path) -> None:
@@ -411,3 +442,324 @@ def test_generate_suggest_prompts_missing_binary_returns_empty(
     written = generate_suggest_prompts([tmp_path], output_dir=tmp_path / "out")
 
     assert written == []
+
+
+def test_generate_suggest_prompt_returns_stdout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+
+    def fake_run(cmd, **kwargs):
+        assert cmd == ["/tmp/bin/revive", "suggest"]
+        assert kwargs["cwd"] == tmp_path
+        return SimpleNamespace(stdout="prompt body\n", stderr="", returncode=0)
+
+    monkeypatch.setattr("armillary.revive_service.subprocess.run", fake_run)
+
+    assert generate_suggest_prompt(tmp_path) == "prompt body\n"
+
+
+def test_generate_suggest_prompt_raises_on_missing_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("armillary.revive_service.shutil.which", lambda _: None)
+    with pytest.raises(ReviveError, match="not found on PATH"):
+        generate_suggest_prompt(tmp_path)
+
+
+def test_generate_suggest_prompt_raises_on_nonzero_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+    monkeypatch.setattr(
+        "armillary.revive_service.subprocess.run",
+        lambda *_, **__: SimpleNamespace(stdout="", stderr="kaboom\n", returncode=1),
+    )
+    with pytest.raises(ReviveError, match="kaboom"):
+        generate_suggest_prompt(tmp_path)
+
+
+def test_generate_suggest_prompt_falls_back_to_stdout_when_stderr_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Some revive subcommands write diagnostics to stdout, not stderr.
+
+    The error message should still be informative — never blank or just
+    the exit code when something useful was printed.
+    """
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+    monkeypatch.setattr(
+        "armillary.revive_service.subprocess.run",
+        lambda *_, **__: SimpleNamespace(
+            stdout="missing scaffold\n", stderr="", returncode=2
+        ),
+    )
+    with pytest.raises(ReviveError, match="missing scaffold"):
+        generate_suggest_prompt(tmp_path)
+
+
+def test_generate_suggest_prompt_falls_back_to_exit_code_when_silent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+    monkeypatch.setattr(
+        "armillary.revive_service.subprocess.run",
+        lambda *_, **__: SimpleNamespace(stdout="", stderr="", returncode=7),
+    )
+    with pytest.raises(ReviveError, match="exit code 7"):
+        generate_suggest_prompt(tmp_path)
+
+
+def test_generate_audit_prompt_invokes_audit_subcommand(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+    seen: list = []
+
+    def fake_run(cmd, **kwargs):
+        seen.append(cmd)
+        return SimpleNamespace(stdout="audit body\n", stderr="", returncode=0)
+
+    monkeypatch.setattr("armillary.revive_service.subprocess.run", fake_run)
+
+    assert generate_audit_prompt(tmp_path) == "audit body\n"
+    assert seen == [["/tmp/bin/revive", "audit"]]
+
+
+def test_generate_audit_prompt_timeout_wraps_into_revive_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+
+    def fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
+
+    monkeypatch.setattr("armillary.revive_service.subprocess.run", fake_run)
+    with pytest.raises(ReviveError, match="timed out"):
+        generate_audit_prompt(tmp_path, timeout=1.0)
+
+
+def test_run_revive_init_returns_success_and_combined_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+    monkeypatch.setattr(
+        "armillary.revive_service.subprocess.run",
+        lambda *_, **__: SimpleNamespace(
+            stdout="created: .revive/static.md\n", stderr="", returncode=0
+        ),
+    )
+
+    success, output = run_revive_init(tmp_path)
+
+    assert success is True
+    assert "created" in output
+
+
+def test_run_revive_init_returns_false_on_missing_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("armillary.revive_service.shutil.which", lambda _: None)
+
+    success, output = run_revive_init(tmp_path)
+
+    assert success is False
+    assert "not found on PATH" in output
+
+
+def test_run_revive_init_returns_false_on_nonzero_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+    monkeypatch.setattr(
+        "armillary.revive_service.subprocess.run",
+        lambda *_, **__: SimpleNamespace(
+            stdout="", stderr="cannot scaffold\n", returncode=1
+        ),
+    )
+
+    success, output = run_revive_init(tmp_path)
+
+    assert success is False
+    assert "cannot scaffold" in output
+
+
+def test_copy_to_clipboard_pipes_text_to_pbcopy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["input"] = kwargs.get("input")
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr("armillary.revive_service.subprocess.run", fake_run)
+
+    assert copy_to_clipboard("hello") is True
+    assert captured["cmd"] == ["pbcopy"]
+    assert captured["input"] == b"hello"
+
+
+def test_copy_to_clipboard_returns_false_when_pbcopy_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args, **kwargs):
+        raise FileNotFoundError("pbcopy")
+
+    monkeypatch.setattr("armillary.revive_service.subprocess.run", fake_run)
+
+    assert copy_to_clipboard("anything") is False
+
+
+def test_launch_claude_yolo_invokes_osascript_with_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/usr/bin/osascript"
+    )
+    captured: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr("armillary.revive_service.subprocess.run", fake_run)
+
+    success, _ = launch_claude_yolo(tmp_path)
+
+    assert success is True
+    assert captured["cmd"][0] == "osascript"
+    write_text_arg = next(
+        arg for arg in captured["cmd"] if arg.startswith("write text")
+    )
+    assert str(tmp_path) in write_text_arg
+    assert "claude --dangerously-skip-permissions" in write_text_arg
+
+
+def test_launch_claude_yolo_returns_false_without_osascript(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("armillary.revive_service.shutil.which", lambda _: None)
+
+    success, message = launch_claude_yolo(tmp_path)
+
+    assert success is False
+    assert "osascript" in message
+
+
+def test_launch_claude_yolo_returns_false_on_nonzero_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/usr/bin/osascript"
+    )
+    monkeypatch.setattr(
+        "armillary.revive_service.subprocess.run",
+        lambda *_, **__: SimpleNamespace(
+            stdout="", stderr="iTerm not running\n", returncode=1
+        ),
+    )
+
+    success, message = launch_claude_yolo(tmp_path)
+
+    assert success is False
+    assert "iTerm" in message
+
+
+def test_launch_claude_yolo_returns_false_when_claude_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If `claude` is not on PATH, fail before opening the iTerm tab.
+
+    Without the preflight the user sees a 🚀 success toast immediately
+    followed by `command not found` in the new tab — confusing.
+    """
+    answers = {"osascript": "/usr/bin/osascript", "claude": None}
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which",
+        lambda name: answers.get(name),
+    )
+
+    success, message = launch_claude_yolo(tmp_path)
+
+    assert success is False
+    assert "claude" in message.lower()
+
+
+def test_launch_claude_yolo_quotes_path_with_spaces_and_metacharacters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Repo paths with spaces, semicolons, $, or quotes must be safely
+    embedded in the `cd` command and escaped for the AppleScript string."""
+    weird = tmp_path / 'with "quoted" and spaces; rm -rf $HOME'
+    weird.mkdir()
+    monkeypatch.setattr("armillary.revive_service.shutil.which", lambda _: "/usr/bin/x")
+    captured: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr("armillary.revive_service.subprocess.run", fake_run)
+
+    success, _ = launch_claude_yolo(weird)
+
+    assert success is True
+    write_text_arg = next(
+        arg for arg in captured["cmd"] if arg.startswith("write text")
+    )
+    # AppleScript wrapping: the inner string is enclosed in literal
+    # double quotes; any literal " inside the path is escaped with \".
+    body = write_text_arg.removeprefix("write text ")
+    assert body.startswith('"') and body.endswith('"')
+    assert '\\"quoted\\"' in body, "literal quotes must be backslash-escaped"
+    # Shell-level: the `cd` argument is shlex-quoted (single quotes),
+    # so the metacharacters land inside that single-quoted string and
+    # cannot break the && claude tail.
+    inner = body[1:-1]
+    cd_part, _, claude_part = inner.partition(" && ")
+    assert cd_part.startswith("cd '")
+    assert cd_part.endswith("'")
+    assert claude_part == "claude --dangerously-skip-permissions"
+
+
+def test_probe_capability_requires_init_suggest_audit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The probe must mark revive incompatible if any of the subcommands
+    armillary actually invokes (init / suggest / audit) is missing from
+    --help, otherwise the UI offers buttons that fail only after click."""
+    monkeypatch.setattr(
+        "armillary.revive_service.shutil.which", lambda _: "/tmp/bin/revive"
+    )
+    monkeypatch.setattr(
+        "armillary.revive_service.subprocess.run",
+        lambda *_, **__: SimpleNamespace(
+            stdout=(
+                "revive 1.0.0\n"
+                "Commands: show install-hook doctor\n"  # missing init/suggest/audit
+            ),
+            stderr="",
+            returncode=0,
+        ),
+    )
+    capability = probe_capability()
+    assert capability.binary_available is True
+    assert capability.compatible is False

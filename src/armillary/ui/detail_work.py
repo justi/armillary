@@ -12,6 +12,7 @@ from pathlib import Path
 import streamlit as st
 
 from armillary.models import Project
+from armillary.ui.helpers import _format_age
 
 _PORCELAIN_MAP = {
     "??": "new     ",
@@ -33,18 +34,6 @@ def _humanize_porcelain(line: str) -> str:
         label = _PORCELAIN_MAP.get(prefix, prefix)
         return f"{label} {path}"
     return line
-
-
-def _format_age(seconds: float) -> str:
-    """Human-readable age from seconds."""
-    if seconds < 3600:
-        return f"{seconds / 60:.0f}min"
-    if seconds < 86400:
-        return f"{seconds / 3600:.0f}h"
-    days = seconds / 86400
-    if days < 30:
-        return f"{days:.0f}d"
-    return f"{days / 30:.0f}mo"
 
 
 def _render_dirty_or_clean(ctx: object) -> None:

@@ -103,6 +103,18 @@ def _shorten_home(path: Path) -> str:
     return _shorten_home_impl(path)
 
 
+def _format_age(seconds: float) -> str:
+    """Human-readable age from seconds."""
+    if seconds < 3600:
+        return f"{seconds / 60:.0f}min"
+    if seconds < 86400:
+        return f"{seconds / 3600:.0f}h"
+    days = seconds / 86400
+    if days < 30:
+        return f"{days:.0f}d"
+    return f"{days / 30:.0f}mo"
+
+
 # --- shared scan operation -------------------------------------------------
 
 

@@ -16,16 +16,25 @@ import functools
 import hashlib
 import json
 import re
+import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
 BriefState = Literal["configured", "stub", "placeholder", "missing", "unknown"]
 HookScope = Literal["none", "project", "global", "both"]
 
-_REQUIRED_SUBCOMMANDS = ("show", "install-hook", "doctor")
+_REQUIRED_SUBCOMMANDS = (
+    "show",
+    "install-hook",
+    "doctor",
+    "init",
+    "suggest",
+    "audit",
+)
 _PLACEHOLDER_MARKER = "run `revive init`"
 _PURPOSE_RE = re.compile(r"^PURPOSE:\s*(.+)$", re.MULTILINE)
 _VERSION_RE = re.compile(r"\b\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.]+)?\b")
@@ -50,6 +59,7 @@ class ReviveStatus:
     purpose_line: str | None
     static_path: Path | None
     hook_scope: HookScope
+    last_modified: datetime | None = None
 
 
 @functools.cache
@@ -107,8 +117,10 @@ def project_status(project_path: Path, *, home: Path | None = None) -> ReviveSta
             purpose_line=None,
             static_path=None,
             hook_scope=hook_scope,
+            last_modified=None,
         )
 
+    last_modified = _safe_mtime(static_path)
     try:
         content = static_path.read_text(encoding="utf-8")
     except OSError:
@@ -118,6 +130,7 @@ def project_status(project_path: Path, *, home: Path | None = None) -> ReviveSta
             purpose_line=None,
             static_path=static_path,
             hook_scope=hook_scope,
+            last_modified=last_modified,
         )
 
     purpose_line = _purpose_line(content)
@@ -142,7 +155,16 @@ def project_status(project_path: Path, *, home: Path | None = None) -> ReviveSta
         purpose_line=purpose_line,
         static_path=static_path,
         hook_scope=hook_scope,
+        last_modified=last_modified,
     )
+
+
+def _safe_mtime(path: Path) -> datetime | None:
+    """Read a file's mtime as a tz-naive datetime; None on stat failure."""
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime)
+    except OSError:
+        return None
 
 
 def revive_show(project_path: Path, *, timeout: float = 5.0) -> str:
@@ -197,6 +219,179 @@ def install_hook_global(*, timeout: float = 10.0) -> tuple[bool, str]:
 
     combined_output = f"{result.stdout}{result.stderr}"
     return result.returncode == 0, combined_output
+
+
+def generate_suggest_prompt(project_path: Path, *, timeout: float = 10.0) -> str:
+    """Run `revive suggest` and return its stdout (an LLM-ready prompt).
+
+    The user pastes this into a fresh Claude Code session in the target
+    project to fill INVARIANTS / GOTCHAS interactively. Raises
+    ``ReviveError`` on missing binary, timeout, or nonzero exit.
+    """
+    return _run_prompt_command(project_path, "suggest", timeout=timeout)
+
+
+def generate_audit_prompt(project_path: Path, *, timeout: float = 10.0) -> str:
+    """Run `revive audit` and return its stdout.
+
+    Audit is the second-pass gap check. revive's design requires it to
+    run in a *fresh* agent session so the clean context window can
+    surface non-inferable facts the suggest pass missed. The user pastes
+    the returned prompt into a new Claude Code session.
+    """
+    return _run_prompt_command(project_path, "audit", timeout=timeout)
+
+
+def copy_to_clipboard(text: str, *, timeout: float = 5.0) -> bool:
+    """Pipe TEXT into the macOS pbcopy clipboard helper.
+
+    Returns True on success, False if pbcopy is missing or errors. The
+    caller is responsible for surfacing that to the UI; this helper
+    intentionally never raises so a missing pbcopy on Linux/Windows
+    can be handled by the caller (the UI falls back to a manual-copy
+    ``st.text_area`` rendered via ``_render_fallback_prompt``).
+    """
+    try:
+        subprocess.run(  # noqa: S603 - args list, no shell
+            ["pbcopy"],
+            input=text.encode("utf-8"),
+            check=True,
+            timeout=timeout,
+        )
+    except (
+        FileNotFoundError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        OSError,
+    ):
+        return False
+    return True
+
+
+def launch_claude_yolo(
+    project_path: Path, *, timeout: float = 10.0
+) -> tuple[bool, str]:
+    """Open a new iTerm tab in PROJECT_PATH running claude with skip permissions.
+
+    Mac-only convenience paired with ``copy_to_clipboard`` so the user
+    can click Copy then Launch and immediately paste into a freshly
+    opened session. Mirrors the ``iterm-claude-yolo`` builtin launcher
+    rather than going through the full launcher API to keep this UI
+    surface Project-free.
+
+    Returns ``(success, message)``. Never raises.
+    """
+    if shutil.which("osascript") is None:
+        return False, "osascript not on PATH (macOS-only feature)"
+    if shutil.which("claude") is None:
+        # The iTerm tab will still open, but `claude` will fail there.
+        # Surface the missing binary up front so the user does not see
+        # a 🚀 toast followed by a `command not found` in their tab.
+        return False, "`claude` CLI not on PATH — install Claude Code first"
+    quoted_path = shlex.quote(str(project_path))
+    inner_shell = f"cd {quoted_path} && claude --dangerously-skip-permissions"
+    inner_applescript = _escape_applescript_string(inner_shell)
+    args = [
+        "osascript",
+        "-e",
+        'tell application "iTerm"',
+        "-e",
+        "activate",
+        "-e",
+        "tell current window",
+        "-e",
+        "create tab with default profile",
+        "-e",
+        "tell current session",
+        "-e",
+        f'write text "{inner_applescript}"',
+        "-e",
+        "end tell",
+        "-e",
+        "end tell",
+        "-e",
+        "end tell",
+    ]
+    try:
+        result = subprocess.run(  # noqa: S603 - args list, no shell
+            args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=timeout,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+        return False, f"failed to launch iTerm: {exc}"
+    if result.returncode != 0:
+        return False, result.stderr.strip() or "osascript exited nonzero"
+    return True, "Sent to iTerm — paste the prompt in the new tab."
+
+
+def _escape_applescript_string(value: str) -> str:
+    """Escape backslashes and double-quotes for an AppleScript string literal."""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def run_revive_init(project_path: Path, *, timeout: float = 10.0) -> tuple[bool, str]:
+    """Run `revive init` to scaffold .revive/static.md from README/manifest.
+
+    Pure file operation (no LLM). Returns ``(success, combined_output)``.
+    Use this to bring a project from "missing" to "placeholder" state
+    before generating a suggest prompt.
+    """
+    binary = shutil.which("revive")
+    if binary is None:
+        return False, "revive binary not found on PATH"
+    try:
+        result = subprocess.run(  # noqa: S603 - args list, no shell
+            [binary, "init"],
+            cwd=project_path,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"revive init timed out after {timeout}s"
+    except FileNotFoundError:
+        return False, "revive binary not found on PATH"
+    except OSError as exc:
+        return False, f"revive init failed: {exc}"
+    combined_output = f"{result.stdout}{result.stderr}"
+    return result.returncode == 0, combined_output
+
+
+def _run_prompt_command(project_path: Path, subcommand: str, *, timeout: float) -> str:
+    binary = shutil.which("revive")
+    if binary is None:
+        raise ReviveError("revive binary not found on PATH")
+    try:
+        result = subprocess.run(  # noqa: S603 - args list, no shell
+            [binary, subcommand],
+            cwd=project_path,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ReviveError(f"revive {subcommand} timed out after {timeout}s") from exc
+    except FileNotFoundError as exc:
+        raise ReviveError("revive binary not found on PATH") from exc
+    except OSError as exc:
+        raise ReviveError(f"revive {subcommand} failed: {exc}") from exc
+    if result.returncode != 0:
+        # Some revive subcommands write diagnostics to stdout, not stderr.
+        # Stitch both (and the exit code) into the surfaced message so the
+        # UI never shows an empty failure reason.
+        detail = (result.stderr.strip() or result.stdout.strip()) or (
+            f"exit code {result.returncode}"
+        )
+        raise ReviveError(f"revive {subcommand} failed: {detail}")
+    return result.stdout
 
 
 def generate_suggest_prompts(
