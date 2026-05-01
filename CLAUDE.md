@@ -88,10 +88,11 @@ cli_share.py        — share / card / pulse
 cli_helpers.py      — shared CLI helpers (_resolve_project_or_report, _print_delight_card, …)
 ```
 
-All UI and CLI modules are under the 400-line target as of this
-writing. A handful of non-UI modules (``metadata.py``, ``cache.py``,
-``mcp_server.py``) remain above 400 and are tracked as follow-up tech
-debt — new work should not add to them.
+All UI, CLI, and core service modules are under the 400-line target
+as of this writing. The previously-flagged trio (``metadata.py``,
+``cache.py``, ``mcp_server.py``) was split into focused sibling
+modules in PRs #34/#35/#36 — keep new work spread across the existing
+seams rather than re-growing any one file past the target.
 
 ### 4. Prefer typed models over dict[str, Any]
 
