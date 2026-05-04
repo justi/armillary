@@ -9,10 +9,12 @@ imports ``mcp_tools`` during startup.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from armillary.cache import Cache
 from armillary.exclude_service import filter_excluded
 from armillary.mcp_helpers import (
+    _RESPONSE_MAX_CHARS,
     _clamp_max_results,
     _get_project_roots,
     _hit_to_dict,
@@ -21,6 +23,8 @@ from armillary.mcp_helpers import (
     _safe_search_json,
 )
 from armillary.mcp_instance import mcp
+from armillary.revive_enhanced import generate_enhanced_brief
+from armillary.revive_service import ReviveError
 from armillary.search import LiteralSearch
 from armillary.status_override import filter_archived
 from armillary.status_override import get_override as get_override_fn
@@ -358,3 +362,28 @@ def armillary_context(project_name: str) -> str:
         result["monthly_revenue_usd"] = rev
 
     return json.dumps(result, separators=(",", ":"), default=str)
+
+
+@mcp.tool()
+def armillary_revive(project_path: str) -> str:
+    """Call this before resuming work in a project that has a revive brief.
+
+    Returns the markdown brief plus up to 3 quoted code blocks from
+    your other indexed repositories that match the project name.
+
+    Example: armillary_revive("/path/to/project") → markdown brief
+    plus matches.
+    """
+    try:
+        output = generate_enhanced_brief(Path(project_path))
+    except ReviveError as exc:
+        return f"revive failed: {exc}"
+    except Exception as exc:  # noqa: BLE001 — defensive at MCP boundary
+        return f"armillary_revive failed: {exc}"
+    if len(output) <= _RESPONSE_MAX_CHARS:
+        return output
+    # Match the safety budget the other MCP tools enforce so a huge brief
+    # or a code block stuffed with content cannot blow up the transport.
+    truncated_marker = "\n\n[truncated to fit response budget]"
+    keep = _RESPONSE_MAX_CHARS - len(truncated_marker)
+    return output[:keep] + truncated_marker

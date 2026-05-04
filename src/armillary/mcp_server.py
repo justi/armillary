@@ -1,6 +1,6 @@
 """MCP server entrypoint for `armillary mcp-serve`.
 
-Six tools — see ``mcp_tools`` for implementations:
+Seven tools — see ``mcp_tools`` for implementations:
 
 - ``armillary_next`` — what should I work on today? (momentum/zombie/gold)
 - ``armillary_search`` — ripgrep literal search across all indexed repos
@@ -8,6 +8,8 @@ Six tools — see ``mcp_tools`` for implementations:
 - ``armillary_context`` — where was I? project state for re-entry
 - ``armillary_steal`` — find reusable 40-line blocks from prior repos
 - ``armillary_pulse`` — weekly pulse over the portfolio
+- ``armillary_revive`` — project brief plus up to 3 quoted blocks
+  from other repos
 
 This module is the public seam: it owns ``run_server`` and re-exports
 the helpers + tool callables that ``tests/test_mcp_server.py`` imports
@@ -42,6 +44,7 @@ from armillary.mcp_tools import (
     armillary_next,
     armillary_projects,
     armillary_pulse,
+    armillary_revive,
     armillary_search,
     armillary_steal,
 )
@@ -54,6 +57,7 @@ __all__ = [
     "armillary_next",
     "armillary_projects",
     "armillary_pulse",
+    "armillary_revive",
     "armillary_search",
     "armillary_steal",
     # Helpers re-exported for tests.
