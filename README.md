@@ -169,6 +169,58 @@ armillary exposes seven MCP tools that Claude Code / Cursor can call:
 For details on the transport, lifecycle, cache-staleness semantics, and
 how to debug tool calls, see [`docs/mcp.md`](docs/mcp.md).
 
+### `armillary_revive` — revive with receipts
+
+Vanilla `revive show` (from the `context-revive` CLI) tells the agent
+what the project is. `armillary_revive` adds the second half of the
+question: *what did I already write that solves the same thing
+elsewhere?*
+
+**What it returns:** the vanilla revive brief verbatim, followed by a
+`STEAL_HITS` markdown section with up to three quoted code blocks
+ranked across your *other* indexed repositories. Each block carries
+its source project, file path, line range, and detected symbol. When
+no other repo matches the project name, the section is omitted
+entirely — the brief comes back unchanged.
+
+```text
+<vanilla revive show output>
+
+## STEAL_HITS — code you wrote in other repos
+
+- other-project/src/handler.py:42-81 — handle_event
+  ```py
+  def handle_event(payload):
+      ...
+  ```
+```
+
+**When to call it:** at the start of a session in a project the agent
+hasn't seen before, especially after a long break. The cross-repo
+quotes are most valuable for projects whose name token shows up in
+sibling repos (test files referencing it, integration specs, a fork,
+documentation that names it). For tool-style projects whose name
+appears nowhere else, the section will be empty — that's expected,
+not a bug.
+
+**Requirements:**
+
+- The `revive` CLI on `PATH` (`pipx install context-revive`).
+- A `.revive/static.md` in the target project — bootstrap once with
+  `revive init`, then fill it via the suggest prompt from the dashboard.
+- An armillary scan that has populated the code index
+  (`armillary scan` or the dashboard "Scan now" button) — without it,
+  `STEAL_HITS` falls back to brief-only.
+
+**Failure modes (graceful):**
+
+- `revive` binary missing → returns a one-line `revive failed: …`
+  string instead of crashing the agent's tool call.
+- Code index missing or built without FTS5 → returns the vanilla
+  brief with no `STEAL_HITS` section.
+- Output over the shared MCP response budget → trimmed with a
+  `[truncated to fit response budget]` marker.
+
 ## Privacy
 
 `armillary` **never sends data off-device**. Project index, metadata, cache, and config all live on your local disk.
