@@ -294,13 +294,13 @@ def _sanitize_fts_query(query: str) -> str:
 
     Each whitespace-delimited token becomes a prefix-matched quoted
     phrase (``"token" *``). Prefix matching widens the recall: a
-    query like ``linked_flow`` now matches ``linked_flow_policy``,
-    ``linked_flow_service``, etc., which FTS5's simple tokenizer
+    query like ``user_session`` now matches ``user_session_policy``,
+    ``user_session_service``, etc., which FTS5's simple tokenizer
     would otherwise treat as distinct tokens.
 
     CamelCase vs snake_case is a separate concern — FTS5's simple
-    tokenizer does not split ``LinkedFlow`` into ``linked`` + ``flow``,
-    so users searching for ``linked_flow`` will not hit ``LinkedFlow``.
+    tokenizer does not split ``UserSession`` into ``user`` + ``session``,
+    so users searching for ``user_session`` will not hit ``UserSession``.
     Callers who care should submit both variants or use the dedicated
     matcher (future work).
 

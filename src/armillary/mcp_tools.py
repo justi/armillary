@@ -278,8 +278,8 @@ def armillary_context(project_name: str) -> str:
     or "what's the state of X". NOT auto-triggered on directory change.
 
     Examples:
-    - armillary_context("pdf_to_quiz") → branch, 1 dirty file, last 5 commits
-    - armillary_context("speak-faster") → dormant, last commit 3 months ago
+    - armillary_context("my-saas-app") → branch, 1 dirty file, last 5 commits
+    - armillary_context("old-prototype") → dormant, last commit 3 months ago
     """
     from armillary.context_service import get_context
 

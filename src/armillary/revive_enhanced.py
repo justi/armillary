@@ -2,8 +2,7 @@
 
 Query strategy v0.1: the project name is the only signal we send to
 ``steal()``. Empirically this gives 5–8 cross-repo matches for typical
-underscore / dash naming (``pdf_to_quiz``, ``reddit_promo_planner``,
-``claude-code-project-boundary``) because FTS5 tokenises the separators
+underscore / dash naming because FTS5's tokeniser splits separators
 into meaningful sub-tokens. An earlier draft also folded in the last
 commit subject, but a 6-token AND query returns zero hits in practice.
 Single-token ranking is the simplest thing that delivers real value.
