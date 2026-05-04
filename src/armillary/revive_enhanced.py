@@ -14,7 +14,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from armillary.cache import Cache
+from armillary.exclude_service import is_excluded
+from armillary.models import Status
 from armillary.revive_service import revive_show
+from armillary.status_override import get_override
 from armillary.steal_service import steal
 
 
@@ -36,9 +39,13 @@ def generate_enhanced_brief(
     if not query:
         return brief
 
-    # Overfetch and filter out hits from the project being revived — the
-    # tool promises quotes from OTHER repos. Without this, a project that
-    # has indexed itself can crowd out real cross-repo matches.
+    # Overfetch and filter so we can drop:
+    # 1. Hits from the project being revived (the tool promises quotes
+    #    from OTHER repos).
+    # 2. Hits from repos the user has excluded or archived via the panel.
+    #    `armillary_steal` keeps those on purpose (user explicitly mining
+    #    their own dead code), but for revive the panel choice should
+    #    apply, matching every other MCP tool's behaviour.
     own_repo = _resolve(project_path)
     try:
         raw = steal(query, limit=steal_limit * 3)
@@ -48,7 +55,7 @@ def generate_enhanced_brief(
         # own, so swallow the failure and fall back to brief-only.
         return brief
 
-    results = [r for r in raw if _resolve(Path(r.block.repo_path)) != own_repo][
+    results = [r for r in raw if _is_keepable(r.block.repo_path, own_repo)][
         :steal_limit
     ]
     if not results:
@@ -107,6 +114,20 @@ def _resolve(path: Path) -> str:
         return str(path.resolve())
     except OSError:
         return str(path)
+
+
+def _is_keepable(repo_path: str, own_repo: str) -> bool:
+    """True if a steal result should appear in STEAL_HITS.
+
+    Drops the project being revived (own-repo filter), repos the user
+    has excluded via the panel, and repos the user archived via status
+    override. Other MCP tools honour the same panel choices.
+    """
+    if _resolve(Path(repo_path)) == own_repo:
+        return False
+    if is_excluded(repo_path):
+        return False
+    return get_override(repo_path) is not Status.ARCHIVED
 
 
 def _project_name(project_path: Path) -> str:

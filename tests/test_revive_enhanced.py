@@ -236,6 +236,67 @@ def test_generate_enhanced_brief_renders_relative_block_path(
     assert "/repos/invoicer/src/price.py" not in out
 
 
+def test_generate_enhanced_brief_drops_excluded_repos(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repos the user has excluded via the panel must not appear in
+    STEAL_HITS, even though `steal()` itself returns them. Mirrors how
+    `armillary_projects` and `armillary_next` already behave.
+    """
+    excluded_block = _block(
+        repo_path="/repos/dead-fork", path="/repos/dead-fork/src/x.py"
+    )
+    keep_block = _block(
+        repo_path="/repos/active-sibling", path="/repos/active-sibling/src/y.py"
+    )
+    _patch_helper_dependencies(
+        monkeypatch,
+        steal_results=[
+            _result(excluded_block, project_name="dead-fork"),
+            _result(keep_block, project_name="active-sibling"),
+        ],
+        cache_project_name="me",
+    )
+
+    def _is_excluded(path: str) -> bool:
+        return path == "/repos/dead-fork"
+
+    monkeypatch.setattr("armillary.revive_enhanced.is_excluded", _is_excluded)
+
+    out = generate_enhanced_brief(Path("/repos/me"))
+
+    assert "active-sibling/src/y.py" in out
+    assert "dead-fork" not in out
+
+
+def test_generate_enhanced_brief_drops_archived_repos(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repos the user archived via status override must also be dropped."""
+    from armillary.models import Status
+
+    archived_block = _block(repo_path="/repos/old", path="/repos/old/src/x.py")
+    keep_block = _block(repo_path="/repos/active", path="/repos/active/src/y.py")
+    _patch_helper_dependencies(
+        monkeypatch,
+        steal_results=[
+            _result(archived_block, project_name="old"),
+            _result(keep_block, project_name="active"),
+        ],
+        cache_project_name="me",
+    )
+
+    def _override(path: str) -> Status | None:
+        return Status.ARCHIVED if path == "/repos/old" else None
+
+    monkeypatch.setattr("armillary.revive_enhanced.get_override", _override)
+
+    out = generate_enhanced_brief(Path("/repos/me"))
+
+    assert "active/src/y.py" in out
+    assert "old/src/x.py" not in out
+
+
 def test_generate_enhanced_brief_handles_repo_prefix_collision(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
