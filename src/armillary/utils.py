@@ -112,10 +112,31 @@ def find_projects_by_name(projects: list[Project], project_name: str) -> list[Pr
 
 
 def summarize_project_matches(projects: list[Project], *, limit: int = 5) -> str:
-    """Return a short human-readable summary of matching project names."""
-    names = ", ".join(project.name for project in projects[:limit])
+    """Return a short human-readable summary of matching project names.
+
+    When the visible matches contain duplicate names (common with
+    duplicate umbrellas like ``RubymineProjects/`` + ``projects_prod/``
+    holding the same repo), each entry is annotated with its
+    home-shortened path so the user can disambiguate. Without that
+    annotation, the message ``'foo' is ambiguous: foo, foo`` gives the
+    user no way to "be more specific".
+    """
+    if not projects:
+        return ""
+
+    visible = projects[:limit]
+    names = [project.name for project in visible]
+    has_duplicates = len(set(names)) < len(names)
+
+    if has_duplicates:
+        rendered = ", ".join(
+            f"{project.name} ({shorten_home(project.path)})" for project in visible
+        )
+    else:
+        rendered = ", ".join(names)
+
     suffix = "" if len(projects) <= limit else f" (+{len(projects) - limit} more)"
-    return f"{names}{suffix}"
+    return f"{rendered}{suffix}"
 
 
 def _load_json(
