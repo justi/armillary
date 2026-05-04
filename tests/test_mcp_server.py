@@ -22,9 +22,11 @@ from armillary.mcp_server import (
     _safe_json,
     armillary_context,
     armillary_projects,
+    armillary_revive,
     armillary_search,
 )
 from armillary.models import Project, ProjectMetadata, ProjectType, Status
+from armillary.revive_service import ReviveError
 from armillary.search import SearchHit
 
 _NOW = datetime(2026, 4, 12, 12, 0, 0)
@@ -372,3 +374,63 @@ def test_armillary_context_returns_error_for_ambiguous(
     result = armillary_context("alpha")
 
     assert "Ambiguous" in result
+
+
+# --- armillary_revive ------------------------------------------------------
+
+
+def test_armillary_revive_returns_helper_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "armillary.mcp_tools.generate_enhanced_brief",
+        lambda path: f"BRIEF for {path}",
+    )
+
+    result = armillary_revive("/repos/foo")
+
+    assert result == "BRIEF for /repos/foo"
+
+
+def test_armillary_revive_returns_string_on_revive_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _raise(_path: Path) -> str:
+        raise ReviveError("revive binary not found on PATH")
+
+    monkeypatch.setattr("armillary.mcp_tools.generate_enhanced_brief", _raise)
+
+    result = armillary_revive("/repos/foo")
+
+    assert result.startswith("revive failed:")
+    assert "not found" in result
+
+
+def test_armillary_revive_returns_string_on_unexpected_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _raise(_path: Path) -> str:
+        raise ValueError("totally unexpected")
+
+    monkeypatch.setattr("armillary.mcp_tools.generate_enhanced_brief", _raise)
+
+    result = armillary_revive("/repos/foo")
+
+    assert result.startswith("armillary_revive failed:")
+    assert "unexpected" in result
+
+
+def test_armillary_revive_clamps_to_response_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Match the safety budget the other MCP tools enforce."""
+    huge = "x" * (_RESPONSE_MAX_CHARS + 5_000)
+    monkeypatch.setattr(
+        "armillary.mcp_tools.generate_enhanced_brief",
+        lambda _path: huge,
+    )
+
+    result = armillary_revive("/repos/foo")
+
+    assert len(result) <= _RESPONSE_MAX_CHARS
+    assert result.endswith("[truncated to fit response budget]")

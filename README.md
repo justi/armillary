@@ -72,7 +72,7 @@ Your AI coding agent (Claude Code, Cursor) gets the same data automatically via 
 - **Weekly pulse** — what changed, what went dormant, what's waiting (`pulse`)
 - **Activity heatmap** — 12-month contribution view, exportable as a shareable HTML card (`card`)
 - **Searches** across ALL projects with ripgrep
-- **Revive** — keeps AI agents oriented in long Claude Code sessions via `context-revive` briefs, with scaffold + copy-prompt actions in the dashboard detail page (requires the `revive` CLI on PATH)
+- **Revive** — keeps AI agents oriented in long Claude Code sessions via `context-revive` briefs, with scaffold + copy-prompt actions in the dashboard detail page; `armillary_revive` MCP tool also pulls up to three quoted code blocks from your other repos so the agent can reuse what you've already written (requires the `revive` CLI on PATH)
 - **MCP server** — your AI agent knows your full project history
 - **Launches** projects into Cursor, VS Code, Zed, Claude Code, terminal, Finder
 
@@ -141,7 +141,7 @@ armillary start
 
 ## MCP server for AI coding agents
 
-armillary exposes five MCP tools that Claude Code / Cursor can call:
+armillary exposes seven MCP tools that Claude Code / Cursor can call:
 
 | Tool | What it does | Speed |
 |---|---|---|
@@ -150,6 +150,8 @@ armillary exposes five MCP tools that Claude Code / Cursor can call:
 | `armillary_search` | Exact code search: function names, imports, error messages | <10ms |
 | `armillary_projects` | List all projects with path, status, description | instant |
 | `armillary_pulse` | What changed in my portfolio this week? | instant |
+| `armillary_steal` | Reusable 40-line blocks ranked across all your repos | <100ms |
+| `armillary_revive` | Project brief plus up to 3 quoted blocks from other repos | sub-second |
 
 `armillary config --init` auto-configures MCP in `~/.claude/mcp.json`. Or manually:
 
@@ -179,7 +181,7 @@ how to debug tool calls, see [`docs/mcp.md`](docs/mcp.md).
 ```bash
 uv sync --extra dev
 
-# 440+ tests covering scanner / metadata / status / cache / config /
+# 450+ tests covering scanner / metadata / status / cache / config /
 # launcher / search / exporter / bootstrap / CLI / MCP / next / context /
 # pulse / share / heatmap / transitions / purpose / revenue / revive
 .venv/bin/python -m pytest
