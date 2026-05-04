@@ -166,6 +166,14 @@ def steal(
         rows = idx.search(query, limit=overfetch, language_ext=language)
 
     if not rows:
+        # ADR 0031 — log zero-hit queries so we can spot profile defaults
+        # over-pruning. Best-effort: never break the steal call path.
+        import contextlib as _ctx
+
+        from . import feedback_service as _fb
+
+        with _ctx.suppress(Exception):
+            _fb.record_no_results(query)
         return []
 
     # Diversify the re-ranking pool: keep at most N hits per repo so a

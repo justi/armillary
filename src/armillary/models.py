@@ -116,6 +116,14 @@ class ProjectMetadata(BaseModel):
     # the cache and dashboard can both read it as part of `ProjectMetadata`.
     status: Status | None = None
 
+    # ADR 0031 — framework-aware code indexing observability.
+    # Recorded by `scan_service._index_code_blocks` after a Steal index
+    # run so a custom layout that gets `index_files_indexed=0` is
+    # detectable from the cache instead of silently failing.
+    index_profile: str | None = None
+    index_files_indexed: int | None = None
+    index_files_skipped: int | None = None
+
 
 class Project(BaseModel):
     """A single discovered project."""

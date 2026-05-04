@@ -209,6 +209,16 @@ def scan(
             "fresh project table. No-op if ~/.claude/ does not exist."
         ),
     ),
+    report_profiles: bool = typer.Option(
+        False,
+        "--report-profiles",
+        help=(
+            "Diagnostic for ADR 0031: after the scan, print how many "
+            "repos were classified into each framework profile. Helps "
+            "spot when profile detection misses a layout (e.g. lots of "
+            "repos falling into 'unknown')."
+        ),
+    ),
 ) -> None:
     """Scan umbrella folders and print the project list as JSON.
 
@@ -236,6 +246,31 @@ def scan(
         )
         raise typer.Exit(2)
 
+    if no_cache and report_profiles:
+        # Same shape of conflict: --report-profiles reads back from the
+        # cache (the indexer only runs on the cache code path). Skipping
+        # the cache means there is nothing to report on.
+        typer.secho(
+            "--report-profiles cannot be combined with --no-cache — the "
+            "report reads from the cache. Drop one flag.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    if no_metadata and report_profiles:
+        # `_index_code_blocks` skips projects whose `metadata` is None,
+        # which is the case for every project when `--no-metadata` is
+        # set. The report would always be empty / stale — better to
+        # reject the combination than print nothing.
+        typer.secho(
+            "--report-profiles cannot be combined with --no-metadata — "
+            "the indexer needs project metadata to run. Drop one flag.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2)
+
     umbrellas = _resolve_umbrellas(umbrella, max_depth)
     if not umbrellas:
         typer.secho(
@@ -256,6 +291,11 @@ def scan(
 
     payload = [p.model_dump(mode="json") for p in projects]
     typer.echo(json.dumps(payload, indent=2, ensure_ascii=False))
+
+    if report_profiles:
+        with Cache() as cache:
+            cached_projects = cache.list_projects()
+        _print_profile_report(cached_projects)
 
     if refresh_bridge:
         claude_dir = Path.home() / ".claude"
@@ -282,6 +322,53 @@ def scan(
                     fg=typer.colors.CYAN,
                     err=True,
                 )
+
+
+def _print_profile_report(projects: list) -> None:
+    """Aggregate ADR 0031 indexing stats from a project list.
+
+    Prints a Rich table with one row per detected profile + totals:
+    repo count, total files indexed, total files filtered out by the
+    profile. Only repos that ran through the Steal indexer (have
+    ``index_profile`` set on metadata) contribute. ``unknown`` is its
+    own row so a high count is immediately visible.
+    """
+    from collections import defaultdict
+
+    counts: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"repos": 0, "indexed": 0, "skipped": 0}
+    )
+    for p in projects:
+        md = p.metadata
+        if md is None or md.index_profile is None:
+            continue
+        bucket = counts[md.index_profile]
+        bucket["repos"] += 1
+        bucket["indexed"] += md.index_files_indexed or 0
+        bucket["skipped"] += md.index_files_skipped or 0
+
+    if not counts:
+        typer.secho(
+            "--report-profiles: no indexed projects in this scan.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+        return
+
+    table = Table(title="Framework profile breakdown (ADR 0031)", show_lines=False)
+    table.add_column("Profile", style="cyan", no_wrap=True)
+    table.add_column("Repos", justify="right")
+    table.add_column("Files indexed", justify="right")
+    table.add_column("Files filtered", justify="right")
+    for name in sorted(counts):
+        c = counts[name]
+        table.add_row(
+            name,
+            str(c["repos"]),
+            str(c["indexed"]),
+            str(c["skipped"]),
+        )
+    Console(stderr=True).print(table)
 
 
 @app.command("list")

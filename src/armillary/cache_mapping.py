@@ -116,6 +116,10 @@ def _row_to_metadata(row: sqlite3.Row) -> ProjectMetadata | None:
         monthly_commits=extra.get("monthly_commits"),
         branch_count=extra.get("branch_count"),
         has_remote=extra.get("has_remote"),
+        # ADR 0031 — framework-aware indexing observability.
+        index_profile=extra.get("index_profile"),
+        index_files_indexed=extra.get("index_files_indexed"),
+        index_files_skipped=extra.get("index_files_skipped"),
         status=_safe_status(row["status"]),
     )
 
@@ -142,6 +146,10 @@ def _serialize_metadata_extra(md: ProjectMetadata) -> str | None:
         "monthly_commits": md.monthly_commits,
         "branch_count": md.branch_count,
         "has_remote": md.has_remote,
+        # ADR 0031.
+        "index_profile": md.index_profile,
+        "index_files_indexed": md.index_files_indexed,
+        "index_files_skipped": md.index_files_skipped,
     }
     # Drop empty keys to keep the JSON small and the diff readable.
     cleaned = {k: v for k, v in payload.items() if v not in (None, [], "")}

@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from armillary.feedback_service import record_vote, vote_counts
+from armillary.feedback_service import (
+    no_results_count,
+    record_no_results,
+    record_vote,
+    vote_counts,
+)
 
 
 @pytest.fixture
@@ -38,3 +43,28 @@ def test_query_normalisation_case_insensitive(isolated_index: Path) -> None:
     record_vote("Stripe Webhook", "/x.py", 1, 1)
     # Different casing and surrounding whitespace hits the same bucket.
     assert vote_counts("  stripe webhook  ") == {"up": 1, "down": 0}
+
+
+# ----- ADR 0031 — no-results signal ----------------------------------------
+
+
+def test_no_results_count_starts_at_zero(isolated_index: Path) -> None:
+    assert no_results_count("nothing here") == 0
+
+
+def test_record_no_results_accumulates(isolated_index: Path) -> None:
+    record_no_results("rails authn middleware")
+    record_no_results("rails authn middleware")
+    record_no_results("rails authn middleware")
+    assert no_results_count("rails authn middleware") == 3
+
+
+def test_no_results_query_normalised_like_votes(isolated_index: Path) -> None:
+    record_no_results("Stripe Webhook")
+    assert no_results_count("  stripe webhook  ") == 1
+
+
+def test_empty_no_results_query_ignored(isolated_index: Path) -> None:
+    record_no_results("")
+    record_no_results("   ")
+    assert no_results_count("") == 0

@@ -23,7 +23,7 @@ from typing import NamedTuple, Self
 
 from .cache import default_db_path as _default_project_db_path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # ADR 0031: force rebuild so old "everything" indexes are dropped.
 
 _SCHEMA_SQL = """
 CREATE TABLE code_blocks_meta (

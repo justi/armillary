@@ -13,7 +13,9 @@ from armillary.code_block_service import (
     _extract_symbol,
     _should_skip,
     build_blocks_for_repo,
+    build_blocks_with_stats,
 )
+from armillary.framework_profiles import Profile
 
 
 def _init_git_repo(root: Path) -> None:
@@ -171,3 +173,72 @@ def test_codeblock_is_frozen() -> None:
     )
     with pytest.raises((AttributeError, TypeError, FrozenInstanceError)):
         blk.path = "/r/b.py"  # type: ignore[misc]
+
+
+# ----- ADR 0031 — framework profile filtering ------------------------------
+
+
+def _rails_layout_repo(root: Path) -> None:
+    """Set up a tiny git repo that mimics a Rails skeleton."""
+    _init_git_repo(root)
+    (root / "Gemfile").write_text('gem "rails"\n')
+    (root / "app" / "models").mkdir(parents=True)
+    (root / "app" / "models" / "user.rb").write_text(
+        "class User\n  def login\n    :ok\n  end\nend\n"
+    )
+    (root / "db" / "migrate").mkdir(parents=True)
+    (root / "db" / "migrate" / "20240101_create_users.rb").write_text(
+        "class CreateUsers < ActiveRecord::Migration[7.0]\n  def change\n  end\nend\n"
+    )
+    (root / "config").mkdir()
+    (root / "config" / "routes.rb").write_text(
+        "Rails.application.routes.draw do\nend\n"
+    )
+    _git_add_commit(root)
+
+
+def test_profile_drops_files_outside_include(tmp_path: Path) -> None:
+    _rails_layout_repo(tmp_path)
+    rails = Profile(name="rails", include=("app/", "lib/"))
+
+    blocks = build_blocks_for_repo(tmp_path, profile=rails)
+
+    rels = {Path(b.path).relative_to(tmp_path).as_posix() for b in blocks}
+    assert "app/models/user.rb" in rels
+    # db/migrate and config are filtered out by the profile.
+    assert not any(r.startswith("db/migrate/") for r in rels)
+    assert not any(r.startswith("config/") for r in rels)
+
+
+def test_profile_none_keeps_legacy_index_everything_behaviour(tmp_path: Path) -> None:
+    _rails_layout_repo(tmp_path)
+    blocks = build_blocks_for_repo(tmp_path, profile=None)
+    rels = {Path(b.path).relative_to(tmp_path).as_posix() for b in blocks}
+    # No profile = same as ADR 0027 v1 — db/migrate IS indexed.
+    assert any(r.startswith("db/migrate/") for r in rels)
+
+
+def test_profile_stats_record_indexed_and_skipped_counts(tmp_path: Path) -> None:
+    _rails_layout_repo(tmp_path)
+    rails = Profile(name="rails", include=("app/",))
+    _, result = build_blocks_with_stats(tmp_path, profile=rails)
+    assert result.profile_name == "rails"
+    assert result.files_indexed >= 1  # at least app/models/user.rb
+    assert result.files_skipped >= 2  # Gemfile, db/migrate, config files
+
+
+def test_profile_indexes_zero_files_observable(tmp_path: Path) -> None:
+    """Custom Rails layout with no app/ — observability regression guard."""
+    _init_git_repo(tmp_path)
+    (tmp_path / "Gemfile").write_text('gem "rails"\n')
+    # No app/ — engine-style or unusual layout.
+    (tmp_path / "engines").mkdir()
+    (tmp_path / "engines" / "billing.rb").write_text("class Billing\nend\n")
+    _git_add_commit(tmp_path)
+
+    rails = Profile(name="rails", include=("app/", "lib/"))
+    blocks, result = build_blocks_with_stats(tmp_path, profile=rails)
+    assert blocks == []
+    assert result.files_indexed == 0
+    # The Gemfile + engines/billing.rb were filtered → at least 2 skipped.
+    assert result.files_skipped >= 2
