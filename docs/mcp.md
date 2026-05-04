@@ -80,6 +80,8 @@ treating the return as literal text.
 | `armillary_search` | `(query: str, max_results: int = 20) → str` | <50 ms per repo hit |
 | `armillary_projects` | `(status_filter: str \| None) → str` | <20 ms |
 | `armillary_pulse` | `() → str` | <30 ms |
+| `armillary_steal` | `(query: str, limit: int = 5, language: str \| None) → str` | <100 ms |
+| `armillary_revive` | `(project_path: str) → str` | <500 ms (revive subprocess + steal) |
 
 Schemas are introspected from the Python function signatures; the agent
 receives them in the `tools/list` response during the MCP handshake.
@@ -90,7 +92,7 @@ receives them in the `tools/list` response during the MCP handshake.
    on stdin. FastMCP replies with the server's name, version, and
    capabilities, then emits `initialized`.
 2. **Tool discovery.** The agent immediately calls `tools/list`. FastMCP
-   returns the five schemas so the agent knows what it can invoke. Any
+   returns the seven schemas so the agent knows what it can invoke. Any
    system-level prompt instructions declared on the `FastMCP()`
    constructor ride along here — armillary's say *"ALWAYS call
    `armillary_next` at the very start of every conversation,"* which is

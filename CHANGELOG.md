@@ -25,10 +25,9 @@ skipped while we are still in 0.x.
     delivers cross-repo matches. An earlier draft also folded in the
     last commit subject, but a 6-token AND-FTS query is precision-extreme
     and produced zero matches across a real, sizeable cache.
-    Single-token ranking lets underscore/dash names tokenise naturally
-    (`pdf_to_quiz`, `reddit_promo_planner`) and BM25 picks the best
-    matches. Sanity check on three real projects returned 1+ relevant
-    cross-repo block each.
+    Single-token ranking lets underscore- and dash-naming tokenise
+    naturally and BM25 picks the best matches. Sanity check on three
+    real projects returned 1+ relevant cross-repo block each.
   - Scope decision: only `STEAL_HITS` is in v0.1. Other candidate fields
     (project status, last-touched timestamp, journal entries) were
     deferred — status carries a real risk of eroding trust in the whole
