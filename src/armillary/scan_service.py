@@ -78,18 +78,34 @@ def _index_code_blocks(projects: list[Project]) -> None:
     Isolated in its own helper so `contextlib.suppress` in `full_scan`
     catches the whole sub-pipeline (FTS5 unsupported, disk full, etc.)
     without swallowing more than we intend.
+
+    Per ADR 0031: each repo is indexed under a framework profile
+    detected from its manifests. The profile name plus
+    files_indexed / files_skipped counts are persisted to the project
+    metadata blob so a misclassified layout is observable instead of
+    silent.
     """
     import contextlib as _ctx
 
-    from .code_block_service import build_blocks_for_repo
+    from .cache import Cache
+    from .code_block_service import build_blocks_with_stats
     from .code_index import CodeIndex
+    from .framework_profiles import detect_profile
+
+    stats_by_path: dict[str, tuple[str, int, int]] = {}
 
     with CodeIndex() as idx:
         for project in projects:
             if project.type is not ProjectType.GIT:
                 continue
             with _ctx.suppress(Exception):
-                blocks = build_blocks_for_repo(project.path)
+                profile = detect_profile(project.path)
+                blocks, result = build_blocks_with_stats(project.path, profile=profile)
+                stats_by_path[str(project.path)] = (
+                    result.profile_name,
+                    result.files_indexed,
+                    result.files_skipped,
+                )
                 # Group by file path — upsert per-file so a partial
                 # failure leaves earlier files indexed.
                 by_file: dict[str, list] = {}
@@ -98,6 +114,33 @@ def _index_code_blocks(projects: list[Project]) -> None:
                 idx.delete_repo(str(project.path))
                 for path_str, file_blocks in by_file.items():
                     idx.upsert_blocks(str(project.path), path_str, file_blocks)
+
+    # Persist profile observability back to the project cache. We
+    # deliberately do NOT mutate `Project.metadata` on the in-memory
+    # list — `armillary scan` prints those objects as JSON and the
+    # contract (test_scan_json_output_unchanged_when_caching) is that
+    # stdout is invariant to whether the cache was written. So we
+    # build copies, upsert those, and let `--report-profiles` read
+    # from the cache after the scan completes.
+    if not stats_by_path:
+        return
+    touched: list[Project] = []
+    for project in projects:
+        stats = stats_by_path.get(str(project.path))
+        if stats is None or project.metadata is None:
+            continue
+        name, indexed, skipped = stats
+        md_copy = project.metadata.model_copy(
+            update={
+                "index_profile": name,
+                "index_files_indexed": indexed,
+                "index_files_skipped": skipped,
+            }
+        )
+        touched.append(project.model_copy(update={"metadata": md_copy}))
+    if touched:
+        with _ctx.suppress(Exception), Cache() as cache:
+            cache.upsert(touched, write_metadata=True)
 
 
 def initial_scan(umbrellas: list[UmbrellaFolder]) -> list[Project]:

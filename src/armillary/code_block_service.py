@@ -17,6 +17,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from .framework_profiles import Profile
+
 _WINDOW_SIZE = 40
 _WINDOW_STRIDE = 20
 _MAX_FILE_BYTES = 500 * 1024
@@ -87,6 +89,21 @@ _SYMBOL_RE = re.compile(
 
 
 @dataclass(frozen=True)
+class RepoIndexResult:
+    """Profile + counts after walking a repo (ADR 0031 observability).
+
+    Returned alongside the block list so :mod:`scan_service` can
+    persist ``files_indexed`` / ``files_skipped`` on the project
+    metadata blob — that's the regression guard against a profile
+    that detects a custom Rails layout and silently indexes nothing.
+    """
+
+    profile_name: str
+    files_indexed: int
+    files_skipped: int
+
+
+@dataclass(frozen=True)
 class CodeBlock:
     """A 40-line window from a source file, plus a heuristic symbol.
 
@@ -106,22 +123,55 @@ class CodeBlock:
     updated_at: float
 
 
-def build_blocks_for_repo(repo_path: Path) -> list[CodeBlock]:
-    """Return every 40-line window across all tracked files in a repo.
+def build_blocks_for_repo(
+    repo_path: Path,
+    *,
+    profile: Profile | None = None,
+) -> list[CodeBlock]:
+    """Return every 40-line window across tracked files in a repo.
+
+    When ``profile`` is set (ADR 0031), only files whose path is
+    accepted by ``profile.accepts(rel)`` reach window extraction —
+    everything else (migrations, generated assets, fixtures) is
+    filtered out before it can dilute Steal's index. ``profile=None``
+    keeps ADR 0027's original "everything tracked" behaviour and is
+    the default so existing callers don't change.
 
     Non-git directories (no ``.git``) and files matching the skip lists
     are filtered out. Size-capped at 500 KB per file; binaries are
     detected by null-byte sniff on the first 8 KB. Errors on individual
     files never escape — that file is skipped and the walk continues.
     """
+    blocks, _ = build_blocks_with_stats(repo_path, profile=profile)
+    return blocks
+
+
+def build_blocks_with_stats(
+    repo_path: Path,
+    *,
+    profile: Profile | None = None,
+) -> tuple[list[CodeBlock], RepoIndexResult]:
+    """Same as :func:`build_blocks_for_repo` but also return profile stats.
+
+    ``files_indexed`` counts files that produced at least one block;
+    ``files_skipped`` counts files filtered out by the profile (does
+    not include files dropped by the per-file skip rules — those are
+    universal and not profile-specific).
+    """
+    profile_name = profile.name if profile is not None else "unknown"
     if not (repo_path / ".git").exists():
-        return []
+        return [], RepoIndexResult(profile_name, 0, 0)
 
     tracked = _git_ls_files(repo_path)
     blocks: list[CodeBlock] = []
     repo_str = str(repo_path)
+    files_indexed = 0
+    files_skipped_by_profile = 0
 
     for rel in tracked:
+        if profile is not None and not profile.accepts(rel):
+            files_skipped_by_profile += 1
+            continue
         abs_path = repo_path / rel
         if _should_skip(rel, abs_path):
             continue
@@ -129,9 +179,15 @@ def build_blocks_for_repo(repo_path: Path) -> list[CodeBlock]:
             file_blocks = _blocks_for_file(repo_str, abs_path)
         except (OSError, UnicodeDecodeError):
             continue
-        blocks.extend(file_blocks)
+        if file_blocks:
+            files_indexed += 1
+            blocks.extend(file_blocks)
 
-    return blocks
+    return blocks, RepoIndexResult(
+        profile_name=profile_name,
+        files_indexed=files_indexed,
+        files_skipped=files_skipped_by_profile,
+    )
 
 
 # ----- git listing ----------------------------------------------------------
