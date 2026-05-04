@@ -110,9 +110,12 @@ def test_generate_enhanced_brief_appends_steal_section(
     # signal that yields cross-repo matches without precision-extreme
     # AND-collapse on commit subjects.
     assert mocks["steal"].call_args.args[0] == "my_project"
-    # Helper overfetches (limit * 3) so it can drop hits from the same repo
-    # before slicing back to the requested top-N.
-    assert mocks["steal"].call_args.kwargs == {"limit": 9}
+    # Helper overfetches (limit * 6) so it can drop hits from the same
+    # repo and from panel-excluded / archived repos before slicing back
+    # to the requested top-N. The 6× multiplier is sized for the worst
+    # case where three noise repos consume 9 results (steal caps at 3
+    # hits per repo in its overfetch pool).
+    assert mocks["steal"].call_args.kwargs == {"limit": 18}
 
 
 def test_generate_enhanced_brief_skips_section_when_no_hits(

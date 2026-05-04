@@ -46,9 +46,14 @@ def generate_enhanced_brief(
     #    `armillary_steal` keeps those on purpose (user explicitly mining
     #    their own dead code), but for revive the panel choice should
     #    apply, matching every other MCP tool's behaviour.
+    #
+    # Multiplier sized for worst case: `steal()` caps at 3 hits per repo
+    # in its overfetch pool, so three noise repos (own + excluded dupe +
+    # archived dupe) can consume 9 results. `steal_limit * 6` leaves
+    # `steal_limit` worth of headroom even in that case.
     own_repo = _resolve(project_path)
     try:
-        raw = steal(query, limit=steal_limit * 3)
+        raw = steal(query, limit=steal_limit * 6)
     except Exception:  # noqa: BLE001 — graceful: enhanced is bonus over vanilla
         # Steal can raise on missing/corrupt code_index.db or a SQLite
         # build without FTS5. The vanilla brief is still useful on its
